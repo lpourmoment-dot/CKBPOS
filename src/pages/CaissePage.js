@@ -1,0 +1,828 @@
+import React, { useState, useEffect } from 'react';
+import { useAuth } from '../App';
+import { useLang } from '../utils/useLang';
+import { Search, ShoppingCart, Trash2, Plus, Minus, CreditCard, Printer, X, User, Layers, Clock, CheckCircle, Package } from 'lucide-react';
+
+export default function CaissePage() {
+  const { user } = useAuth();
+  const { currency } = useLang();
+
+  const [shopName, setShopName]       = useState('CKBPOS');
+  const [shopAddress, setShopAddress] = useState('');
+  const [shopPhone, setShopPhone]     = useState('');
+  const [shopNif, setShopNif]         = useState('');
+
+  const [products, setProducts] = useState([]);
+  const [search, setSearch]     = useState('');
+  const [cart, setCart]         = useState([]);
+  const [loading, setLoading]   = useState(false);
+
+  const [clientNom, setClientNom]           = useState('');
+  const [clientNif, setClientNif]           = useState('');
+  const [clients, setClients]               = useState([]);
+  const [showClientList, setShowClientList] = useState(false);
+
+  const [empresas, setEmpresas]               = useState([]);
+  const [showEmpresaList, setShowEmpresaList] = useState(false);
+
+  const [showPayment, setShowPayment]         = useState(false);
+  const [payMode, setPayMode]                 = useState('dinheiro');
+  const [montantDinheiro, setMontantDinheiro] = useState('');
+  const [montantExpress, setMontantExpress]   = useState('');
+
+  const [showSuccess, setShowSuccess] = useState(null);
+
+  const [showVariantPopup, setShowVariantPopup] = useState(false);
+  const [selectedProduct, setSelectedProduct]   = useState(null);
+  const [selectedType, setSelectedType]         = useState(null);
+  const [variants, setVariants]                 = useState([]);
+
+  const [showReserveModal, setShowReserveModal] = useState(false);
+  const [showPagoModal, setShowPagoModal]       = useState(false);
+  const [reserveNote, setReserveNote]           = useState('');
+  const [reserveExpiry, setReserveExpiry]       = useState('24');
+  const [pagoNote, setPagoNote]                 = useState('');
+  const [pagoPayMode, setPagoPayMode]           = useState('dinheiro');
+  const [pagoMontantD, setPagoMontantD]         = useState('');
+  const [pagoMontantE, setPagoMontantE]         = useState('');
+
+  const [reservations, setReservations]         = useState([]);
+  const [showReservations, setShowReservations] = useState(false);
+
+  const [showPayerModal, setShowPayerModal] = useState(null);
+  const [payerMode, setPayerMode]           = useState('dinheiro');
+  const [payerMontantD, setPayerMontantD]   = useState('');
+  const [payerMontantE, setPayerMontantE]   = useState('');
+
+  useEffect(() => {
+    loadProducts(); loadSettings(); loadClients(); loadEmpresas(); loadReservations();
+  }, []);
+
+  const loadSettings = async () => {
+    for (const key of ['shop_name','shop_address','shop_phone','shop_nif']) {
+      const res = await window.electron.dbGet(`SELECT value FROM settings WHERE key='${key}'`);
+      if (res.data?.value !== undefined) {
+        if (key==='shop_name')    setShopName(res.data.value);
+        if (key==='shop_address') setShopAddress(res.data.value);
+        if (key==='shop_phone')   setShopPhone(res.data.value);
+        if (key==='shop_nif')     setShopNif(res.data.value);
+      }
+    }
+  };
+
+  const loadProducts = async () => {
+    const res = await window.electron.dbQuery("SELECT * FROM products WHERE actif=1 ORDER BY nom", []);
+    setProducts(res.data || []);
+  };
+
+  const loadClients = async () => {
+    const res = await window.electron.dbQuery("SELECT * FROM clients WHERE actif=1 ORDER BY nom", []);
+    setClients(res.data || []);
+  };
+
+  const loadEmpresas = async () => {
+    const res = await window.electron.empresasList();
+    setEmpresas(res.data || []);
+  };
+
+  const loadReservations = async () => {
+    const res = await window.electron.reservationList();
+    setReservations(res.data || []);
+  };
+
+  const getUnitsPerCarton = (p) => Math.max(1, Math.round(p.unites_par_carton));
+  const getStockInUnits   = (p) => Math.round(p.stock_cartons * getUnitsPerCarton(p));
+  const getUnitsUsed = (item) => {
+    if (item.type==='carton') return item.qty * item.unites;
+    if (item.type==='demi')   return item.qty * Math.ceil(item.unites/2);
+    return item.qty;
+  };
+
+  const getPrice = (product, type, variant=null) => {
+    const p = variant || product;
+    if (type==='carton') return p.prix_carton || product.prix_carton;
+    if (type==='demi') { if (p.prix_demi) return p.prix_demi; return (p.prix_carton||product.prix_carton)/2; }
+    if (p.prix_unite) return p.prix_unite;
+    return (p.prix_carton||product.prix_carton)/product.unites_par_carton;
+  };
+
+  const filtered = products.filter(p =>
+    p.nom.toLowerCase().includes(search.toLowerCase()) ||
+    (p.categorie||'').toLowerCase().includes(search.toLowerCase())
+  );
+
+  const handleTypeClick = async (product, type) => {
+    if (product.has_variants) {
+      const res = await window.electron.dbQuery(
+        "SELECT * FROM product_variants WHERE product_id=? AND actif=1 AND stock_cartons>0 ORDER BY nom", [product.id]
+      );
+      const vars = res.data || [];
+      if (vars.length > 0) {
+        setSelectedProduct(product); setSelectedType(type); setVariants(vars); setShowVariantPopup(true);
+        return;
+      }
+    }
+    addToCart(product, type, null);
+  };
+
+  const handleVariantSelect = (variant) => { addToCart(selectedProduct, selectedType, variant); setShowVariantPopup(false); };
+
+  const addToCart = (product, type, variant) => {
+    const price      = getPrice(product, type, variant);
+    const upc        = getUnitsPerCarton(product);
+    const stockSrc   = variant || product;
+    const stockUnits = Math.round(stockSrc.stock_cartons * upc);
+    const newUnits   = type==='carton' ? upc : type==='demi' ? Math.ceil(upc/2) : 1;
+    const usedUnits  = cart.filter(i=>i.productId===product.id&&i.variantId===(variant?.id||null)).reduce((s,i)=>s+getUnitsUsed(i),0);
+    if (usedUnits+newUnits > stockUnits) { alert(`Stock insuficiente!\nDisponível: ${stockUnits-usedUnits} unidade(s)`); return; }
+    const cartKey = `${product.id}-${type}-${variant?.id||'none'}`;
+    const existingIdx = cart.findIndex(i=>i.cartKey===cartKey);
+    if (existingIdx>=0) {
+      setCart(prev=>prev.map((item,idx)=>{
+        if (idx!==existingIdx) return item;
+        const newQty=item.qty+1; return {...item,qty:newQty,subtotal:Math.round(newQty*item.price*100)/100};
+      })); return;
+    }
+    const displayName = variant ? `${product.nom} ${variant.nom}` : product.nom;
+    setCart(prev=>[...prev,{cartKey,productId:product.id,variantId:variant?.id||null,nom:displayName,productNom:product.nom,variantNom:variant?.nom||null,type,qty:1,price,subtotal:price,unites:upc,stockUnits}]);
+  };
+
+  const updateQty = (cartKey, delta) => {
+    setCart(prev=>prev.map(item=>{
+      if (item.cartKey!==cartKey) return item;
+      const newQty=Math.max(1,item.qty+delta);
+      const otherUsed=prev.filter(i=>i.productId===item.productId&&i.variantId===item.variantId&&i.cartKey!==cartKey).reduce((s,i)=>s+getUnitsUsed(i),0);
+      const thisUnits=item.type==='carton'?newQty*item.unites:item.type==='demi'?newQty*Math.ceil(item.unites/2):newQty;
+      if (otherUsed+thisUnits>item.stockUnits) return item;
+      return {...item,qty:newQty,subtotal:Math.round(newQty*item.price*100)/100};
+    }));
+  };
+
+  const setQtyManual = (cartKey, val) => {
+    const newQty=parseInt(val); if (!newQty||newQty<=0) return;
+    setCart(prev=>prev.map(item=>{
+      if (item.cartKey!==cartKey) return item;
+      const otherUsed=prev.filter(i=>i.productId===item.productId&&i.variantId===item.variantId&&i.cartKey!==cartKey).reduce((s,i)=>s+getUnitsUsed(i),0);
+      const thisUnits=item.type==='carton'?newQty*item.unites:item.type==='demi'?newQty*Math.ceil(item.unites/2):newQty;
+      if (otherUsed+thisUnits>item.stockUnits) { alert('Stock insuficiente!'); return item; }
+      return {...item,qty:newQty,subtotal:Math.round(newQty*item.price*100)/100};
+    }));
+  };
+
+  const removeItem = (cartKey) => setCart(prev=>prev.filter(i=>i.cartKey!==cartKey));
+  const clearCart  = () => { setCart([]); setClientNom(''); setClientNif(''); };
+
+  const total     = Math.round(cart.reduce((s,i)=>s+i.subtotal,0)*100)/100;
+  const totalPaid = payMode==='dinheiro'?Number(montantDinheiro)||0:payMode==='express'?Number(montantExpress)||0:(Number(montantDinheiro)||0)+(Number(montantExpress)||0);
+  const change    = Math.max(0,Math.round((totalPaid-total)*100)/100);
+
+  const openPayment = () => { if (cart.length===0) return; setMontantDinheiro(''); setMontantExpress(''); setPayMode('dinheiro'); setShowPayment(true); };
+
+  const deduireStock = async (cartItems) => {
+    for (const item of cartItems) {
+      const unitsConsumed = item.type==='carton'?item.qty*item.unites:item.type==='demi'?item.qty*Math.ceil(item.unites/2):item.qty;
+      const cartonsToRemove = unitsConsumed/item.unites;
+      if (item.variantId) {
+        const vBefore=(await window.electron.dbGet("SELECT stock_cartons FROM product_variants WHERE id=?",[item.variantId])).data?.stock_cartons||0;
+        await window.electron.dbQuery("UPDATE product_variants SET stock_cartons=? WHERE id=?",[Math.max(0,vBefore-cartonsToRemove),item.variantId]);
+        const totalV=(await window.electron.dbGet("SELECT COALESCE(SUM(stock_cartons),0) as t FROM product_variants WHERE product_id=? AND actif=1",[item.productId])).data?.t||0;
+        await window.electron.dbQuery("UPDATE products SET stock_cartons=?,updated_at=datetime('now') WHERE id=?",[totalV,item.productId]);
+      } else {
+        const sBefore=(await window.electron.dbGet("SELECT stock_cartons FROM products WHERE id=?",[item.productId])).data?.stock_cartons||0;
+        await window.electron.dbQuery("UPDATE products SET stock_cartons=?,updated_at=datetime('now') WHERE id=?",[Math.max(0,sBefore-cartonsToRemove),item.productId]);
+      }
+    }
+  };
+
+  const handleSale = async () => {
+    if (payMode==='dinheiro'&&!montantDinheiro) { alert('Informe o valor recebido!'); return; }
+    if (payMode==='express'&&!montantExpress)   { alert('Informe o valor via App Express!'); return; }
+    if (payMode==='misto'&&!montantDinheiro&&!montantExpress) { alert('Informe os valores!'); return; }
+    if (totalPaid<total) { alert(`Valor insuficiente! Faltam: ${(total-totalPaid).toLocaleString('fr-FR')} ${currency}`); return; }
+    setLoading(true); setShowPayment(false);
+    try {
+      const frRes = await window.electron.nextFactureNum();
+      const numeroFacture = frRes.success ? frRes.numero : '';
+      let clientId=null;
+      const finalClientNom=clientNom.trim();
+      const finalClientNif=clientNif.trim()||'CONSUMIDOR FINAL';
+      if (finalClientNom) {
+        const existing=clients.find(c=>c.nom.toLowerCase()===finalClientNom.toLowerCase());
+        if (existing) { clientId=existing.id; }
+        else { const nc=await window.electron.dbQuery("INSERT INTO clients (nom) VALUES (?)",[finalClientNom]); clientId=nc.data.lastInsertRowid; loadClients(); }
+      }
+      const vRes=await window.electron.dbQuery(
+        "INSERT INTO ventes (user_id,client_id,client_nom,client_nif,total,montant_recu,monnaie_rendue,mode_paiement,montant_dinheiro,montant_express,facture_num) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [user.id,clientId,finalClientNom||null,finalClientNif,total,totalPaid,change,payMode,Number(montantDinheiro)||0,Number(montantExpress)||0,numeroFacture]
+      );
+      const venteId=vRes.data.lastInsertRowid;
+      for (const item of cart) {
+        await window.electron.dbQuery(
+          "INSERT INTO vente_items (vente_id,product_id,variant_id,type_vente,quantite,prix_unitaire,sous_total) VALUES (?,?,?,?,?,?,?)",
+          [venteId,item.productId,item.variantId||null,item.type,item.qty,item.price,item.subtotal]
+        );
+      }
+      await deduireStock(cart);
+      window.electron.driveSync().catch(()=>{});
+      setShowSuccess({venteId,total,cart:[...cart],cashGiven:totalPaid,change,clientNom:finalClientNom,clientNif:finalClientNif,payMode,montantDinheiro:Number(montantDinheiro)||0,montantExpress:Number(montantExpress)||0,numeroFacture});
+      setCart([]); setClientNom(''); setClientNif(''); loadProducts();
+    } catch(e) { alert('Erro na venda: '+e.message); }
+    setLoading(false);
+  };
+
+  const buildPrintData = (sd, items=null) => ({
+    shopName, shopAddress, shopPhone, shopNif,
+    clientNom: sd.clientNom, clientNif: sd.clientNif,
+    numeroFacture: sd.numeroFacture||'',
+    items: (items||sd.cart).map(i=>({name:i.nom||i.name,type:i.type,qty:i.qty,price:(i.price||0).toLocaleString('fr-FR'),subtotal:(i.subtotal||0).toLocaleString('fr-FR')})),
+    total: (sd.total||0).toLocaleString('fr-FR'),
+    cashGiven: (sd.cashGiven||sd.total||0).toLocaleString('fr-FR'),
+    change: (sd.change||0).toLocaleString('fr-FR'),
+    payMode: sd.payMode||'dinheiro',
+    montantDinheiro: (sd.montantDinheiro||0).toLocaleString('fr-FR'),
+    montantExpress: (sd.montantExpress||0).toLocaleString('fr-FR'),
+    currency, seller: user.nom, date: new Date().toLocaleString('fr-FR'),
+  });
+
+  const handlePrint = async (sd) => { await window.electron.printTicket(buildPrintData(sd)); };
+
+  const handleReserveA = async () => {
+    if (cart.length===0) return;
+    setLoading(true);
+    try {
+      const expiration = reserveExpiry==='0' ? null : new Date(Date.now()+Number(reserveExpiry)*3600000).toISOString();
+      const res = await window.electron.reservationCreate({
+        userId:user.id, clientNom:clientNom.trim()||null, clientNif:clientNif.trim()||'CONSUMIDOR FINAL',
+        items:JSON.stringify(cart.map(i=>({productId:i.productId,variantId:i.variantId,type:i.type,qty:i.qty,price:i.price,subtotal:i.subtotal,unites:i.unites,nom:i.nom}))),
+        total, type:'reserva', modeP:'dinheiro', montantD:0, montantE:0, note:reserveNote||null, expiration,
+      });
+      if (res.success) {
+        setShowReserveModal(false); setReserveNote(''); setReserveExpiry('24');
+        setCart([]); setClientNom(''); setClientNif('');
+        loadReservations(); loadProducts();
+        alert(`✅ Reserva criada!\nID: #${res.id}`);
+      } else { alert('Erro: '+res.error); }
+    } catch(e) { alert('Erro: '+e.message); }
+    setLoading(false);
+  };
+
+  const handleReserveB = async () => {
+    if (cart.length===0) return;
+    const pagoTotal = pagoPayMode==='dinheiro'?Number(pagoMontantD)||0:pagoPayMode==='express'?Number(pagoMontantE)||0:(Number(pagoMontantD)||0)+(Number(pagoMontantE)||0);
+    if (pagoTotal<total) { alert(`Valor insuficiente! Faltam: ${(total-pagoTotal).toLocaleString('fr-FR')} ${currency}`); return; }
+    setLoading(true);
+    try {
+      const res = await window.electron.reservationCreate({
+        userId:user.id, clientNom:clientNom.trim()||null, clientNif:clientNif.trim()||'CONSUMIDOR FINAL',
+        items:JSON.stringify(cart.map(i=>({productId:i.productId,variantId:i.variantId,type:i.type,qty:i.qty,price:i.price,subtotal:i.subtotal,unites:i.unites,nom:i.nom}))),
+        total, type:'pago_retirar', modeP:pagoPayMode, montantD:Number(pagoMontantD)||0, montantE:Number(pagoMontantE)||0, note:pagoNote||null, expiration:null,
+      });
+      if (res.success) {
+        setShowPagoModal(false); setPagoNote(''); setPagoPayMode('dinheiro'); setPagoMontantD(''); setPagoMontantE('');
+        setCart([]); setClientNom(''); setClientNif('');
+        loadReservations(); loadProducts();
+        alert(`✅ Pagamento registado!\nProdutos aguardam retirada.\nID: #${res.id}`);
+      } else { alert('Erro: '+res.error); }
+    } catch(e) { alert('Erro: '+e.message); }
+    setLoading(false);
+  };
+
+  const handlePayerReserva = async () => {
+    if (!showPayerModal) return;
+    const r=showPayerModal;
+    const pTotal=payerMode==='dinheiro'?Number(payerMontantD)||0:payerMode==='express'?Number(payerMontantE)||0:(Number(payerMontantD)||0)+(Number(payerMontantE)||0);
+    if (pTotal<r.total) { alert('Valor insuficiente!'); return; }
+    setLoading(true);
+    try {
+      const res=await window.electron.reservationPayer({id:r.id,userId:user.id,modeP:payerMode,montantD:Number(payerMontantD)||0,montantE:Number(payerMontantE)||0,clientNom:r.client_nom,clientNif:r.client_nif});
+      if (res.success) {
+        setShowPayerModal(null); setPayerMontantD(''); setPayerMontantE(''); setPayerMode('dinheiro');
+        loadReservations(); loadProducts();
+        const items=JSON.parse(r.items_json||'[]');
+        await window.electron.printTicket(buildPrintData({
+          clientNom:r.client_nom,clientNif:r.client_nif,numeroFacture:res.numeroFacture,
+          total:res.total,cashGiven:pTotal,change:res.change,
+          payMode:payerMode,montantDinheiro:Number(payerMontantD)||0,montantExpress:Number(payerMontantE)||0,
+        }, items));
+      } else { alert('Erro: '+res.error); }
+    } catch(e) { alert('Erro: '+e.message); }
+    setLoading(false);
+  };
+
+  const handleEntregar = async (r) => {
+    if (!window.confirm(`Confirmar entrega para ${r.client_nom||'Cliente'}?`)) return;
+    setLoading(true);
+    try {
+      const res=await window.electron.reservationEntregar({id:r.id});
+      if (res.success) {
+        loadReservations();
+        const items=JSON.parse(r.items_json||'[]');
+        await window.electron.printTicket(buildPrintData({
+          clientNom:r.client_nom,clientNif:r.client_nif,numeroFacture:res.numeroFacture,
+          total:r.total,cashGiven:r.total,change:0,
+          payMode:r.mode_paiement,montantDinheiro:r.montant_dinheiro||0,montantExpress:r.montant_express||0,
+        }, items));
+      } else { alert('Erro: '+res.error); }
+    } catch(e) { alert('Erro: '+e.message); }
+    setLoading(false);
+  };
+
+  const handleAnular = async (r) => {
+    const msg=r.type==='pago_retirar'?`Anular reserva de ${r.client_nom||'Cliente'}? O stock será restituído e a venda anulada.`:`Anular reserva de ${r.client_nom||'Cliente'}?`;
+    if (!window.confirm(msg)) return;
+    setLoading(true);
+    try {
+      const res=await window.electron.reservationAnular({id:r.id});
+      if (res.success) { loadReservations(); loadProducts(); }
+      else { alert('Erro: '+res.error); }
+    } catch(e) { alert('Erro: '+e.message); }
+    setLoading(false);
+  };
+
+  const getTimerDisplay = (r) => {
+    if (!r.expiration) return null;
+    const diff=new Date(r.expiration)-new Date();
+    if (diff<=0) return {text:'Expirada',urgent:true};
+    const h=Math.floor(diff/3600000); const m=Math.floor((diff%3600000)/60000);
+    if (h<1) return {text:`Expira em ${m} min`,urgent:true};
+    if (h<3) return {text:`Expira em ${h}h${m>0?` ${m}min`:''}`,urgent:true};
+    return {text:`Expira em ${h}h`,urgent:false};
+  };
+
+  const typeColor = {carton:'var(--accent)',demi:'var(--info)',unite:'var(--success)'};
+  const filteredClients  = clients.filter(c=>c.nom.toLowerCase().includes(clientNom.toLowerCase()));
+  const filteredEmpresas = empresas.filter(e=>e.nom.toLowerCase().includes(clientNom.toLowerCase())||e.nif.includes(clientNom));
+  const payModes = [{key:'dinheiro',label:'💵 Numerário'},{key:'express',label:'📱 App Express'},{key:'misto',label:'🔀 Misto'}];
+  const pendingCount = reservations.filter(r=>r.statut==='pendente').length;
+
+  return (
+    <div style={{display:'flex',height:'100%',overflow:'hidden'}}>
+
+      {/* PRODUCTS */}
+      <div style={{flex:1,display:'flex',flexDirection:'column',borderRight:'1px solid var(--border)',overflow:'hidden'}}>
+        <div style={{padding:16,borderBottom:'1px solid var(--border)',display:'flex',gap:10,alignItems:'center'}}>
+          <div style={{position:'relative',flex:1}}>
+            <Search size={16} style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:'var(--text-muted)'}}/>
+            <input type="text" className="form-input" placeholder="Buscar produto..." value={search} onChange={e=>setSearch(e.target.value)} style={{paddingLeft:36}}/>
+          </div>
+          <button onClick={()=>setShowReservations(!showReservations)}
+            style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,border:`2px solid ${showReservations?'var(--accent)':'var(--border)'}`,background:showReservations?'var(--accent-dim)':'transparent',color:showReservations?'var(--accent)':'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:700,position:'relative',flexShrink:0,whiteSpace:'nowrap'}}>
+            <Clock size={15}/>Reservas
+            {pendingCount>0&&<span style={{position:'absolute',top:-6,right:-6,background:'var(--danger)',color:'white',borderRadius:'50%',width:17,height:17,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700}}>{pendingCount}</span>}
+          </button>
+        </div>
+
+        {showReservations ? (
+          <div style={{flex:1,overflowY:'auto',padding:16,display:'flex',flexDirection:'column',gap:10}}>
+            <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>📋 Reservas Ativas ({pendingCount})</div>
+            {reservations.filter(r=>r.statut==='pendente').length===0 ? (
+              <div style={{textAlign:'center',padding:'40px 0',color:'var(--text-muted)',fontSize:13}}>
+                <Clock size={28} style={{opacity:0.3,marginBottom:8,display:'block',margin:'0 auto 8px'}}/><br/>Nenhuma reserva ativa
+              </div>
+            ) : reservations.filter(r=>r.statut==='pendente').map(r=>{
+              const timer=getTimerDisplay(r);
+              const items=JSON.parse(r.items_json||'[]');
+              const isB=r.type==='pago_retirar';
+              return (
+                <div key={r.id} style={{background:isB?'rgba(160,224,64,0.05)':'rgba(74,158,255,0.05)',border:`1px solid ${timer?.urgent?'var(--danger)':isB?'rgba(160,224,64,0.3)':'rgba(74,158,255,0.3)'}`,borderRadius:10,padding:14}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                    <span style={{fontWeight:700,fontSize:13}}>👤 {r.client_nom||'Sem nome'}</span>
+                    <span style={{fontFamily:'monospace',fontWeight:800,color:isB?'#a0e040':'var(--accent)',fontSize:13}}>{r.total.toLocaleString('fr-FR')} {currency}</span>
+                  </div>
+                  <span style={{display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,fontWeight:700,background:isB?'rgba(160,224,64,0.15)':'rgba(74,158,255,0.15)',color:isB?'#a0e040':'#4a9eff',marginBottom:6}}>
+                    {isB?'✅ PAGO — AGUARDA RETIRADA':'📋 RESERVA SEM PAGAMENTO'}
+                  </span>
+                  <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:4}}>
+                    {new Date(r.created_at).toLocaleString('fr-FR')}{r.note&&` · 📝 ${r.note}`}
+                  </div>
+                  <div style={{fontSize:11,color:'var(--text-secondary)',marginBottom:6}}>
+                    {items.map(i=>`${i.nom} ×${i.qty}${i.type==='carton'?'cx':i.type==='demi'?'½':'un'}`).join(' · ')}
+                  </div>
+                  {timer&&<div style={{fontSize:11,fontWeight:700,color:timer.urgent?'var(--danger)':'#4a9eff',marginBottom:8}}>{timer.urgent?'⚠️':'⏳'} {timer.text}</div>}
+                  {isB&&<div style={{fontSize:11,fontWeight:700,color:'#a0e040',marginBottom:8}}>✅ Pago · Stock já deduzido</div>}
+                  <div style={{display:'flex',gap:6}}>
+                    {isB ? (
+                      <button onClick={()=>handleEntregar(r)} style={{flex:1,padding:'7px 6px',borderRadius:8,border:'none',cursor:'pointer',fontSize:11,fontWeight:700,fontFamily:'inherit',background:'#a0e040',color:'#000',display:'flex',alignItems:'center',justifyContent:'center',gap:4}}>
+                        <Package size={12}/> Entregue
+                      </button>
+                    ) : (
+                      <button onClick={()=>{setShowPayerModal(r);setPayerMode('dinheiro');setPayerMontantD('');setPayerMontantE('');}} style={{flex:1,padding:'7px 6px',borderRadius:8,border:'none',cursor:'pointer',fontSize:11,fontWeight:700,fontFamily:'inherit',background:'var(--accent)',color:'#000',display:'flex',alignItems:'center',justifyContent:'center',gap:4}}>
+                        <CreditCard size={12}/> Pagar
+                      </button>
+                    )}
+                    <button onClick={()=>handleAnular(r)} style={{flex:1,padding:'7px 6px',borderRadius:8,cursor:'pointer',fontSize:11,fontWeight:700,fontFamily:'inherit',background:'transparent',color:'var(--danger)',border:'1px solid var(--danger)',display:'flex',alignItems:'center',justifyContent:'center',gap:4}}>
+                      <X size={12}/> Anular
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{flex:1,overflowY:'auto',padding:16,display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:12,alignContent:'start'}}>
+            {filtered.map(product=>{
+              const upc=getUnitsPerCarton(product);
+              const stockUnits=getStockInUnits(product);
+              const usedUnits=cart.filter(i=>i.productId===product.id).reduce((s,i)=>s+getUnitsUsed(i),0);
+              const availUnits=stockUnits-usedUnits;
+              const displayCx=Math.floor(availUnits/upc); const remU=availUnits%upc;
+              const displayDemi=Math.floor(remU/Math.ceil(upc/2)); const displayUn=remU%Math.ceil(upc/2);
+              let stockDisplay='';
+              if(displayCx>0) stockDisplay+=`${displayCx}cx`;
+              if(displayDemi>0) stockDisplay+=` ${displayDemi}½`;
+              if(displayUn>0) stockDisplay+=` ${displayUn}un`;
+              if(!stockDisplay) stockDisplay=`${availUnits}un`;
+              return (
+                <div key={product.id} className="card" style={{padding:16,display:'flex',flexDirection:'column',gap:10}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:14,marginBottom:2,display:'flex',alignItems:'center',gap:6}}>
+                      {product.nom}{product.has_variants&&<Layers size={12} color="var(--accent)"/>}
+                    </div>
+                    <div style={{fontSize:11,color:'var(--text-muted)'}}>{product.categorie}</div>
+                    <div style={{fontSize:11,color:availUnits<=upc?'var(--warning)':'var(--text-muted)',marginTop:4}}>Stock: {stockDisplay}</div>
+                  </div>
+                  {['carton','demi','unite'].map(type=>{
+                    const typeUnits=type==='carton'?upc:type==='demi'?Math.ceil(upc/2):1;
+                    const canAdd=availUnits>=typeUnits;
+                    return (
+                      <button key={type} onClick={()=>canAdd&&handleTypeClick(product,type)}
+                        style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 10px',borderRadius:8,border:'1px solid var(--border)',background:canAdd?'var(--bg-hover)':'rgba(0,0,0,0.2)',cursor:canAdd?'pointer':'not-allowed',color:canAdd?'var(--text-primary)':'var(--text-muted)',fontSize:12,fontFamily:'inherit',transition:'all 0.15s ease',opacity:canAdd?1:0.5}}
+                        onMouseEnter={e=>canAdd&&(e.currentTarget.style.borderColor=typeColor[type],e.currentTarget.style.color=typeColor[type])}
+                        onMouseLeave={e=>canAdd&&(e.currentTarget.style.borderColor='var(--border)',e.currentTarget.style.color='var(--text-primary)')}>
+                        <span>{type==='carton'?'📦 Caixa':type==='demi'?'½ Metade':'🔹 Unidade'}</span>
+                        <span style={{fontFamily:'JetBrains Mono,monospace',fontWeight:600}}>{getPrice(product,type).toLocaleString('fr-FR')} {currency}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            {filtered.length===0&&<div style={{gridColumn:'1/-1',textAlign:'center',padding:'60px 0',color:'var(--text-muted)'}}>Nenhum produto</div>}
+          </div>
+        )}
+      </div>
+
+      {/* CART */}
+      <div style={{width:360,display:'flex',flexDirection:'column',background:'var(--bg-secondary)',overflow:'hidden'}}>
+        <div style={{padding:'16px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,fontWeight:700}}>
+            <ShoppingCart size={18} color="var(--accent)"/>Carrinho ({cart.length})
+          </div>
+          {cart.length>0&&<button onClick={clearCart} style={{background:'none',border:'none',color:'var(--danger)',cursor:'pointer',display:'flex',alignItems:'center',gap:4,fontSize:12,fontFamily:'inherit'}}><Trash2 size={14}/> Limpar</button>}
+        </div>
+
+        {/* Client + NIF + Empresas */}
+        <div style={{padding:'12px 16px',borderBottom:'1px solid var(--border)',position:'relative',display:'flex',flexDirection:'column',gap:8}}>
+          <div style={{position:'relative'}}>
+            <User size={14} style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',color:'var(--text-muted)'}}/>
+            <input type="text" className="form-input" placeholder="Nome do cliente (opcional)" value={clientNom}
+              onChange={e=>{setClientNom(e.target.value);setShowClientList(true);setShowEmpresaList(true);}}
+              onFocus={()=>{setShowClientList(true);setShowEmpresaList(true);}}
+              onBlur={()=>setTimeout(()=>{setShowClientList(false);setShowEmpresaList(false);},200)}
+              style={{paddingLeft:32,fontSize:13}}/>
+          </div>
+          <input type="text" className="form-input" placeholder="NIF (ou CONSUMIDOR FINAL)" value={clientNif}
+            onChange={e=>setClientNif(e.target.value)}
+            style={{fontSize:12,fontFamily:'monospace',borderColor:clientNif&&clientNif!=='CONSUMIDOR FINAL'?'var(--accent)':'var(--border)'}}/>
+
+          {/* Dropdown clients */}
+          {showClientList&&filteredClients.length>0&&clientNom&&(
+            <div style={{position:'absolute',zIndex:200,background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,left:16,right:16,top:54,maxHeight:100,overflowY:'auto',boxShadow:'var(--shadow)'}}>
+              {filteredClients.map(c=>(
+                <div key={c.id} onMouseDown={()=>{setClientNom(c.nom);setShowClientList(false);}}
+                  style={{padding:'7px 12px',cursor:'pointer',fontSize:12,borderBottom:'1px solid var(--border)'}}
+                  onMouseEnter={e=>e.currentTarget.style.background='var(--bg-hover)'}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  👤 {c.nom}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Dropdown empresas */}
+          {showEmpresaList&&filteredEmpresas.length>0&&(
+            <div style={{position:'absolute',zIndex:200,background:'var(--bg-card)',border:'1px solid rgba(240,192,64,0.4)',borderRadius:8,left:16,right:16,top:clientNom?102:54,maxHeight:130,overflowY:'auto',boxShadow:'var(--shadow)'}}>
+              <div style={{padding:'4px 12px',fontSize:10,color:'var(--text-muted)',fontWeight:700,textTransform:'uppercase',borderBottom:'1px solid var(--border)'}}>🏢 Empresas</div>
+              {filteredEmpresas.map(e=>(
+                <div key={e.id} onMouseDown={()=>{setClientNom(e.nom);setClientNif(e.nif);setShowEmpresaList(false);setShowClientList(false);}}
+                  style={{padding:'7px 12px',cursor:'pointer',fontSize:12,borderBottom:'1px solid var(--border)'}}
+                  onMouseEnter={ev=>ev.currentTarget.style.background='var(--bg-hover)'}
+                  onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+                  <div style={{fontWeight:600}}>{e.nom}</div>
+                  <div style={{fontSize:10,color:'var(--text-muted)',fontFamily:'monospace'}}>NIF: {e.nif}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Items */}
+        <div style={{flex:1,overflowY:'auto',padding:12,display:'flex',flexDirection:'column',gap:8}}>
+          {cart.length===0?(
+            <div style={{textAlign:'center',padding:'60px 0',color:'var(--text-muted)',fontSize:13}}>
+              <ShoppingCart size={32} style={{opacity:0.3,marginBottom:8,display:'block',margin:'0 auto 8px'}}/><br/>Carrinho vazio
+            </div>
+          ):cart.map(item=>(
+            <div key={item.cartKey} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:12}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:600}}>{item.nom}</div>
+                  <div style={{fontSize:11,color:typeColor[item.type]}}>
+                    {item.type==='carton'?'📦 Caixa':item.type==='demi'?'½ Metade':'🔹 Unidade'}
+                  </div>
+                </div>
+                <button onClick={()=>removeItem(item.cartKey)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--danger)',padding:2}}><X size={14}/></button>
+              </div>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+                <div style={{display:'flex',alignItems:'center',gap:4}}>
+                  <button onClick={()=>updateQty(item.cartKey,-1)} style={{width:26,height:26,borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-hover)',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}><Minus size={12}/></button>
+                  <input type="number" value={item.qty} onChange={e=>setQtyManual(item.cartKey,e.target.value)}
+                    style={{width:52,textAlign:'center',background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:6,padding:'3px 6px',color:'var(--text-primary)',fontFamily:'monospace',fontWeight:700,fontSize:13}} min="1" step="1"/>
+                  <button onClick={()=>updateQty(item.cartKey,1)} style={{width:26,height:26,borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-hover)',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}><Plus size={12}/></button>
+                </div>
+                <div style={{fontFamily:'JetBrains Mono,monospace',fontWeight:700,color:'var(--accent)',fontSize:14}}>{item.subtotal.toLocaleString('fr-FR')} {currency}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Checkout */}
+        <div style={{padding:16,borderTop:'1px solid var(--border)',display:'flex',flexDirection:'column',gap:10}}>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:20,fontWeight:800}}>
+            <span>TOTAL</span>
+            <span style={{color:'var(--accent)',fontFamily:'JetBrains Mono,monospace'}}>{total.toLocaleString('fr-FR')} {currency}</span>
+          </div>
+          <button onClick={openPayment} disabled={cart.length===0||loading} className="btn btn-success" style={{justifyContent:'center',padding:'11px'}}>
+            <CreditCard size={16}/> {loading?'Processando...':'🖨️ Imprimir Imediato'}
+          </button>
+          <button onClick={()=>{if(cart.length===0)return;setShowReserveModal(true);}} disabled={cart.length===0||loading}
+            style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,padding:'10px',borderRadius:10,border:'2px solid #4a9eff',background:'rgba(74,158,255,0.08)',color:'#4a9eff',cursor:cart.length===0?'not-allowed':'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,opacity:cart.length===0?0.5:1}}>
+            <Clock size={15}/> Reservar sem Pagar
+          </button>
+          <button onClick={()=>{if(cart.length===0)return;setShowPagoModal(true);setPagoPayMode('dinheiro');setPagoMontantD('');setPagoMontantE('');}} disabled={cart.length===0||loading}
+            style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,padding:'10px',borderRadius:10,border:'2px solid #a0e040',background:'rgba(160,224,64,0.08)',color:'#a0e040',cursor:cart.length===0?'not-allowed':'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,opacity:cart.length===0?0.5:1}}>
+            <CheckCircle size={15}/> Pago — Levar Depois
+          </button>
+        </div>
+      </div>
+
+      {/* VARIANT POPUP */}
+      {showVariantPopup&&selectedProduct&&(
+        <div className="modal-overlay">
+          <div className="modal" style={{maxWidth:420}}>
+            <div className="modal-header">
+              <h2 className="modal-title">{selectedProduct.nom} — {selectedType==='carton'?'📦 Caixa':selectedType==='demi'?'½ Metade':'🔹 Unidade'}</h2>
+              <button onClick={()=>setShowVariantPopup(false)} className="btn btn-icon btn-secondary"><X size={16}/></button>
+            </div>
+            <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:16}}>Escolha a variante:</p>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {variants.map(v=>{
+                const price=getPrice(selectedProduct,selectedType,v);
+                const upc=getUnitsPerCarton(selectedProduct);
+                const typeUnits=selectedType==='carton'?upc:selectedType==='demi'?Math.ceil(upc/2):1;
+                const stockUnits=Math.round(v.stock_cartons*upc);
+                const usedUnits=cart.filter(i=>i.productId===selectedProduct.id&&i.variantId===v.id).reduce((s,i)=>s+getUnitsUsed(i),0);
+                const canAdd=stockUnits-usedUnits>=typeUnits;
+                const displayCx=Math.floor((stockUnits-usedUnits)/upc); const remU=(stockUnits-usedUnits)%upc;
+                return (
+                  <button key={v.id} onClick={()=>canAdd&&handleVariantSelect(v)}
+                    style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px',borderRadius:10,border:'2px solid var(--border)',background:canAdd?'var(--bg-hover)':'rgba(0,0,0,0.2)',cursor:canAdd?'pointer':'not-allowed',opacity:canAdd?1:0.4,transition:'all 0.15s ease'}}
+                    onMouseEnter={e=>canAdd&&(e.currentTarget.style.borderColor='var(--accent)',e.currentTarget.style.background='var(--accent-dim)')}
+                    onMouseLeave={e=>canAdd&&(e.currentTarget.style.borderColor='var(--border)',e.currentTarget.style.background='var(--bg-hover)')}>
+                    <div>
+                      <div style={{fontWeight:700,fontSize:15}}>{v.nom}</div>
+                      <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>Stock: {displayCx>0?`${displayCx}cx`:''}{remU>0?` ${remU}un`:''}{!displayCx&&!remU?'0':''}</div>
+                    </div>
+                    <div style={{fontFamily:'JetBrains Mono,monospace',fontWeight:800,color:'var(--accent)',fontSize:16}}>{price.toLocaleString('fr-FR')} {currency}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PAYMENT MODAL */}
+      {showPayment&&(
+        <div className="modal-overlay">
+          <div className="modal" style={{maxWidth:420}}>
+            <div className="modal-header">
+              <h2 className="modal-title">💳 Forma de Pagamento</h2>
+              <button onClick={()=>setShowPayment(false)} className="btn btn-icon btn-secondary"><X size={16}/></button>
+            </div>
+            <div style={{marginBottom:16,padding:'12px 16px',background:'var(--bg-hover)',borderRadius:10,display:'flex',justifyContent:'space-between'}}>
+              <span style={{fontWeight:700}}>Total a pagar</span>
+              <span style={{fontFamily:'monospace',fontWeight:800,color:'var(--accent)',fontSize:18}}>{total.toLocaleString('fr-FR')} {currency}</span>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:16}}>
+              {payModes.map(m=>(
+                <button key={m.key} onClick={()=>{setPayMode(m.key);setMontantDinheiro('');setMontantExpress('');}}
+                  style={{padding:'10px 6px',borderRadius:10,border:`2px solid ${payMode===m.key?'var(--accent)':'var(--border)'}`,background:payMode===m.key?'var(--accent-dim)':'var(--bg-hover)',cursor:'pointer',color:payMode===m.key?'var(--accent)':'var(--text-secondary)',fontFamily:'inherit',fontSize:12,fontWeight:payMode===m.key?700:400,textAlign:'center'}}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            {(payMode==='dinheiro'||payMode==='misto')&&(
+              <div className="form-group" style={{marginBottom:12}}>
+                <label className="form-label">💵 Valor em Dinheiro ({currency})</label>
+                <input type="number" className="form-input" value={montantDinheiro} onChange={e=>setMontantDinheiro(e.target.value)} placeholder="0" style={{fontSize:16,fontFamily:'JetBrains Mono,monospace'}} autoFocus/>
+                {payMode==='dinheiro'&&<button type="button" onClick={()=>setMontantDinheiro(String(total))} style={{marginTop:6,width:'100%',padding:'8px',borderRadius:8,border:'1px solid var(--success)',background:'rgba(34,197,94,0.08)',color:'var(--success)',fontWeight:700,fontSize:13,cursor:'pointer',fontFamily:'inherit',letterSpacing:.3}}>✓ Exato — {total.toLocaleString('fr-FR')} {currency}</button>}
+              </div>
+            )}
+            {(payMode==='express'||payMode==='misto')&&(
+              <div className="form-group" style={{marginBottom:12}}>
+                <label className="form-label">📱 Valor via App Express ({currency})</label>
+                <input type="number" className="form-input" value={montantExpress} onChange={e=>setMontantExpress(e.target.value)} placeholder="0" style={{fontSize:16,fontFamily:'JetBrains Mono,monospace'}}/>
+                {payMode==='express'&&<button type="button" onClick={()=>setMontantExpress(String(total))} style={{marginTop:6,width:'100%',padding:'8px',borderRadius:8,border:'1px solid var(--success)',background:'rgba(34,197,94,0.08)',color:'var(--success)',fontWeight:700,fontSize:13,cursor:'pointer',fontFamily:'inherit',letterSpacing:.3}}>✓ Exato — {total.toLocaleString('fr-FR')} {currency}</button>}
+              </div>
+            )}
+            {totalPaid>0&&(
+              <div style={{background:totalPaid>=total?'rgba(34,197,94,0.1)':'rgba(239,68,68,0.1)',border:`1px solid ${totalPaid>=total?'rgba(34,197,94,0.3)':'rgba(239,68,68,0.3)'}`,borderRadius:10,padding:'12px 16px',marginBottom:16}}>
+                <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:4}}>
+                  <span>Total recebido</span>
+                  <span style={{fontFamily:'monospace',fontWeight:700}}>{totalPaid.toLocaleString('fr-FR')} {currency}</span>
+                </div>
+                {totalPaid>=total?(
+                  <div style={{display:'flex',justifyContent:'space-between',fontWeight:700}}>
+                    <span>Troco</span><span style={{color:'var(--success)',fontFamily:'monospace'}}>{change.toLocaleString('fr-FR')} {currency}</span>
+                  </div>
+                ):(
+                  <div style={{display:'flex',justifyContent:'space-between',fontWeight:700}}>
+                    <span>Falta</span><span style={{color:'var(--danger)',fontFamily:'monospace'}}>{(total-totalPaid).toLocaleString('fr-FR')} {currency}</span>
+                  </div>
+                )}
+              </div>
+            )}
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setShowPayment(false)} className="btn btn-secondary" style={{flex:1,justifyContent:'center'}}>Cancelar</button>
+              <button onClick={handleSale} disabled={loading||totalPaid<total||(payMode==='dinheiro'&&!montantDinheiro)||(payMode==='express'&&!montantExpress)}
+                className="btn btn-success" style={{flex:2,justifyContent:'center',padding:'12px'}}>
+                <CreditCard size={16}/> Confirmar Venda
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL RESERVA TYPE A */}
+      {showReserveModal&&(
+        <div className="modal-overlay">
+          <div className="modal" style={{maxWidth:420}}>
+            <div className="modal-header">
+              <h2 className="modal-title">📋 Reservar sem Pagar</h2>
+              <button onClick={()=>setShowReserveModal(false)} className="btn btn-icon btn-secondary"><X size={16}/></button>
+            </div>
+            <div style={{padding:'10px 14px',borderRadius:8,background:'rgba(74,158,255,0.08)',border:'1px solid rgba(74,158,255,0.3)',fontSize:12,color:'#4a9eff',marginBottom:14,lineHeight:1.8}}>
+              📦 {cart.length} artigo(s) · <strong>{total.toLocaleString('fr-FR')} {currency}</strong><br/>
+              🔒 Stock bloqueado · 💳 Pagamento na retirada
+            </div>
+            <div className="form-group">
+              <label className="form-label">Cliente</label>
+              <input type="text" className="form-input" value={clientNom||'Sem nome'} readOnly style={{opacity:0.7}}/>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Nota (opcional)</label>
+              <input type="text" className="form-input" value={reserveNote} onChange={e=>setReserveNote(e.target.value)} placeholder="Ex: Buscar amanhã às 10h..."/>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Validade</label>
+              <select className="form-input" value={reserveExpiry} onChange={e=>setReserveExpiry(e.target.value)}>
+                <option value="2">2 horas</option>
+                <option value="24">24 horas</option>
+                <option value="48">48 horas</option>
+                <option value="72">72 horas</option>
+                <option value="0">Sem limite</option>
+              </select>
+            </div>
+            <div style={{display:'flex',gap:10,marginTop:4}}>
+              <button onClick={()=>setShowReserveModal(false)} className="btn btn-secondary" style={{flex:1,justifyContent:'center'}}>Cancelar</button>
+              <button onClick={handleReserveA} disabled={loading} style={{flex:2,padding:'11px',borderRadius:10,border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,background:'#4a9eff',color:'#000',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+                <Clock size={15}/> Confirmar Reserva
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PAGO RETIRAR TYPE B */}
+      {showPagoModal&&(
+        <div className="modal-overlay">
+          <div className="modal" style={{maxWidth:420}}>
+            <div className="modal-header">
+              <h2 className="modal-title">✅ Pago — Levar Depois</h2>
+              <button onClick={()=>setShowPagoModal(false)} className="btn btn-icon btn-secondary"><X size={16}/></button>
+            </div>
+            <div style={{padding:'10px 14px',borderRadius:8,background:'rgba(160,224,64,0.08)',border:'1px solid rgba(160,224,64,0.3)',fontSize:12,color:'#a0e040',marginBottom:14,lineHeight:1.8}}>
+              📦 {cart.length} artigo(s) · <strong>{total.toLocaleString('fr-FR')} {currency}</strong><br/>
+              📉 Stock deduzido imediatamente · 🎫 Ticket na retirada
+            </div>
+            <div className="form-group">
+              <label className="form-label">Cliente</label>
+              <input type="text" className="form-input" value={clientNom||'Sem nome'} readOnly style={{opacity:0.7}}/>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:14}}>
+              {payModes.map(m=>(
+                <button key={m.key} onClick={()=>{setPagoPayMode(m.key);setPagoMontantD('');setPagoMontantE('');}}
+                  style={{padding:'9px 6px',borderRadius:10,border:`2px solid ${pagoPayMode===m.key?'#a0e040':'var(--border)'}`,background:pagoPayMode===m.key?'rgba(160,224,64,0.1)':'var(--bg-hover)',cursor:'pointer',color:pagoPayMode===m.key?'#a0e040':'var(--text-secondary)',fontFamily:'inherit',fontSize:11,fontWeight:pagoPayMode===m.key?700:400,textAlign:'center'}}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            {(pagoPayMode==='dinheiro'||pagoPayMode==='misto')&&(
+              <div className="form-group">
+                <label className="form-label">💵 Valor em Dinheiro ({currency})</label>
+                <input type="number" className="form-input" value={pagoMontantD} onChange={e=>setPagoMontantD(e.target.value)} placeholder="0" style={{fontFamily:'monospace'}} autoFocus/>
+                {pagoPayMode==='dinheiro'&&<button type="button" onClick={()=>setPagoMontantD(String(total))} style={{marginTop:6,width:'100%',padding:'8px',borderRadius:8,border:'1px solid var(--success)',background:'rgba(34,197,94,0.08)',color:'var(--success)',fontWeight:700,fontSize:13,cursor:'pointer',fontFamily:'inherit',letterSpacing:.3}}>✓ Exato — {total.toLocaleString('fr-FR')} {currency}</button>}
+              </div>
+            )}
+            {(pagoPayMode==='express'||pagoPayMode==='misto')&&(
+              <div className="form-group">
+                <label className="form-label">📱 Valor via App Express ({currency})</label>
+                <input type="number" className="form-input" value={pagoMontantE} onChange={e=>setPagoMontantE(e.target.value)} placeholder="0" style={{fontFamily:'monospace'}}/>
+                {pagoPayMode==='express'&&<button type="button" onClick={()=>setPagoMontantE(String(total))} style={{marginTop:6,width:'100%',padding:'8px',borderRadius:8,border:'1px solid var(--success)',background:'rgba(34,197,94,0.08)',color:'var(--success)',fontWeight:700,fontSize:13,cursor:'pointer',fontFamily:'inherit',letterSpacing:.3}}>✓ Exato — {total.toLocaleString('fr-FR')} {currency}</button>}
+              </div>
+            )}
+            <div className="form-group">
+              <label className="form-label">Nota (opcional)</label>
+              <input type="text" className="form-input" value={pagoNote} onChange={e=>setPagoNote(e.target.value)} placeholder="Ex: Buscar na sexta-feira..."/>
+            </div>
+            <div style={{display:'flex',gap:10,marginTop:4}}>
+              <button onClick={()=>setShowPagoModal(false)} className="btn btn-secondary" style={{flex:1,justifyContent:'center'}}>Cancelar</button>
+              <button onClick={handleReserveB} disabled={loading} style={{flex:2,padding:'11px',borderRadius:10,border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,background:'#a0e040',color:'#000',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+                <CheckCircle size={15}/> Confirmar Pagamento
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PAYER RESERVA TYPE A */}
+      {showPayerModal&&(
+        <div className="modal-overlay">
+          <div className="modal" style={{maxWidth:420}}>
+            <div className="modal-header">
+              <h2 className="modal-title">💳 Pagar Reserva #{showPayerModal.id}</h2>
+              <button onClick={()=>setShowPayerModal(null)} className="btn btn-icon btn-secondary"><X size={16}/></button>
+            </div>
+            <div style={{marginBottom:14,padding:'12px 16px',background:'var(--bg-hover)',borderRadius:10,display:'flex',justifyContent:'space-between'}}>
+              <span style={{fontWeight:700}}>Total a pagar</span>
+              <span style={{fontFamily:'monospace',fontWeight:800,color:'var(--accent)',fontSize:18}}>{showPayerModal.total.toLocaleString('fr-FR')} {currency}</span>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:14}}>
+              {payModes.map(m=>(
+                <button key={m.key} onClick={()=>{setPayerMode(m.key);setPayerMontantD('');setPayerMontantE('');}}
+                  style={{padding:'9px 6px',borderRadius:10,border:`2px solid ${payerMode===m.key?'var(--accent)':'var(--border)'}`,background:payerMode===m.key?'var(--accent-dim)':'var(--bg-hover)',cursor:'pointer',color:payerMode===m.key?'var(--accent)':'var(--text-secondary)',fontFamily:'inherit',fontSize:11,fontWeight:payerMode===m.key?700:400,textAlign:'center'}}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            {(payerMode==='dinheiro'||payerMode==='misto')&&(
+              <div className="form-group" style={{marginBottom:12}}>
+                <label className="form-label">💵 Valor em Dinheiro ({currency})</label>
+                <input type="number" className="form-input" value={payerMontantD} onChange={e=>setPayerMontantD(e.target.value)} placeholder="0" style={{fontFamily:'monospace'}} autoFocus/>
+                {payerMode==='dinheiro'&&<button type="button" onClick={()=>setPayerMontantD(String(showPayerModal.total))} style={{marginTop:6,width:'100%',padding:'8px',borderRadius:8,border:'1px solid var(--success)',background:'rgba(34,197,94,0.08)',color:'var(--success)',fontWeight:700,fontSize:13,cursor:'pointer',fontFamily:'inherit',letterSpacing:.3}}>✓ Exato — {showPayerModal.total.toLocaleString('fr-FR')} {currency}</button>}
+              </div>
+            )}
+            {(payerMode==='express'||payerMode==='misto')&&(
+              <div className="form-group" style={{marginBottom:12}}>
+                <label className="form-label">📱 Valor via App Express ({currency})</label>
+                <input type="number" className="form-input" value={payerMontantE} onChange={e=>setPayerMontantE(e.target.value)} placeholder="0" style={{fontFamily:'monospace'}}/>
+                {payerMode==='express'&&<button type="button" onClick={()=>setPayerMontantE(String(showPayerModal.total))} style={{marginTop:6,width:'100%',padding:'8px',borderRadius:8,border:'1px solid var(--success)',background:'rgba(34,197,94,0.08)',color:'var(--success)',fontWeight:700,fontSize:13,cursor:'pointer',fontFamily:'inherit',letterSpacing:.3}}>✓ Exato — {showPayerModal.total.toLocaleString('fr-FR')} {currency}</button>}
+              </div>
+            )}
+            <div style={{display:'flex',gap:10,marginTop:4}}>
+              <button onClick={()=>setShowPayerModal(null)} className="btn btn-secondary" style={{flex:1,justifyContent:'center'}}>Cancelar</button>
+              <button onClick={handlePayerReserva} disabled={loading} className="btn btn-success" style={{flex:2,justifyContent:'center',padding:'12px'}}>
+                <CreditCard size={16}/> Confirmar e Imprimir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUCCESS MODAL */}
+      {showSuccess&&(
+        <div className="modal-overlay">
+          <div className="modal" style={{textAlign:'center',maxWidth:380}}>
+            <div style={{fontSize:56,marginBottom:12}}>✅</div>
+            <h2 style={{fontSize:20,fontWeight:700,marginBottom:8,color:'var(--success)'}}>Venda realizada!</h2>
+            {showSuccess.numeroFacture&&<p style={{color:'var(--accent)',fontSize:13,marginBottom:4,fontFamily:'monospace',fontWeight:700}}>{showSuccess.numeroFacture}</p>}
+            <p style={{color:'var(--text-muted)',marginBottom:4}}>Venda #{showSuccess.venteId}</p>
+            {showSuccess.clientNom&&<p style={{color:'var(--accent)',fontSize:13,marginBottom:4}}>👤 {showSuccess.clientNom}</p>}
+            <div style={{fontSize:28,fontWeight:800,color:'var(--accent)',fontFamily:'monospace',marginBottom:8}}>{showSuccess.total.toLocaleString('fr-FR')} {currency}</div>
+            <div style={{background:'var(--bg-hover)',borderRadius:10,padding:'10px 16px',marginBottom:12,fontSize:13}}>
+              {showSuccess.payMode==='dinheiro'&&<div>💵 Numerário: {showSuccess.montantDinheiro.toLocaleString('fr-FR')} {currency}</div>}
+              {showSuccess.payMode==='express'&&<div>📱 Express: {showSuccess.montantExpress.toLocaleString('fr-FR')} {currency}</div>}
+              {showSuccess.payMode==='misto'&&<><div>💵 Numerário: {showSuccess.montantDinheiro.toLocaleString('fr-FR')} {currency}</div><div>📱 Express: {showSuccess.montantExpress.toLocaleString('fr-FR')} {currency}</div></>}
+              {showSuccess.change>0&&<div style={{color:'var(--success)',fontWeight:600,marginTop:4}}>Troco: {showSuccess.change.toLocaleString('fr-FR')} {currency}</div>}
+            </div>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>handlePrint(showSuccess)} className="btn btn-secondary" style={{flex:1,justifyContent:'center'}}><Printer size={16}/> Imprimir</button>
+              <button onClick={()=>setShowSuccess(null)} className="btn btn-primary" style={{flex:1,justifyContent:'center'}}>Nova venda</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

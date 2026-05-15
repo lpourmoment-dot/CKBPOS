@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CKBPOS</title>
+    <style>
+      body { margin: 0; background: #0a0a0a; }
+      #root { height: 100vh; }
+
+      /* ── Fix Electron Windows : bug freeze input ─────────────────
+         Quand frame:false est actif sur Windows, certains clics sur
+         des zones non-draggables perdent le focus du renderer.
+         Ces règles forcent les inputs à rester interactifs.         */
+      input, textarea, select, button {
+        -webkit-user-select: text !important;
+        user-select: text !important;
+      }
+      input:focus, textarea:focus, select:focus {
+        outline: none;
+        /* Forcer le re-rendu du focus sur Chromium/Electron Windows */
+        -webkit-transform: translateZ(0);
+        transform: translateZ(0);
+      }
+      /* Empêche la perte de focus sur les zones draggables */
+      .drag-region {
+        -webkit-app-region: drag;
+      }
+      .no-drag {
+        -webkit-app-region: no-drag;
+      }
+      /* Tous les éléments interactifs ne doivent PAS être draggables */
+      input, textarea, select, button, a, label,
+      [role="button"], [role="combobox"], [role="listbox"],
+      [role="option"], [role="menuitem"], [role="tab"],
+      .btn, .card, .modal, .dropdown {
+        -webkit-app-region: no-drag !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
