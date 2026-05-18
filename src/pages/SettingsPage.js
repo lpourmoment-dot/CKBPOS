@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from 'react';
+import { useTheme } from '../App';
 import { useLang } from '../utils/useLang';
 import { useAuth } from '../App';
 import { Settings, Cloud, CloudOff, Save, ExternalLink, KeyRound, Download, Trash2, AlertTriangle, MapPin, Phone, Hash, Printer, Plus, Minus } from 'lucide-react';
+import { useAlert } from '../components/AlertModal'; // ✅ AJOUT
 
 export default function SettingsPage() {
+  const { theme, toggleTheme } = useTheme();
   const { t, lang, currency, changeLang, changeCurrency } = useLang();
   const { user } = useAuth();
+
+  // ✅ Hook modal React (remplace alert() natif)
+  const { showAlert, AlertModalComponent } = useAlert();
 
   // Loja
   const [shopName, setShopName]       = useState('');
@@ -50,7 +56,6 @@ export default function SettingsPage() {
   const loadPrinters = async () => {
     const res = await window.electron.getPrinters();
     if (res.success) setPrinters(res.data || []);
-    // Charger config imprimante depuis DB
     const pName = await window.electron.dbGet("SELECT value FROM settings WHERE key='printer_name'");
     const pCopT = await window.electron.dbGet("SELECT value FROM settings WHERE key='printer_copies_ticket'");
     const pCopS = await window.electron.dbGet("SELECT value FROM settings WHERE key='printer_copies_shift'");
@@ -106,7 +111,7 @@ export default function SettingsPage() {
         [key, value]
       );
     }
-    setMsg('✅ Configurações salvas');
+    setMsg(t('settings','saved2'));
     setTimeout(() => setMsg(''), 3000);
     setSaving(false);
   };
@@ -117,7 +122,7 @@ export default function SettingsPage() {
       "UPDATE users SET question_secreta=?, resposta_secreta=? WHERE id=?",
       [question, resposta.toLowerCase().trim(), user.id]
     );
-    setSecMsg('✅ Pergunta de segurança salva!');
+    setSecMsg(t('settings','saved2'));
     setResposta('');
     setTimeout(() => setSecMsg(''), 3000);
   };
@@ -177,9 +182,12 @@ export default function SettingsPage() {
   };
 
   const handleReset = async () => {
-    if (resetConfirm !== 'RESETAR') { alert('Digite RESETAR para confirmar'); return; }
+    // ✅ Guard inutile ici car le bouton est déjà disabled si resetConfirm !== 'RESETAR'
+    // mais on garde la sécurité sans alert() natif
+    if (resetConfirm !== 'RESETAR') return;
     const res = await window.electron.resetApp();
-    if (!res.success) alert('Erro ao resetar: ' + res.error);
+    // ✅ Remplacé alert() natif → showAlert React
+    if (!res.success) showAlert('Erro ao resetar', res.error, 'error');
   };
 
   const startDriveAuth = async () => {
@@ -248,6 +256,24 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* ===== APPARENCE ===== */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+          {t('settings','appearance')}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>Tema da interface</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+              {theme === 'dark' ? t('settings','darkModeActive') : t('settings','lightModeActive')}
+            </div>
+          </div>
+          <button onClick={toggleTheme} className="theme-toggle-btn" style={{ minWidth: 120 }}>
+            {theme === 'dark' ? t('settings','switchToLight') : t('settings','switchToDark')}
+          </button>
+        </div>
+      </div>
+
       {/* ===== LOJA ===== */}
       <div className="card" style={{ marginBottom:16 }}>
         <h2 style={{ fontSize:16, fontWeight:700, marginBottom:16 }}>🏪 Informações da Loja</h2>
@@ -255,39 +281,29 @@ export default function SettingsPage() {
           Ces informations apparaissent sur chaque ticket imprimé.
         </p>
         <div style={{ display:'flex', flexDirection:'column', gap:14, marginBottom:16 }}>
-
-          {/* Nom */}
           <div className="form-group">
             <label className="form-label">Nome da loja *</label>
             <input type="text" className="form-input" value={shopName}
               onChange={e=>setShopName(e.target.value)} placeholder="Ex: KUZULU NLANDU"/>
           </div>
-
-          {/* Adresse */}
           <div className="form-group">
             <label className="form-label"><MapPin size={12} style={{ display:'inline', marginRight:4 }}/>Endereço</label>
             <input type="text" className="form-input" value={shopAddress}
               onChange={e=>setShopAddress(e.target.value)}
               placeholder="Ex: Rua Kilamba Kiaxi, Bairro Golf1, Luanda"/>
           </div>
-
-          {/* Téléphone + NIF */}
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
             <div className="form-group">
               <label className="form-label"><Phone size={12} style={{ display:'inline', marginRight:4 }}/>Telefone</label>
               <input type="text" className="form-input" value={shopPhone}
-                onChange={e=>setShopPhone(e.target.value)}
-                placeholder="Ex: 934450120"/>
+                onChange={e=>setShopPhone(e.target.value)} placeholder="Ex: 934450120"/>
             </div>
             <div className="form-group">
               <label className="form-label"><Hash size={12} style={{ display:'inline', marginRight:4 }}/>NIF / Contribuinte</label>
               <input type="text" className="form-input" value={shopNif}
-                onChange={e=>setShopNif(e.target.value)}
-                placeholder="Ex: 5000184200"/>
+                onChange={e=>setShopNif(e.target.value)} placeholder="Ex: 5000184200"/>
             </div>
           </div>
-
-          {/* Langue + Devise */}
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
             <div className="form-group">
               <label className="form-label">Idioma</label>
@@ -303,9 +319,8 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
-
         <button onClick={saveSettings} className="btn btn-primary" disabled={saving}>
-          <Save size={16}/> {saving ? 'Salvando...' : 'Salvar Configurações'}
+          <Save size={16}/> {saving ? t('settings','saving2') : t('settings','save')}
         </button>
       </div>
 
@@ -362,13 +377,13 @@ export default function SettingsPage() {
             Google Drive
           </h2>
           <span className={`badge ${driveConnected?'badge-success':'badge-danger'}`}>
-            {driveConnected ? '✓ Conectado' : 'Não conectado'}
+            {driveConnected ? t('settings','connected') : t('settings','notConnected2')}
           </span>
         </div>
         {driveConnected ? (
           <div style={{ display:'flex', gap:10 }}>
             <button onClick={handleBackupDrive} className="btn btn-primary" disabled={connecting}>
-              <Cloud size={16}/> {connecting ? 'Sincronizando...' : 'Sincronizar agora'}
+              <Cloud size={16}/> {connecting ? t('settings','syncingNow') : t('settings','syncNow2')}
             </button>
             <button onClick={handleDisconnect} className="btn btn-danger">Desconectar</button>
           </div>
@@ -376,7 +391,7 @@ export default function SettingsPage() {
           <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
             {!authUrl ? (
               <button onClick={startDriveAuth} className="btn btn-primary" disabled={connecting}>
-                <Cloud size={16}/> {connecting ? '...' : 'Conectar Google Drive'}
+                <Cloud size={16}/> {connecting ? '...' : t('settings','connectDrive')}
               </button>
             ) : (
               <>
@@ -395,7 +410,7 @@ export default function SettingsPage() {
                 <div style={{ display:'flex', gap:10 }}>
                   <button onClick={()=>{setAuthUrl('');setAuthCode('');}} className="btn btn-secondary" style={{ flex:1, justifyContent:'center' }}>Annuler</button>
                   <button onClick={submitCode} className="btn btn-primary" style={{ flex:1, justifyContent:'center' }} disabled={!authCode||connecting}>
-                    {connecting ? 'Validation...' : 'Valider le code'}
+                    {connecting ? t('settings','validating2') : t('settings','validateCode')}
                   </button>
                 </div>
               </>
@@ -409,7 +424,6 @@ export default function SettingsPage() {
         <h2 style={{ fontSize:16, fontWeight:700, marginBottom:16, display:'flex', alignItems:'center', gap:8 }}>
           <Printer size={16} color="var(--accent)"/> Impressora
         </h2>
-
         <div className="form-group" style={{ marginBottom:14 }}>
           <label className="form-label">Impressora padrão</label>
           <select className="form-input" value={printerName} onChange={e=>setPrinterName(e.target.value)}
@@ -421,47 +435,31 @@ export default function SettingsPage() {
               </option>
             ))}
           </select>
-          {printerName && (
-            <div style={{ fontSize:11, color:'var(--success)', marginTop:4 }}>
-              ✅ Impressão silenciosa ativada — sem diálogo Windows
-            </div>
-          )}
-          {!printerName && (
-            <div style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>
-              ⚠️ Sem impressora selecionada — diálogo Windows será exibido
-            </div>
-          )}
+          {printerName && <div style={{ fontSize:11, color:'var(--success)', marginTop:4 }}>✅ Impressão silenciosa ativada — sem diálogo Windows</div>}
+          {!printerName && <div style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>⚠️ Sem impressora selecionada — diálogo Windows será exibido</div>}
         </div>
-
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:14 }}>
-          {/* Copies ticket */}
           <div>
             <label className="form-label" style={{ display:'block', marginBottom:6 }}>🎫 Cópias — Ticket venda</label>
             <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-              <button onClick={()=>setCopiesTicket(Math.max(1,copiesTicket-1))}
-                style={{ width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-primary)', fontSize:16 }}>−</button>
+              <button onClick={()=>setCopiesTicket(Math.max(1,copiesTicket-1))} style={{ width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-primary)', fontSize:16 }}>−</button>
               <span style={{ fontSize:22, fontWeight:900, color:'var(--accent)', fontFamily:'monospace', minWidth:32, textAlign:'center' }}>{copiesTicket}</span>
-              <button onClick={()=>setCopiesTicket(Math.min(5,copiesTicket+1))}
-                style={{ width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-primary)', fontSize:16 }}>+</button>
+              <button onClick={()=>setCopiesTicket(Math.min(5,copiesTicket+1))} style={{ width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-primary)', fontSize:16 }}>+</button>
             </div>
             <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:4 }}>Par défaut : 2</div>
           </div>
-          {/* Copies shift */}
           <div>
             <label className="form-label" style={{ display:'block', marginBottom:6 }}>📊 Cópias — Relatório do dia</label>
             <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-              <button onClick={()=>setCopiesShift(Math.max(1,copiesShift-1))}
-                style={{ width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-primary)', fontSize:16 }}>−</button>
+              <button onClick={()=>setCopiesShift(Math.max(1,copiesShift-1))} style={{ width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-primary)', fontSize:16 }}>−</button>
               <span style={{ fontSize:22, fontWeight:900, color:'var(--accent)', fontFamily:'monospace', minWidth:32, textAlign:'center' }}>{copiesShift}</span>
-              <button onClick={()=>setCopiesShift(Math.min(5,copiesShift+1))}
-                style={{ width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-primary)', fontSize:16 }}>+</button>
+              <button onClick={()=>setCopiesShift(Math.min(5,copiesShift+1))} style={{ width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-primary)', fontSize:16 }}>+</button>
             </div>
             <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:4 }}>Par défaut : 1</div>
           </div>
         </div>
-
         <button onClick={savePrinterSettings} className="btn btn-primary" style={{ alignSelf:'flex-start' }}>
-          <Save size={16}/> {printerSaved ? '✅ Guardado!' : 'Guardar configuração'}
+          <Save size={16}/> {printerSaved ? t('settings','printerSaved') : t('settings','savePrinter')}
         </button>
       </div>
 
@@ -471,11 +469,11 @@ export default function SettingsPage() {
           🔧 Manutenção do Banco de Dados
         </h2>
         <p style={{ fontSize:13, color:'var(--text-secondary)', marginBottom:14 }}>
-          Se o aplicativo apresentar erros como <strong>"no such table"</strong> ou <strong>"no column named"</strong>, 
+          Se o aplicativo apresentar erros como <strong>"no such table"</strong> ou <strong>"no column named"</strong>,
           clique aqui para aplicar todas as atualizações do banco de dados sem perder dados existentes.
         </p>
         <button onClick={handleForceMigration} disabled={migrating} className="btn btn-secondary" style={{ justifyContent:'flex-start', gap:10, borderColor:'#3b82f6' }}>
-          {migrating ? '⏳ Aplicando...' : '🔧 Forçar Migração DB'}
+          {migrating ? t('settings','migrating') : t('settings','forceMigration')}
         </button>
         {migrateMsg && (
           <div style={{ marginTop:10, padding:'8px 12px', borderRadius:8, background: migrateMsg.includes('✅') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', color: migrateMsg.includes('✅') ? 'var(--success)' : 'var(--danger)', fontSize:13, fontWeight:600 }}>
@@ -485,12 +483,12 @@ export default function SettingsPage() {
       </div>
 
       {/* ===== RESET ===== */}
-      <div className="card" style={{ border:'1px solid rgba(239,68,68,0.3)' }}>
+      <div className="card" style={{ border:'1px solid rgba(239,68,68,0.3)', marginTop:16 }}>
         <h2 style={{ fontSize:16, fontWeight:700, marginBottom:8, color:'var(--danger)', display:'flex', alignItems:'center', gap:8 }}>
           <AlertTriangle size={16}/> Zona de Perigo
         </h2>
         <p style={{ fontSize:13, color:'var(--text-secondary)', marginBottom:14 }}>
-          Resetar o aplicativo apagará TODOS os dados (produtos, vendas, usuários). Esta ação não pode ser desfeita!
+          {t('settings','dangerZoneWarning')}
         </p>
         {!showReset ? (
           <button onClick={()=>setShowReset(true)} className="btn btn-danger">
@@ -514,10 +512,9 @@ export default function SettingsPage() {
 
       <div style={{ marginTop:16, padding:14, borderRadius:10, background:'var(--bg-card)', border:'1px solid var(--border)', fontSize:12, color:'var(--text-muted)' }}>
         <div style={{ fontWeight:600, marginBottom:8, color:'var(--text-secondary)', fontSize:13 }}>ℹ️ Informações do sistema</div>
-        <div style={{ marginBottom:4 }}>Versão: <strong style={{color:'var(--accent)'}}>CKBPOS v1.1.2</strong></div>
+        <div style={{ marginBottom:4 }}>Versão: <strong style={{color:'var(--accent)'}}>CKBPOS v1.1.5</strong></div>
         <div style={{ marginBottom:4 }}>Banco de dados: SQLite (local)</div>
         <div style={{ marginBottom:10 }}>Língua: {lang} · Moeda: {currency}</div>
-
         {machineInfo && (
           <div style={{ borderTop:'1px solid var(--border)', paddingTop:10, marginTop:4 }}>
             <div style={{ fontWeight:600, marginBottom:6, color:'var(--text-secondary)', fontSize:12 }}>
@@ -530,19 +527,12 @@ export default function SettingsPage() {
               UUID: {machineInfo.machine_id}
             </div>
             <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-              <input
-                type="text"
-                value={machineLabel}
-                onChange={e => setMachineLabel(e.target.value)}
+              <input type="text" value={machineLabel} onChange={e => setMachineLabel(e.target.value)}
                 placeholder="Nome desta máquina (ex: Caixa 1)"
-                style={{ flex:1, padding:'6px 10px', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', color:'var(--text-primary)', fontSize:12, fontFamily:'inherit', outline:'none' }}
-              />
-              <button
-                onClick={handleSaveMachineLabel}
-                disabled={savingLabel}
-                style={{ padding:'6px 14px', borderRadius:8, border:'1px solid var(--accent)', background:'rgba(240,192,64,0.1)', color:'var(--accent)', fontWeight:700, fontSize:12, cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap' }}
-              >
-                {savingLabel ? '...' : '💾 Salvar'}
+                style={{ flex:1, padding:'6px 10px', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', color:'var(--text-primary)', fontSize:12, fontFamily:'inherit', outline:'none' }}/>
+              <button onClick={handleSaveMachineLabel} disabled={savingLabel}
+                style={{ padding:'6px 14px', borderRadius:8, border:'1px solid var(--accent)', background:'rgba(240,192,64,0.1)', color:'var(--accent)', fontWeight:700, fontSize:12, cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap' }}>
+                {savingLabel ? t('settings','savingLabel') : t('settings','saveMachineLabel')}
               </button>
             </div>
             <div style={{ marginTop:6, fontSize:11, color:'var(--text-muted)' }}>
@@ -551,6 +541,9 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
+
+      {/* ✅ Modal React pur — zéro focus trap */}
+      {AlertModalComponent}
     </div>
   );
 }
