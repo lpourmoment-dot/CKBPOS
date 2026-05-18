@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useLang } from '../utils/useLang';
 import { useAuth } from '../App';
 import { Plus, Search, Edit2, Trash2, Package, AlertTriangle, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { useAlert, useConfirm } from '../components/AlertModal'; // ✅ AJOUT
 
 const emptyForm = {
   nom:'', categorie:'General', prix_carton:'', cout_carton:'',
@@ -14,6 +15,11 @@ const emptyVariant = { nom:'', prix_carton:'', prix_demi:'', prix_unite:'', stoc
 export default function ProductsPage() {
   const { t, fmt, currency } = useLang();
   const { user } = useAuth();
+
+  // ✅ Hooks modals React (remplacent alert() et confirm() natifs)
+  const { showAlert, AlertModalComponent } = useAlert();
+  const { showConfirm, ConfirmModalComponent } = useConfirm();
+
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -64,7 +70,8 @@ export default function ProductsPage() {
   };
 
   const autoDemi = form.prix_carton ? (Number(form.prix_carton)/2).toFixed(0) : 0;
-  const autoUnite = form.prix_carton && form.unites_par_carton ? (Number(form.prix_carton)/Number(form.unites_par_carton)).toFixed(0) : 0;
+  const autoUnite = form.prix_carton && form.unites_par_carton
+    ? (Number(form.prix_carton)/Number(form.unites_par_carton)).toFixed(0) : 0;
 
   const f = (key, val) => setForm(p => ({ ...p, [key]: val }));
 
@@ -87,7 +94,11 @@ export default function ProductsPage() {
   };
 
   const handleSave = async () => {
-    if (!form.nom || !form.prix_carton) { alert(t('products','productName') + ' et prix obligatoires'); return; }
+    // ✅ Remplacé alert() natif → showAlert React
+    if (!form.nom || !form.prix_carton) {
+      showAlert('', t('products','productName') + ' et prix obligatoires', 'warning');
+      return;
+    }
     setLoading(true);
     try {
       const prixDemi = form.prix_demi_manual && form.prix_demi ? Number(form.prix_demi) : Number(autoDemi);
@@ -122,8 +133,8 @@ export default function ProductsPage() {
         for (const v of variants) {
           if (!v.nom) continue;
           const vPrixCarton = v.prix_carton ? Number(v.prix_carton) : Number(form.prix_carton);
-          const vPrixDemi = v.prix_demi ? Number(v.prix_demi) : prixDemi;
-          const vPrixUnite = v.prix_unite ? Number(v.prix_unite) : prixUnite;
+          const vPrixDemi   = v.prix_demi   ? Number(v.prix_demi)   : prixDemi;
+          const vPrixUnite  = v.prix_unite  ? Number(v.prix_unite)  : prixUnite;
           if (v.isExisting && v.id) {
             await window.electron.dbQuery(
               "UPDATE product_variants SET nom=?,prix_carton=?,prix_demi=?,prix_unite=?,stock_cartons=? WHERE id=?",
@@ -138,12 +149,17 @@ export default function ProductsPage() {
         }
       }
       setShowModal(false); loadProducts();
-    } catch(e) { alert('Erro: '+e.message); }
+    } catch(e) {
+      // ✅ Remplacé alert() natif → showAlert React
+      showAlert('Erro', e.message, 'error');
+    }
     setLoading(false);
   };
 
   const handleDelete = async (id, nom) => {
-    if (!window.confirm(t('products','confirmDelete'))) return;
+    // ✅ Remplacé window.confirm() natif → showConfirm React (async/await)
+    const ok = await showConfirm(t('products','confirmDelete'), `"${nom}" ?`, 'warning');
+    if (!ok) return;
     await window.electron.dbQuery("UPDATE products SET actif=0 WHERE id=?", [id]);
     await window.electron.dbQuery(
       "INSERT INTO historique_modifications (user_id,table_name,record_id,action,details) VALUES (?,?,?,?,?)",
@@ -172,7 +188,8 @@ export default function ProductsPage() {
 
       <div style={{ position:'relative', marginBottom:20, maxWidth:400 }}>
         <Search size={16} style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:'var(--text-muted)' }}/>
-        <input type="text" className="form-input" placeholder={t('products','search')} value={search} onChange={e=>setSearch(e.target.value)} style={{ paddingLeft:36 }}/>
+        <input type="text" className="form-input" placeholder={t('products','search')} value={search}
+          onChange={e=>setSearch(e.target.value)} style={{ paddingLeft:36 }}/>
       </div>
 
       <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
@@ -237,23 +254,28 @@ export default function ProductsPage() {
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
                 <div className="form-group" style={{ gridColumn:'1/-1' }}>
                   <label className="form-label">{t('products','productName')}</label>
-                  <input type="text" className="form-input" value={form.nom} onChange={e=>f('nom',e.target.value)} placeholder={t('products','productNamePlaceholder')}/>
+                  <input type="text" className="form-input" value={form.nom}
+                    onChange={e=>f('nom',e.target.value)} placeholder={t('products','productNamePlaceholder')}/>
                 </div>
                 <div className="form-group">
                   <label className="form-label">{t('products','categoryLabel')}</label>
-                  <input type="text" className="form-input" value={form.categorie} onChange={e=>f('categorie',e.target.value)} placeholder={t('products','categoryPlaceholder')}/>
+                  <input type="text" className="form-input" value={form.categorie}
+                    onChange={e=>f('categorie',e.target.value)} placeholder={t('products','categoryPlaceholder')}/>
                 </div>
                 <div className="form-group">
                   <label className="form-label">{t('products','unitsPerBoxLabel')}</label>
-                  <input type="number" className="form-input" value={form.unites_par_carton} onChange={e=>f('unites_par_carton',e.target.value)} min="1"/>
+                  <input type="number" className="form-input" value={form.unites_par_carton}
+                    onChange={e=>f('unites_par_carton',e.target.value)} min="1"/>
                 </div>
                 <div className="form-group">
                   <label className="form-label">{t('products','boxPriceLabel')} ({currency})</label>
-                  <input type="number" className="form-input" value={form.prix_carton} onChange={e=>f('prix_carton',e.target.value)} placeholder="0"/>
+                  <input type="number" className="form-input" value={form.prix_carton}
+                    onChange={e=>f('prix_carton',e.target.value)} placeholder="0"/>
                 </div>
                 <div className="form-group">
                   <label className="form-label">{t('products','costLabel')} ({currency})</label>
-                  <input type="number" className="form-input" value={form.cout_carton} onChange={e=>f('cout_carton',e.target.value)} placeholder="0"/>
+                  <input type="number" className="form-input" value={form.cout_carton}
+                    onChange={e=>f('cout_carton',e.target.value)} placeholder="0"/>
                 </div>
 
                 {/* Prix demi */}
@@ -290,7 +312,8 @@ export default function ProductsPage() {
 
                 <div className="form-group" style={{ gridColumn:'1/-1' }}>
                   <label className="form-label">{t('products','stockLabel')}</label>
-                  <input type="number" className="form-input" value={form.stock_cartons} onChange={e=>f('stock_cartons',e.target.value)} min="0" step="0.5"/>
+                  <input type="number" className="form-input" value={form.stock_cartons}
+                    onChange={e=>f('stock_cartons',e.target.value)} min="0" step="0.5"/>
                 </div>
               </div>
 
@@ -314,13 +337,11 @@ export default function ProductsPage() {
                       <Plus size={12}/> {t('products','addVariant')}
                     </button>
                   </div>
-
                   {variants.length === 0 && (
                     <p style={{ fontSize:13, color:'var(--text-muted)', textAlign:'center', padding:'10px 0' }}>
                       {t('products','addVariant')}
                     </p>
                   )}
-
                   {variants.map((v, idx) => (
                     <div key={v.id||v._tempId} style={{ background:'var(--bg-secondary)', borderRadius:8, padding:12, marginBottom:8 }}>
                       <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr auto', gap:8, alignItems:'end' }}>
@@ -360,7 +381,7 @@ export default function ProductsPage() {
               {form.prix_carton > 0 && (
                 <div style={{ background:'var(--bg-hover)', borderRadius:10, padding:14, display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
                   {[
-                    { label: t('cashier','box'), value: Number(form.prix_carton).toLocaleString('fr-FR') },
+                    { label: t('cashier','box'),  value: Number(form.prix_carton).toLocaleString('fr-FR') },
                     { label: t('cashier','half'), value: (form.prix_demi_manual&&form.prix_demi?Number(form.prix_demi):Number(autoDemi)).toLocaleString('fr-FR') },
                     { label: t('cashier','unit'), value: (form.prix_unite_manual&&form.prix_unite?Number(form.prix_unite):Number(autoUnite)).toLocaleString('fr-FR') },
                   ].map(({label,value}) => (
@@ -382,6 +403,10 @@ export default function ProductsPage() {
           </div>
         </div>
       )}
+
+      {/* ✅ Modals React purs — zéro focus trap */}
+      {AlertModalComponent}
+      {ConfirmModalComponent}
     </div>
   );
 }

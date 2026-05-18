@@ -2,12 +2,18 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../App';
 import { useLang } from '../utils/useLang';
 import { Search, ChevronDown, ChevronUp, Printer, Edit2, X, RotateCcw, Calendar, User, Filter, Clock, Trash2, CheckSquare, Square } from 'lucide-react';
+import { useAlert, useConfirm } from '../components/AlertModal'; // ✅ AJOUT
 
 export default function HistoriquePage() {
   const { user } = useAuth();
   const { currency, t } = useLang();
   const isAdmin = user?.role === 'admin';
   const canEdit = isAdmin || user?.peut_modifier_factures;
+
+  // ✅ Hooks modals React (remplacent alert() et confirm() natifs)
+  const { showAlert, AlertModalComponent } = useAlert();
+  const { showConfirm, ConfirmModalComponent } = useConfirm();
+
   const [ventes, setVentes] = useState([]);
   const [expanded, setExpanded] = useState(null);
   const [items, setItems] = useState({});
@@ -53,19 +59,13 @@ export default function HistoriquePage() {
 
   const loadProdutos = async () => {
     let sql = `
-      SELECT
-        p.id as product_id,
-        p.nom,
-        pv.nom as variant_nom,
-        vi.type_vente,
-        SUM(vi.quantite) as total_qty,
-        SUM(vi.sous_total) as total_revenue
+      SELECT p.id as product_id, p.nom, pv.nom as variant_nom, vi.type_vente,
+             SUM(vi.quantite) as total_qty, SUM(vi.sous_total) as total_revenue
       FROM vente_items vi
       JOIN ventes v ON vi.vente_id = v.id
       JOIN products p ON vi.product_id = p.id
       LEFT JOIN product_variants pv ON vi.variant_id = pv.id
-      WHERE vi.statut != 'retourne'
-        AND v.statut != 'annule'
+      WHERE vi.statut != 'retourne' AND v.statut != 'annule'
     `;
     const params = [];
     if (filterDateFrom) { sql += " AND v.date_vente >= ?"; params.push(filterDateFrom); }
@@ -73,8 +73,6 @@ export default function HistoriquePage() {
     if (filterUser !== 'all') { sql += " AND v.user_id = ?"; params.push(Number(filterUser)); }
     sql += " GROUP BY p.id, pv.id, vi.type_vente ORDER BY total_revenue DESC";
     const res = await window.electron.dbQuery(sql, params);
-
-    // Agréger par produit+variante
     const map = {};
     for (const row of (res.data || [])) {
       const key = row.product_id + '_' + (row.variant_nom || '');
@@ -113,7 +111,9 @@ export default function HistoriquePage() {
 
   const handleDeleteVente = async (e, v) => {
     e.stopPropagation();
-    if (!window.confirm(`${t('history','deleteConfirm')}${v.id} ?`)) return;
+    // ✅ Remplacé window.confirm() natif → showConfirm React (async/await)
+    const ok = await showConfirm(t('history','deleteConfirm'), `#${v.id} ?`, 'warning');
+    if (!ok) return;
     setSaving(true);
     try {
       await window.electron.dbQuery("DELETE FROM vente_items WHERE vente_id=?", [v.id]);
@@ -123,7 +123,10 @@ export default function HistoriquePage() {
         [user.id, 'ventes', v.id, 'DELETE', `Venda #${v.id} supprimée (${v.total.toLocaleString('fr-FR')} ${currency})`]
       );
       loadVentes();
-    } catch(e) { alert('Erro: ' + e.message); }
+    } catch(e) {
+      // ✅ Remplacé alert() natif → showAlert React
+      showAlert('Erro', e.message, 'error');
+    }
     setSaving(false);
   };
 
@@ -143,7 +146,13 @@ export default function HistoriquePage() {
 
   const handleDeleteSelected = async () => {
     if (selected.size === 0) return;
-    if (!window.confirm(`${t('history','deleteSelectedConfirm')} ${selected.size} ${t('history','deleteSelectedConfirm2')}`)) return;
+    // ✅ Remplacé window.confirm() natif → showConfirm React (async/await)
+    const ok = await showConfirm(
+      t('history','deleteSelectedConfirm'),
+      `${selected.size} ${t('history','deleteSelectedConfirm2')}`,
+      'warning'
+    );
+    if (!ok) return;
     setSaving(true);
     try {
       for (const id of selected) {
@@ -155,7 +164,10 @@ export default function HistoriquePage() {
         );
       }
       setSelectMode(false); setSelected(new Set()); loadVentes();
-    } catch(e) { alert('Erro: ' + e.message); }
+    } catch(e) {
+      // ✅ Remplacé alert() natif → showAlert React
+      showAlert('Erro', e.message, 'error');
+    }
     setSaving(false);
   };
 
@@ -165,7 +177,7 @@ export default function HistoriquePage() {
       (v.client_nom||'').toLowerCase().includes(search.toLowerCase());
     const matchUser = filterUser === 'all' || String(v.user_id) === filterUser;
     const matchFrom = !filterDateFrom || v.date_vente >= filterDateFrom;
-    const matchTo = !filterDateTo || v.date_vente <= filterDateTo + 'T23:59:59';
+    const matchTo   = !filterDateTo   || v.date_vente <= filterDateTo + 'T23:59:59';
     return matchSearch && matchUser && matchFrom && matchTo;
   });
 
@@ -204,21 +216,14 @@ export default function HistoriquePage() {
   const handlePrintAll = async (format = 'a4') => {
     try {
       const res = await window.electron.printHistoriqueReport({
-        shopName,
-        ventes: filtered,
-        total: totalFiltered,
-        currency,
-        format,
+        shopName, ventes: filtered, total: totalFiltered, currency, format,
         filterUser: users.find(u => String(u.id) === filterUser)?.nom || t('history','allSellers'),
-        filterDateFrom,
-        filterDateTo,
-        printedAt: new Date().toLocaleString('fr-FR'),
+        filterDateFrom, filterDateTo, printedAt: new Date().toLocaleString('fr-FR'),
       });
-      if (res && !res.success) {
-        alert('Erro ao imprimir: ' + (res.error || 'Desconhecido'));
-      }
+      // ✅ Remplacé alert() natif → showAlert React
+      if (res && !res.success) showAlert('Erro ao imprimir', res.error || 'Desconhecido', 'error');
     } catch(e) {
-      alert('Erro ao imprimir: ' + e.message);
+      showAlert('Erro ao imprimir', e.message, 'error');
     }
   };
 
@@ -230,15 +235,15 @@ export default function HistoriquePage() {
         b.total - a.total
       );
       const res = await window.electron.printProdutosReport({
-        shopName, format,
-        produtos: sorted,
-        currency,
+        shopName, format, produtos: sorted, currency,
         filterUser: users.find(u => String(u.id) === filterUser)?.nom || 'Todos',
-        filterDateFrom, filterDateTo,
-        printedAt: new Date().toLocaleString('fr-FR'),
+        filterDateFrom, filterDateTo, printedAt: new Date().toLocaleString('fr-FR'),
       });
-      if (res && !res.success) alert('Erro ao imprimir: ' + (res.error || 'Desconhecido'));
-    } catch(e) { alert('Erro ao imprimir: ' + e.message); }
+      // ✅ Remplacé alert() natif → showAlert React
+      if (res && !res.success) showAlert('Erro ao imprimir', res.error || 'Desconhecido', 'error');
+    } catch(e) {
+      showAlert('Erro ao imprimir', e.message, 'error');
+    }
   };
 
   const openEdit = async (v) => {
@@ -253,7 +258,13 @@ export default function HistoriquePage() {
   };
 
   const handleReturnItem = async (item) => {
-    if (!window.confirm(`${t('history','returnConfirm')} "${item.nom}${item.variant_nom?' '+item.variant_nom:''}" ${t('history','returnConfirm2')}`)) return;
+    // ✅ Remplacé window.confirm() natif → showConfirm React (async/await)
+    const ok = await showConfirm(
+      t('history','returnConfirm'),
+      `"${item.nom}${item.variant_nom?' '+item.variant_nom:''}" ${t('history','returnConfirm2')}`,
+      'warning'
+    );
+    if (!ok) return;
     setSaving(true);
     try {
       await window.electron.dbQuery("UPDATE vente_items SET statut='retourne' WHERE id=?", [item.id]);
@@ -283,12 +294,17 @@ export default function HistoriquePage() {
       if (vRes.data) setEditVente(vRes.data);
       loadVentes();
       setItems(prev => ({ ...prev, [editVente.id]: undefined }));
-    } catch(e) { alert('Erro: '+e.message); }
+    } catch(e) {
+      // ✅ Remplacé alert() natif → showAlert React
+      showAlert('Erro', e.message, 'error');
+    }
     setSaving(false);
   };
 
   const handleCancelVente = async () => {
-    if (!window.confirm(t('history','cancelConfirm'))) return;
+    // ✅ Remplacé window.confirm() natif → showConfirm React (async/await)
+    const ok = await showConfirm('Confirmação', t('history','cancelConfirm'), 'warning');
+    if (!ok) return;
     setSaving(true);
     try {
       for (const item of editItems.filter(i => i.statut !== 'retourne')) {
@@ -311,14 +327,17 @@ export default function HistoriquePage() {
         [user.id,'ventes',editVente.id,'CANCELAMENTO',`Venda #${editVente.id} cancelada`]
       );
       setEditVente(null); loadVentes();
-    } catch(e) { alert('Erro: '+e.message); }
+    } catch(e) {
+      // ✅ Remplacé alert() natif → showAlert React
+      showAlert('Erro', e.message, 'error');
+    }
     setSaving(false);
   };
 
-  const payModeLabel = { dinheiro:'💵', express:'📱', misto:'🔀' };
-  const statusColor = { normal:'var(--success)', annule:'var(--danger)', modifie:'var(--warning)' };
-  const statusLabel = { normal:'✓', annule:'✗', modifie:'✎' };
-  const modifColor = { CREATE:'var(--success)', UPDATE:'var(--info)', DELETE:'var(--danger)', ENTRADA:'var(--success)', 'SAÍDA':'var(--danger)', RETORNO:'var(--warning)', CANCELAMENTO:'var(--danger)' };
+  const payModeLabel  = { dinheiro:'💵', express:'📱', misto:'🔀' };
+  const statusColor   = { normal:'var(--success)', annule:'var(--danger)', modifie:'var(--warning)' };
+  const statusLabel   = { normal:'✓', annule:'✗', modifie:'✎' };
+  const modifColor    = { CREATE:'var(--success)', UPDATE:'var(--info)', DELETE:'var(--danger)', ENTRADA:'var(--success)', 'SAÍDA':'var(--danger)', RETORNO:'var(--warning)', CANCELAMENTO:'var(--danger)' };
 
   return (
     <div style={{ padding:24, height:'100%', overflowY:'auto' }}>
@@ -359,20 +378,14 @@ export default function HistoriquePage() {
           </button>
           {tab !== 'modifications' && (
             <div style={{ position:'relative', display:'flex', gap:0 }}>
-              <button
-                onClick={() => tab==='produtos' ? handlePrintProdutos('a4') : handlePrintAll('a4')}
-                className="btn btn-secondary"
-                title="Imprimir em A4"
-                style={{ borderRadius:'8px 0 0 8px', borderRight:'1px solid var(--border)' }}
-              >
+              <button onClick={() => tab==='produtos' ? handlePrintProdutos('a4') : handlePrintAll('a4')}
+                className="btn btn-secondary" title="Imprimir em A4"
+                style={{ borderRadius:'8px 0 0 8px', borderRight:'1px solid var(--border)' }}>
                 <Printer size={14}/> A4
               </button>
-              <button
-                onClick={() => tab==='produtos' ? handlePrintProdutos('ticket') : handlePrintAll('ticket')}
-                className="btn btn-secondary"
-                title="Imprimir em 80mm (impressora térmica)"
-                style={{ borderRadius:'0 8px 8px 0', fontSize:12, paddingLeft:8, paddingRight:10 }}
-              >
+              <button onClick={() => tab==='produtos' ? handlePrintProdutos('ticket') : handlePrintAll('ticket')}
+                className="btn btn-secondary" title="Imprimir em 80mm (impressora térmica)"
+                style={{ borderRadius:'0 8px 8px 0', fontSize:12, paddingLeft:8, paddingRight:10 }}>
                 🧾 80mm
               </button>
             </div>
@@ -382,15 +395,19 @@ export default function HistoriquePage() {
 
       {/* Tabs */}
       <div style={{ display:'flex', background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:10, padding:4, marginBottom:16, gap:4, maxWidth:520 }}>
-        <button onClick={()=>setTab('ventes')} style={{ flex:1, padding:'8px', borderRadius:8, border:'none', cursor:'pointer', background:tab==='ventes'?'var(--accent)':'transparent', color:tab==='ventes'?'#000':'var(--text-secondary)', fontWeight:600, fontSize:13, fontFamily:'inherit' }}>
-          {t('history','salesTab')}
-        </button>
-        <button onClick={()=>setTab('produtos')} style={{ flex:1, padding:'8px', borderRadius:8, border:'none', cursor:'pointer', background:tab==='produtos'?'var(--accent)':'transparent', color:tab==='produtos'?'#000':'var(--text-secondary)', fontWeight:600, fontSize:13, fontFamily:'inherit' }}>
-          📦 Produtos
-        </button>
-        <button onClick={()=>setTab('modifications')} style={{ flex:1, padding:'8px', borderRadius:8, border:'none', cursor:'pointer', background:tab==='modifications'?'var(--accent)':'transparent', color:tab==='modifications'?'#000':'var(--text-secondary)', fontWeight:600, fontSize:13, fontFamily:'inherit' }}>
-          {t('history','modificationsTab')}
-        </button>
+        {[
+          { key:'ventes',        label: t('history','salesTab') },
+          { key:'produtos',      label: '📦 Produtos' },
+          { key:'modifications', label: t('history','modificationsTab') },
+        ].map(tb => (
+          <button key={tb.key} onClick={()=>setTab(tb.key)}
+            style={{ flex:1, padding:'8px', borderRadius:8, border:'none', cursor:'pointer',
+              background:tab===tb.key?'var(--accent)':'transparent',
+              color:tab===tb.key?'#000':'var(--text-secondary)',
+              fontWeight:600, fontSize:13, fontFamily:'inherit' }}>
+            {tb.label}
+          </button>
+        ))}
       </div>
 
       {/* Filters */}
@@ -422,7 +439,8 @@ export default function HistoriquePage() {
       {/* Search */}
       <div style={{ position:'relative', marginBottom:16, maxWidth:400 }}>
         <Search size={16} style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:'var(--text-muted)' }}/>
-        <input type="text" className="form-input" placeholder={t('history','search')} value={search} onChange={e => setSearch(e.target.value)} style={{ paddingLeft:36 }}/>
+        <input type="text" className="form-input" placeholder={t('history','search')} value={search}
+          onChange={e => setSearch(e.target.value)} style={{ paddingLeft:36 }}/>
       </div>
 
       {/* Ventes tab */}
@@ -430,7 +448,8 @@ export default function HistoriquePage() {
         <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
           {filtered.map(v => (
             <div key={v.id} className="card" style={{ padding:0, overflow:'hidden', opacity:v.statut==='annule'?0.6:1, border: selected.has(v.id) ? '1px solid var(--accent)' : undefined }}>
-              <div onClick={() => selectMode ? toggleSelect(null, v.id) : toggleExpand(v.id)} style={{ padding:'14px 16px', display:'flex', alignItems:'center', gap:12, cursor:'pointer' }}>
+              <div onClick={() => selectMode ? toggleSelect(null, v.id) : toggleExpand(v.id)}
+                style={{ padding:'14px 16px', display:'flex', alignItems:'center', gap:12, cursor:'pointer' }}>
                 {selectMode && isAdmin && (
                   <div onClick={e => toggleSelect(e, v.id)} style={{ cursor:'pointer', color: selected.has(v.id) ? 'var(--accent)' : 'var(--text-muted)' }}>
                     {selected.has(v.id) ? <CheckSquare size={18}/> : <Square size={18}/>}
@@ -462,6 +481,7 @@ export default function HistoriquePage() {
                 )}
                 {!selectMode && (expanded===v.id?<ChevronUp size={16}/>:<ChevronDown size={16}/>)}
               </div>
+
               {!selectMode && expanded===v.id && (
                 <div style={{ borderTop:'1px solid var(--border)', padding:'12px 16px', background:'var(--bg-hover)' }}>
                   {(items[v.id]||[]).map(i => (
@@ -485,7 +505,6 @@ export default function HistoriquePage() {
       {/* Produtos tab */}
       {tab === 'produtos' && (
         <div>
-          {/* Header + tri + impression */}
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
             <div style={{ display:'flex', gap:6, alignItems:'center' }}>
               <span style={{ fontSize:13, color:'var(--text-muted)' }}>Ordenar por:</span>
@@ -504,10 +523,7 @@ export default function HistoriquePage() {
               </button>
             </div>
           </div>
-
-          {/* Tableau produits */}
           <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-            {/* En-tête */}
             <div style={{ display:'grid', gridTemplateColumns:'1fr 80px 80px 80px 120px', gap:8, padding:'6px 14px', fontSize:11, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', borderBottom:'1px solid var(--border)' }}>
               <span>Produto</span><span style={{textAlign:'center'}}>Caixas</span><span style={{textAlign:'center'}}>Demi</span><span style={{textAlign:'center'}}>Unid.</span><span style={{textAlign:'right'}}>Total</span>
             </div>
@@ -529,8 +545,6 @@ export default function HistoriquePage() {
             ))}
             {produtoStats.length === 0 && <div style={{ textAlign:'center', padding:'60px 0', color:'var(--text-muted)' }}>Nenhum produto vendido</div>}
           </div>
-
-          {/* Total général */}
           {produtoStats.length > 0 && (
             <div style={{ marginTop:12, padding:'12px 16px', background:'var(--bg-card)', border:'1px solid var(--accent)', borderRadius:10, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
               <span style={{ fontWeight:700 }}>{produtoStats.length} produto(s) vendido(s)</span>
@@ -605,6 +619,10 @@ export default function HistoriquePage() {
           </div>
         </div>
       )}
+
+      {/* ✅ Modals React purs — zéro focus trap */}
+      {AlertModalComponent}
+      {ConfirmModalComponent}
     </div>
   );
 }

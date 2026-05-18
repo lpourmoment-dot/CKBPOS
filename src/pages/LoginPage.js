@@ -3,8 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
 import { Eye, EyeOff, Lock, Mail, Hash, AlertTriangle, KeyRound } from 'lucide-react';
 import bcrypt from 'bcryptjs';
+import { useLang } from '../utils/useLang';
 
 export default function LoginPage() {
+  const { t } = useLang();
   // Déconnexion auto quand la fenêtre/app se ferme
   React.useEffect(() => {
     const handleBeforeUnload = async () => {
@@ -43,7 +45,7 @@ export default function LoginPage() {
         "SELECT * FROM users WHERE email=? AND actif=1", [email]
       );
       if (!res.success || !res.data) {
-        setError('Email ou senha incorretos');
+        setError(t('login','wrongCredentials2'));
         setLoading(false);
         return;
       }
@@ -56,9 +58,9 @@ export default function LoginPage() {
         );
         setTentativas(newTentativas);
         if (newTentativas >= 3 && user.role === 'admin') {
-          setError('3 tentativas falhadas. Clique em "Esqueci minha senha" para redefinir.');
+          setError(`3 ${t('login','attempts')}`);
         } else {
-          setError(`Senha incorreta. Tentativa ${newTentativas}/3`);
+          setError(`${t('login','attemptsPrefix')} ${newTentativas}/3`);
         }
         setLoading(false);
         return;
@@ -68,7 +70,7 @@ export default function LoginPage() {
       );
       await login({ id:user.id, nom:user.nom, email:user.email, role:user.role, peut_modifier_factures:user.peut_modifier_factures });
       navigate('/');
-    } catch(err) { setError('Erro de conexão'); }
+    } catch(err) { setError(t('login','connectionError2')); }
     setLoading(false);
   };
 
@@ -79,7 +81,7 @@ export default function LoginPage() {
         "SELECT * FROM users WHERE pin=? AND actif=1", [pinValue]
       );
       if (!res.success || !res.data) {
-        setError('PIN incorreto'); setPin(''); setLoading(false); return;
+        setError(t('login','wrongPin2')); setPin(''); setLoading(false); return;
       }
       const user = res.data;
       await window.electron.dbQuery("UPDATE users SET last_login=datetime('now') WHERE id=?", [user.id]);
@@ -89,13 +91,12 @@ export default function LoginPage() {
     setLoading(false);
   };
 
-  const handlePinInput = (digit) => {
-    if (pin.length < 4) {
-      const newPin = pin + digit;
-      setLastDigit(digit); // stocké mais jamais affiché
-      setPin(newPin);
-      if (newPin.length === 4) setTimeout(() => handlePinLogin(newPin), 100);
-    }
+  const handlePinInput = (digitOrFull) => {
+    // Accept either single digit or full 4-digit string from physical keyboard
+    const newPin = digitOrFull.length === 4 ? digitOrFull : (pin.length < 4 ? pin + digitOrFull : pin);
+    setLastDigit(digitOrFull.slice(-1));
+    setPin(newPin);
+    if (newPin.length === 4) setTimeout(() => handlePinLogin(newPin), 100);
   };
 
   // Reset password steps
@@ -114,18 +115,18 @@ export default function LoginPage() {
   const handleResetStep2 = async () => {
     const correct = resetUser.resposta_secreta?.toLowerCase().trim();
     if (resetAnswer.toLowerCase().trim() !== correct) {
-      setResetMsg('Resposta incorreta!'); return;
+      setResetMsg(t('login','wrongAnswer')); return;
     }
     setResetStep(3); setResetMsg('');
   };
 
   const handleResetStep3 = async () => {
-    if (newPassword.length < 6) { setResetMsg('Senha deve ter pelo menos 6 caracteres'); return; }
+    if (newPassword.length < 6) { setResetMsg(t('login','passwordTooShort')); return; }
     const hash = bcrypt.hashSync(newPassword, 10);
     await window.electron.dbQuery(
       "UPDATE users SET password_hash=?, tentativas_login=0 WHERE id=?", [hash, resetUser.id]
     );
-    setResetMsg('✅ Senha redefinida com sucesso!');
+    setResetMsg(t('login','resetSuccess'));
     setTimeout(() => { setShowReset(false); setResetStep(1); setResetEmail(''); setResetAnswer(''); setNewPassword(''); setResetMsg(''); }, 2000);
   };
 
@@ -149,7 +150,7 @@ export default function LoginPage() {
           <div style={{ fontSize:48, fontWeight:800, letterSpacing:6, color:'var(--accent)', fontFamily:'JetBrains Mono,monospace', textShadow:'0 0 40px rgba(232,197,71,0.3)', marginBottom:8 }}>
             CKB<span style={{ color:'var(--text-secondary)', fontSize:36 }}>POS</span>
           </div>
-          <div style={{ color:'var(--text-muted)', fontSize:13 }}>Ponto de Venda Profissional</div>
+          <div style={{ color:'var(--text-muted)', fontSize:13 }}>{t('login','title')}</div>
         </div>
 
         {/* Mode tabs */}
@@ -173,7 +174,7 @@ export default function LoginPage() {
                 </div>
               </div>
               <div className="form-group">
-                <label className="form-label">Senha</label>
+                <label className="form-label">{t('login','passwordLabel2')}</label>
                 <div style={{ position:'relative' }}>
                   <Lock size={16} style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:'var(--text-muted)' }}/>
                   <input type={showPass?'text':'password'} className="form-input" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" style={{ paddingLeft:36, paddingRight:40 }} required/>
@@ -194,35 +195,50 @@ export default function LoginPage() {
                 </button>
               )}
               <button type="submit" className="btn btn-primary btn-lg w-full" disabled={loading} style={{ justifyContent:'center' }}>
-                {loading ? 'Entrando...' : 'Entrar'}
+                {loading ? t('login','enteringButton') : t('login','enterButton')}
               </button>
             </form>
           ) : (
             <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:20 }}>
               <div style={{ color:'var(--text-secondary)', fontSize:13, textAlign:'center' }}>
-                <Hash size={14} style={{ display:'inline', marginRight:4 }}/>Digite seu PIN de 4 dígitos
+                <Hash size={14} style={{ display:'inline', marginRight:4 }}/>{t('login','enterPin')}
               </div>
-              <div style={{ display:'flex', gap:12 }}>
+              {/* 4 dots indicator */}
+              <div style={{ display:'flex', gap:16, justifyContent:'center', margin:'8px 0' }}>
                 {[0,1,2,3].map(i=>(
-                  <div key={i} style={{ width:16, height:16, borderRadius:'50%', background:i<pin.length?'var(--accent)':'var(--border)', transition:'background 0.15s ease', boxShadow:i<pin.length?'0 0 8px var(--accent)':'none' }}/>
+                  <div key={i} style={{ width:18, height:18, borderRadius:'50%', background:i<pin.length?'var(--accent)':'var(--border)', transition:'background 0.15s ease', boxShadow:i<pin.length?'0 0 10px var(--accent)':'none' }}/>
                 ))}
               </div>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, width:'100%' }}>
-                {[1,2,3,4,5,6,7,8,9,null,0,'⌫'].map((d,i)=>(
-                  <button key={i} onClick={()=>{if(d===null)return;if(d==='⌫'){setPin(p=>p.slice(0,-1));return;}handlePinInput(String(d));}} disabled={d===null}
-                    style={{ height:56, borderRadius:10, border:'1px solid var(--border)', background:d===null?'transparent':'var(--bg-hover)', color:d==='⌫'?'var(--danger)':'var(--text-primary)', fontSize:d==='⌫'?20:16, fontWeight:600, cursor:d===null?'default':'pointer', fontFamily:'inherit', transition:'all 0.1s ease', userSelect:'none' }}
-                    onMouseEnter={e=>d!==null&&(e.currentTarget.style.background='var(--accent-dim)',e.currentTarget.style.borderColor='var(--accent)')}
-                    onMouseLeave={e=>d!==null&&(e.currentTarget.style.background='var(--bg-hover)',e.currentTarget.style.borderColor='var(--border)')}>
-                    {d===null ? '' : d==='⌫' ? '⌫' : '●'}
-                  </button>
-                ))}
+              {/* Hidden input captures physical keyboard */}
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                value={pin}
+                autoFocus
+                onChange={e=>{
+                  const val = e.target.value.replace(/\D/g,'').slice(0,4);
+                  setPin(val);
+                  if(val.length===4) setTimeout(()=>handlePinInput(val),50);
+                }}
+                style={{ position:'absolute', opacity:0, width:1, height:1, pointerEvents:'none' }}
+              />
+              {/* Keyboard hint */}
+              <div style={{ background:'var(--bg-hover)', border:'1px solid var(--border)', borderRadius:10, padding:'12px 16px', textAlign:'center', marginTop:4 }}>
+                <div style={{ fontSize:12, color:'var(--text-muted)', marginBottom:8 }}>{t('login','physicalKeyboard')}</div>
+                <div style={{ display:'flex', gap:4, justifyContent:'center', flexWrap:'wrap' }}>
+                  {[1,2,3,4,5,6,7,8,9,0].map(n=>(
+                    <div key={n} style={{ width:24, height:24, background:'var(--bg-secondary)', border:'1px solid var(--border)', borderRadius:4, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, color:'var(--text-muted)', fontFamily:'monospace' }}>{n}</div>
+                  ))}
+                  <div style={{ width:28, height:24, background:'var(--bg-secondary)', border:'1px solid var(--accent)', borderRadius:4, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, color:'var(--accent)', fontFamily:'monospace' }}>⌫</div>
+                </div>
               </div>
-              {error && <div style={{ color:'var(--danger)', fontSize:13 }}>{error}</div>}
+              {error && <div style={{ color:'var(--danger)', fontSize:13, textAlign:'center', marginTop:4 }}>{error}</div>}
             </div>
           )}
         </div>
         <div style={{ textAlign:'center', marginTop:16, color:'var(--text-muted)', fontSize:12 }}>
-          Conta padrão: <span style={{ color:'var(--accent)', fontFamily:'monospace' }}>admin@ckbpos.com / admin123</span>
+          {t('login','defaultAccount')} <span style={{ color:'var(--accent)', fontFamily:'monospace' }}>admin@ckbpos.com / admin123</span>
         </div>
       </div>
 
@@ -231,21 +247,21 @@ export default function LoginPage() {
         <div className="modal-overlay">
           <div className="modal" style={{ maxWidth:420 }}>
             <div className="modal-header">
-              <h2 className="modal-title"><KeyRound size={18} style={{ display:'inline', marginRight:8 }}/>Redefinir Senha</h2>
+              <h2 className="modal-title"><KeyRound size={18} style={{ display:'inline', marginRight:8 }}/>{t('login','resetPassword')}</h2>
               <button onClick={()=>{setShowReset(false);setResetStep(1);setResetMsg('');}} className="btn btn-icon btn-secondary">✕</button>
             </div>
 
             {resetStep === 1 && (
               <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
-                <p style={{ fontSize:13, color:'var(--text-secondary)' }}>Digite o email da conta admin para recuperar a senha.</p>
+                <p style={{ fontSize:13, color:'var(--text-secondary)' }}>{t('login','resetStep1Desc')}</p>
                 <div className="form-group">
-                  <label className="form-label">Email Admin</label>
+                  <label className="form-label">{t('login','adminEmail')}</label>
                   <input type="email" className="form-input" value={resetEmail} onChange={e=>setResetEmail(e.target.value)} placeholder="admin@ckbpos.com" autoFocus/>
                 </div>
                 {resetMsg && <div style={{ color:'var(--danger)', fontSize:13 }}>{resetMsg}</div>}
                 <div style={{ display:'flex', gap:10 }}>
-                  <button onClick={()=>setShowReset(false)} className="btn btn-secondary" style={{ flex:1, justifyContent:'center' }}>Cancelar</button>
-                  <button onClick={handleResetStep1} className="btn btn-primary" style={{ flex:1, justifyContent:'center' }}>Próximo</button>
+                  <button onClick={()=>setShowReset(false)} className="btn btn-secondary" style={{ flex:1, justifyContent:'center' }}>{t('login','cancelBtn2')}</button>
+                  <button onClick={handleResetStep1} className="btn btn-primary" style={{ flex:1, justifyContent:'center' }}>{t('login','next')}</button>
                 </div>
               </div>
             )}
@@ -253,17 +269,17 @@ export default function LoginPage() {
             {resetStep === 2 && (
               <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
                 <div style={{ background:'var(--bg-hover)', borderRadius:10, padding:14 }}>
-                  <div style={{ fontSize:12, color:'var(--text-muted)', marginBottom:4 }}>Pergunta de segurança:</div>
+                  <div style={{ fontSize:12, color:'var(--text-muted)', marginBottom:4 }}>{t('login','secQuestion')}</div>
                   <div style={{ fontWeight:600 }}>{resetQuestion}</div>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Sua resposta</label>
+                  <label className="form-label">{t('login','answer')}</label>
                   <input type="text" className="form-input" value={resetAnswer} onChange={e=>setResetAnswer(e.target.value)} placeholder="Digite sua resposta..." autoFocus/>
                 </div>
                 {resetMsg && <div style={{ color:'var(--danger)', fontSize:13 }}>{resetMsg}</div>}
                 <div style={{ display:'flex', gap:10 }}>
-                  <button onClick={()=>setResetStep(1)} className="btn btn-secondary" style={{ flex:1, justifyContent:'center' }}>Voltar</button>
-                  <button onClick={handleResetStep2} className="btn btn-primary" style={{ flex:1, justifyContent:'center' }}>Verificar</button>
+                  <button onClick={()=>setResetStep(1)} className="btn btn-secondary" style={{ flex:1, justifyContent:'center' }}>{t('login','back')}</button>
+                  <button onClick={handleResetStep2} className="btn btn-primary" style={{ flex:1, justifyContent:'center' }}>{t('login','verify')}</button>
                 </div>
               </div>
             )}
@@ -272,7 +288,7 @@ export default function LoginPage() {
               <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
                 <p style={{ fontSize:13, color:'var(--success)' }}>✅ Identidade verificada! Digite sua nova senha.</p>
                 <div className="form-group">
-                  <label className="form-label">Nova Senha (mínimo 6 caracteres)</label>
+                  <label className="form-label">{t('login','newPasswordLabel')}</label>
                   <input type="password" className="form-input" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="••••••••" autoFocus/>
                 </div>
                 {resetMsg && <div style={{ color:resetMsg.includes('✅')?'var(--success)':'var(--danger)', fontSize:13 }}>{resetMsg}</div>}

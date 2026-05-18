@@ -654,10 +654,10 @@ function generateTicketHTML(data) {
   // font-size 11px Courier New = ~1.8mm/char → max ~40 chars/ligne
   const itemsRows = (items||[]).map(i => `
     <tr>
-      <td style="width:42%;word-break:break-word;"><strong>${i.name}</strong><br><small style="font-size:9px;">(${i.type})</small></td>
-      <td style="width:8%;text-align:center;"><strong>${i.qty}</strong></td>
-      <td style="width:22%;text-align:right;">${i.price}</td>
-      <td style="width:28%;text-align:right;"><strong>${i.subtotal || i.price}</strong></td>
+      <td style="width:44%;word-break:break-word;overflow:hidden;"><strong>${i.name}</strong><br><small style="font-size:8px;">(${i.type})</small></td>
+      <td style="width:10%;text-align:center;"><strong>${i.qty}</strong></td>
+      <td style="width:20%;text-align:right;white-space:nowrap;">${i.price}</td>
+      <td style="width:26%;text-align:right;white-space:nowrap;"><strong>${i.subtotal || i.price}</strong></td>
     </tr>`).join('');
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
@@ -689,7 +689,7 @@ function generateTicketHTML(data) {
     .cancelled { font-size: 14px; text-align: center; font-weight: 900; border: 2px dashed #000; padding: 3px; margin: 5px 0; letter-spacing: 2px; }
     table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 2px 0; table-layout: fixed; }
     th { font-size: 9px; font-weight: 900; text-transform: uppercase; padding: 3px 1px; border-top: 2px solid #000; border-bottom: 1px dashed #000; }
-    td { padding: 4px 1px; font-size: 10px; vertical-align: top; overflow: hidden; }
+    td { padding: 3px 1px; font-size: 9px; vertical-align: top; overflow: hidden; text-overflow: ellipsis; }
     tbody tr:last-child td { border-bottom: 2px solid #000; }
     .total-grand { display: flex; justify-content: space-between; font-size: 15px; font-weight: 900; padding: 4px 0; border-bottom: 2px solid #000; margin: 3px 0 5px; }
     .pay-title { font-size: 11px; font-weight: 900; margin: 4px 0 2px; text-decoration: underline; }
@@ -729,10 +729,10 @@ function generateTicketHTML(data) {
   <table>
     <thead>
       <tr>
-        <th style="width:42%;text-align:left;">Descrição</th>
-        <th style="width:8%;text-align:center;">Qtd</th>
-        <th style="width:22%;text-align:right;">Preço</th>
-        <th style="width:28%;text-align:right;">Total</th>
+        <th style="width:44%;text-align:left;">Descrição</th>
+        <th style="width:10%;text-align:center;">Qtd</th>
+        <th style="width:20%;text-align:right;">Preço</th>
+        <th style="width:26%;text-align:right;">Total</th>
       </tr>
     </thead>
     <tbody>${itemsRows}</tbody>

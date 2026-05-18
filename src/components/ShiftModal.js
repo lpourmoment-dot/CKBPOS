@@ -303,11 +303,24 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div className="form-group">
               <label className="form-label">💵 Dinheiro real em mãos ({currency})</label>
-              <input
-                type="number" className="form-input" value={argentEnMain}
-                onChange={e => setArgentEnMain(e.target.value)} placeholder="0"
-                style={{ fontFamily: 'monospace' }}
-              />
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  type="number" className="form-input" value={argentEnMain}
+                  onChange={e => setArgentEnMain(e.target.value)} placeholder="0"
+                  style={{ fontFamily: 'monospace', flex: 1 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setArgentEnMain(String(shiftData?.totalDinheiro || 0));
+                    setArgentEnvoye(String(shiftData?.totalExpress || 0));
+                  }}
+                  style={{ padding: '0 14px', borderRadius: 8, border: '1px solid var(--accent)', background: 'var(--accent-dim)', color: 'var(--accent)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0 }}
+                  title="Preencher Dinheiro + Express com valores exatos do sistema"
+                >
+                  Exato
+                </button>
+              </div>
               <AnimatePresence>
                 {argentEnMain && (
                   <motion.span

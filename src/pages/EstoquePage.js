@@ -2,10 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../App';
 import { useLang } from '../utils/useLang';
 import { Plus, Minus, AlertTriangle, Search, X, Layers } from 'lucide-react';
+import { useAlert } from '../components/AlertModal'; // ✅ AJOUT
 
 export default function EstoquePage() {
   const { user } = useAuth();
   const { t } = useLang();
+
+  // ✅ Hook modal React (remplace alert() natif)
+  const { showAlert, AlertModalComponent } = useAlert();
+
   const [products, setProducts] = useState([]);
   const [mouvements, setMouvements] = useState([]);
   const [search, setSearch] = useState('');
@@ -72,9 +77,16 @@ export default function EstoquePage() {
   };
 
   const handleMouvement = async () => {
-    if (!quantite || Number(quantite) <= 0) { alert('Informe uma quantidade válida'); return; }
-    if (modalType === 'sortie' && !motif) { alert(t('stock','selectMotive')); return; }
-    if (selectedProduct.has_variants && !selectedVariant) { alert(t('stock','chooseVariant')); return; }
+    // ✅ Remplacé alert() natifs → showAlert React
+    if (!quantite || Number(quantite) <= 0) {
+      showAlert('', 'Informe uma quantidade válida', 'warning'); return;
+    }
+    if (modalType === 'sortie' && !motif) {
+      showAlert('', t('stock','selectMotive'), 'warning'); return;
+    }
+    if (selectedProduct.has_variants && !selectedVariant) {
+      showAlert('', t('stock','chooseVariant'), 'warning'); return;
+    }
 
     const upc = getUnitsPerCarton(selectedProduct);
     const qty = Number(quantite);
@@ -83,12 +95,17 @@ export default function EstoquePage() {
     const stockAntes = stockSource.stock_cartons;
 
     if (modalType === 'sortie' && cartonsQty > stockAntes) {
-      alert(`Stock insuficiente! Disponível: ${Math.round(stockAntes * 100) / 100} caixas`); return;
+      // ✅ Remplacé alert() natif → showAlert React
+      showAlert('Stock insuficiente!', `Disponível: ${Math.round(stockAntes * 100) / 100} caixas`, 'warning');
+      return;
     }
 
     setLoading(true);
     try {
-      const stockDepois = modalType === 'entree' ? stockAntes + cartonsQty : Math.max(0, stockAntes - cartonsQty);
+      const stockDepois = modalType === 'entree'
+        ? stockAntes + cartonsQty
+        : Math.max(0, stockAntes - cartonsQty);
+
       const motifLabels = {
         defeituoso: t('stock','defective'),
         vencido: t('stock','expired'),
@@ -102,9 +119,15 @@ export default function EstoquePage() {
           "SELECT COALESCE(SUM(stock_cartons),0) as total FROM product_variants WHERE product_id=? AND actif=1",
           [selectedProduct.id]
         );
-        await window.electron.dbQuery("UPDATE products SET stock_cartons=?,updated_at=datetime('now') WHERE id=?", [totalRes.data?.total || 0, selectedProduct.id]);
+        await window.electron.dbQuery(
+          "UPDATE products SET stock_cartons=?,updated_at=datetime('now') WHERE id=?",
+          [totalRes.data?.total || 0, selectedProduct.id]
+        );
       } else {
-        await window.electron.dbQuery("UPDATE products SET stock_cartons=?,updated_at=datetime('now') WHERE id=?", [stockDepois, selectedProduct.id]);
+        await window.electron.dbQuery(
+          "UPDATE products SET stock_cartons=?,updated_at=datetime('now') WHERE id=?",
+          [stockDepois, selectedProduct.id]
+        );
       }
 
       await window.electron.dbQuery(
@@ -119,7 +142,10 @@ export default function EstoquePage() {
       );
 
       setShowModal(false); loadProducts(); loadMouvements();
-    } catch(e) { alert('Erro: '+e.message); }
+    } catch(e) {
+      // ✅ Remplacé alert() natif → showAlert React
+      showAlert('Erro', e.message, 'error');
+    }
     setLoading(false);
   };
 
@@ -144,7 +170,14 @@ export default function EstoquePage() {
   const upc = selectedProduct ? getUnitsPerCarton(selectedProduct) : 1;
   const cartonsPreview = quantite ? convertToCartons(Number(quantite), typeMesure, upc) : 0;
   const stockSrc = selectedVariant || selectedProduct;
-  const newStock = stockSrc ? (modalType==='entree' ? stockSrc.stock_cartons + cartonsPreview : Math.max(0, stockSrc.stock_cartons - cartonsPreview)) : 0;
+  const newStock = stockSrc
+    ? (modalType==='entree' ? stockSrc.stock_cartons + cartonsPreview : Math.max(0, stockSrc.stock_cartons - cartonsPreview))
+    : 0;
+
+  const quantityLabel =
+    typeMesure === 'carton' ? `📦 ${t('stock','quantityBoxes')}` :
+    typeMesure === 'demi'   ? `½ ${t('stock','quantityHalves')}` :
+                              `🔹 ${t('stock','quantityUnits')}`;
 
   const TYPE_MESURE = [
     { key:'carton', label:`📦 ${t('cashier','box')}` },
@@ -158,42 +191,29 @@ export default function EstoquePage() {
     { key:'perdido',    label: t('stock','lost') },
   ];
 
-  const quantityLabel = typeMesure==='carton' ? t('stock','quantityCaixas')
-    : typeMesure==='demi' ? t('stock','quantityDemi')
-    : t('stock','quantityUnits');
-
   return (
     <div style={{ padding:24, height:'100%', overflowY:'auto' }}>
+      {/* Header */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
         <div>
           <h1 style={{ fontSize:22, fontWeight:700 }}>{t('stock','title')}</h1>
-          <p style={{ color:'var(--text-secondary)', fontSize:14 }}>
-            {products.length} {t('stock','products')}
-            {alertas.length > 0 && <span style={{ color:'var(--danger)', fontWeight:600, marginLeft:8 }}>⚠️ {alertas.length} {t('alert','lowStock')}</span>}
-          </p>
+          {alertas.length > 0 && (
+            <p style={{ color:'var(--danger)', fontSize:13, display:'flex', alignItems:'center', gap:4 }}>
+              <AlertTriangle size={14}/> {alertas.length} {t('stock','lowStockAlert')}
+            </p>
+          )}
         </div>
       </div>
 
-      {/* Alertas */}
-      {alertas.length > 0 && (
-        <div style={{ background:'rgba(239,68,68,0.1)', border:'1px solid rgba(239,68,68,0.3)', borderRadius:10, padding:14, marginBottom:16 }}>
-          <div style={{ fontWeight:600, color:'var(--danger)', marginBottom:8 }}>
-            <AlertTriangle size={16} style={{ display:'inline', marginRight:6 }}/>{t('alert','lowStockDesc')}
-          </div>
-          {alertas.map(p => (
-            <div key={p.id} style={{ fontSize:13, padding:'2px 0' }}>
-              • <strong>{p.nom}</strong>: {roundStock(p.stock_cartons)} cx ({t('stock','alert').replace('(cx)','').trim()}: {p.stock_alerte})
-            </div>
-          ))}
-        </div>
-      )}
-
       {/* Tabs */}
-      <div style={{ display:'flex', background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:10, padding:4, marginBottom:16, gap:4, maxWidth:400 }}>
-        {[{key:'produtos',label:t('stock','productsTab')},{key:'historico',label:t('stock','historyTab')}].map(tb=>(
-          <button key={tb.key} onClick={()=>setTab(tb.key)}
-            style={{ flex:1, padding:'8px', borderRadius:8, border:'none', cursor:'pointer', background:tab===tb.key?'var(--accent)':'transparent', color:tab===tb.key?'#000':'var(--text-secondary)', fontWeight:600, fontSize:13, fontFamily:'inherit' }}>
-            {tb.label}
+      <div style={{ display:'flex', background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:10, padding:4, marginBottom:16, gap:4, maxWidth:360 }}>
+        {['produtos','historico'].map(tab_ => (
+          <button key={tab_} onClick={()=>setTab(tab_)}
+            style={{ flex:1, padding:'8px', borderRadius:8, border:'none', cursor:'pointer',
+              background:tab===tab_?'var(--accent)':'transparent',
+              color:tab===tab_?'#000':'var(--text-secondary)',
+              fontWeight:600, fontSize:13, fontFamily:'inherit' }}>
+            {tab_==='produtos' ? t('stock','productsTab') : t('stock','historyTab')}
           </button>
         ))}
       </div>
@@ -201,7 +221,8 @@ export default function EstoquePage() {
       {/* Search */}
       <div style={{ position:'relative', marginBottom:16, maxWidth:400 }}>
         <Search size={16} style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:'var(--text-muted)' }}/>
-        <input type="text" className="form-input" placeholder={t('stock','search')} value={search} onChange={e=>setSearch(e.target.value)} style={{ paddingLeft:36 }}/>
+        <input type="text" className="form-input" placeholder={t('stock','search')} value={search}
+          onChange={e=>setSearch(e.target.value)} style={{ paddingLeft:36 }}/>
       </div>
 
       {/* Products tab */}
@@ -211,7 +232,8 @@ export default function EstoquePage() {
             <thead>
               <tr>
                 <th>{t('stock','product')}</th>
-                <th>{t('stock','stockCols')}</th>
+                <th>{t('stock','category')}</th>
+                <th>{t('stock','stock')}</th>
                 <th>{t('stock','alert')}</th>
                 <th>{t('stock','status')}</th>
                 <th>{t('stock','actions')}</th>
@@ -221,22 +243,19 @@ export default function EstoquePage() {
               {filteredProducts.map(p => {
                 const isLow = p.stock_cartons <= p.stock_alerte;
                 return (
-                  <tr key={p.id}>
+                  <tr key={p.id} style={{ opacity: isLow ? 1 : 1 }}>
                     <td>
-                      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                        <div style={{ fontWeight:600 }}>{p.nom}</div>
+                      <div style={{ fontWeight:600, display:'flex', alignItems:'center', gap:6 }}>
+                        {p.nom}
                         {p.has_variants && <Layers size={12} color="var(--accent)"/>}
                       </div>
-                      <div style={{ fontSize:11, color:'var(--text-muted)' }}>{p.categorie} · {p.unites_par_carton} {t('cashier','units')}</div>
+                    </td>
+                    <td style={{ color:'var(--text-muted)', fontSize:13 }}>{p.categorie}</td>
+                    <td style={{ fontFamily:'monospace', fontWeight:700, color:isLow?'var(--danger)':'var(--success)' }}>
+                      {roundStock(p.stock_cartons)} cx
                     </td>
                     <td>
-                      <span style={{ fontFamily:'monospace', fontWeight:700, fontSize:16, color:isLow?'var(--danger)':'var(--text-primary)' }}>
-                        {roundStock(p.stock_cartons)}
-                      </span>
-                      <span style={{ fontSize:11, color:'var(--text-muted)', marginLeft:4 }}>cx</span>
-                    </td>
-                    <td>
-                      <input type="number" value={p.stock_alerte} min="0" step="0.5"
+                      <input type="number" value={p.stock_alerte || 0} min="0"
                         onChange={e => handleUpdateAlerte(p.id, e.target.value)}
                         style={{ width:70, background:'var(--bg-secondary)', border:'1px solid var(--border)', borderRadius:6, padding:'4px 8px', color:'var(--text-primary)', fontFamily:'monospace', fontSize:13 }}/>
                     </td>
@@ -375,7 +394,8 @@ export default function EstoquePage() {
               {/* Note */}
               <div className="form-group">
                 <label className="form-label">{t('stock','observation')}</label>
-                <input type="text" className="form-input" value={note} onChange={e=>setNote(e.target.value)} placeholder={t('stock','observationPlaceholder')}/>
+                <input type="text" className="form-input" value={note}
+                  onChange={e=>setNote(e.target.value)} placeholder={t('stock','observationPlaceholder')}/>
               </div>
 
               <div style={{ display:'flex', gap:10 }}>
@@ -390,6 +410,9 @@ export default function EstoquePage() {
           </div>
         </div>
       )}
+
+      {/* ✅ Modal React pur — zéro focus trap */}
+      {AlertModalComponent}
     </div>
   );
 }
