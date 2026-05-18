@@ -1,11 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../App';
 import { useLang } from '../utils/useLang';
 import { Search, ShoppingCart, Trash2, Plus, Minus, CreditCard, Printer, X, User, Layers, Clock, CheckCircle, Package } from 'lucide-react';
+import { useAlert, useConfirm } from '../components/AlertModal';
 
 export default function CaissePage() {
   const { user } = useAuth();
-  const { currency } = useLang();
+  const { currency, t } = useLang();
+
+  // ✅ Hooks modals React (remplacent alert() et confirm() natifs Electron)
+  const { showAlert, AlertModalComponent } = useAlert();
+  const { showConfirm, ConfirmModalComponent } = useConfirm();
 
   const [shopName, setShopName]       = useState('CKBPOS');
   const [shopAddress, setShopAddress] = useState('');
@@ -16,6 +21,15 @@ export default function CaissePage() {
   const [search, setSearch]     = useState('');
   const [cart, setCart]         = useState([]);
   const [loading, setLoading]   = useState(false);
+  const isProcessing = useRef(false);
+
+  // Anti double-clic : wrapper qui bloque re-clic pendant 800ms
+  const withDebounce = useCallback((fn) => async (...args) => {
+    if (isProcessing.current) return;
+    isProcessing.current = true;
+    try { await fn(...args); }
+    finally { setTimeout(() => { isProcessing.current = false; }, 800); }
+  }, []);
 
   const [clientNom, setClientNom]           = useState('');
   const [clientNif, setClientNif]           = useState('');
@@ -113,10 +127,12 @@ export default function CaissePage() {
 
   const handleTypeClick = async (product, type) => {
     if (product.has_variants) {
+      // ✅ FIX : recharge TOUJOURS les variants frais depuis la BDD (pas de cache stale)
       const res = await window.electron.dbQuery(
-        "SELECT * FROM product_variants WHERE product_id=? AND actif=1 AND stock_cartons>0 ORDER BY nom", [product.id]
+        "SELECT * FROM product_variants WHERE product_id=? AND actif=1 ORDER BY nom", [product.id]
       );
       const vars = res.data || [];
+      // Affiche le popup même si stock=0 (désactivés visuellement) pour éviter confusion
       if (vars.length > 0) {
         setSelectedProduct(product); setSelectedType(type); setVariants(vars); setShowVariantPopup(true);
         return;
@@ -127,14 +143,52 @@ export default function CaissePage() {
 
   const handleVariantSelect = (variant) => { addToCart(selectedProduct, selectedType, variant); setShowVariantPopup(false); };
 
+  // ✅ Helper : formate un nombre d'unités en "Xcx Y½ Zun" lisible
+  const formatAvailableUnits = (availUnits, upc) => {
+    if (availUnits <= 0) return '0';
+    const cx   = Math.floor(availUnits / upc);
+    const rem  = availUnits % upc;
+    const demi = Math.floor(rem / Math.ceil(upc / 2));
+    const un   = rem % Math.ceil(upc / 2);
+    let str = '';
+    if (cx   > 0) str += `${cx}cx `;
+    if (demi > 0) str += `${demi}½ `;
+    if (un   > 0) str += `${un}un`;
+    return str.trim() || '0';
+  };
+
   const addToCart = (product, type, variant) => {
-    const price      = getPrice(product, type, variant);
-    const upc        = getUnitsPerCarton(product);
-    const stockSrc   = variant || product;
-    const stockUnits = Math.round(stockSrc.stock_cartons * upc);
-    const newUnits   = type==='carton' ? upc : type==='demi' ? Math.ceil(upc/2) : 1;
-    const usedUnits  = cart.filter(i=>i.productId===product.id&&i.variantId===(variant?.id||null)).reduce((s,i)=>s+getUnitsUsed(i),0);
-    if (usedUnits+newUnits > stockUnits) { alert(`Stock insuficiente!\nDisponível: ${stockUnits-usedUnits} unidade(s)`); return; }
+    const price   = getPrice(product, type, variant);
+    const upc     = getUnitsPerCarton(product);
+    const newUnits = type==='carton' ? upc : type==='demi' ? Math.ceil(upc/2) : 1;
+
+    // ✅ FIX STOCK STALE : on lit TOUJOURS depuis products[] (rechargé après chaque vente)
+    // Pour les variants, on utilise l'objet variant frais passé en paramètre (rechargé dans handleTypeClick)
+    const freshProduct = products.find(p => p.id === product.id) || product;
+    const stockUnits   = variant
+      ? Math.round((variant.stock_cartons ?? 0) * upc)
+      : Math.round((freshProduct.stock_cartons ?? 0) * upc);
+
+    const usedUnits = cart
+      .filter(i => i.productId === product.id && i.variantId === (variant?.id || null))
+      .reduce((s, i) => s + getUnitsUsed(i), 0);
+
+    const available = stockUnits - usedUnits;
+
+    if (usedUnits + newUnits > stockUnits) {
+      // ✅ Message lisible en cx/½/un au lieu d'un nombre brut d'unités
+      showAlert(
+        t('cashier','stockInsuf') || 'Stock insuffisant !',
+        `Disponível: ${formatAvailableUnits(available, upc)} (${Math.max(0, available)} unid.)`,
+        'warning'
+      );
+      return;
+    }
+    // Anti double-clic
+    if (isProcessing.current) return;
+    isProcessing.current = true;
+    setTimeout(() => { isProcessing.current = false; }, 500);
+
     const cartKey = `${product.id}-${type}-${variant?.id||'none'}`;
     const existingIdx = cart.findIndex(i=>i.cartKey===cartKey);
     if (existingIdx>=0) {
@@ -144,28 +198,57 @@ export default function CaissePage() {
       })); return;
     }
     const displayName = variant ? `${product.nom} ${variant.nom}` : product.nom;
-    setCart(prev=>[...prev,{cartKey,productId:product.id,variantId:variant?.id||null,nom:displayName,productNom:product.nom,variantNom:variant?.nom||null,type,qty:1,price,subtotal:price,unites:upc,stockUnits}]);
+    // stockUnits NON stocké dans le cart item — toujours relu depuis products[] state
+    setCart(prev=>[...prev,{cartKey,productId:product.id,variantId:variant?.id||null,nom:displayName,productNom:product.nom,variantNom:variant?.nom||null,type,qty:1,price,subtotal:price,unites:upc}]);
   };
 
   const updateQty = (cartKey, delta) => {
-    setCart(prev=>prev.map(item=>{
-      if (item.cartKey!==cartKey) return item;
-      const newQty=Math.max(1,item.qty+delta);
-      const otherUsed=prev.filter(i=>i.productId===item.productId&&i.variantId===item.variantId&&i.cartKey!==cartKey).reduce((s,i)=>s+getUnitsUsed(i),0);
-      const thisUnits=item.type==='carton'?newQty*item.unites:item.type==='demi'?newQty*Math.ceil(item.unites/2):newQty;
-      if (otherUsed+thisUnits>item.stockUnits) return item;
-      return {...item,qty:newQty,subtotal:Math.round(newQty*item.price*100)/100};
+    setCart(prev => prev.map(item => {
+      if (item.cartKey !== cartKey) return item;
+      const newQty    = Math.max(1, item.qty + delta);
+      const upc       = item.unites;
+      // FIX: lit le stock FRAIS depuis products[] — jamais item.stockUnits stale
+      const freshProduct    = products.find(p => p.id === item.productId);
+      const freshStockUnits = freshProduct
+        ? Math.round((freshProduct.stock_cartons ?? 0) * upc)
+        : item.stockUnits;
+      const otherUsed = prev
+        .filter(i => i.productId === item.productId && i.variantId === item.variantId && i.cartKey !== cartKey)
+        .reduce((s, i) => s + getUnitsUsed(i), 0);
+      const thisUnits = item.type==='carton' ? newQty*upc : item.type==='demi' ? newQty*Math.ceil(upc/2) : newQty;
+      if (otherUsed + thisUnits > freshStockUnits) return item;
+      return { ...item, qty: newQty, subtotal: Math.round(newQty * item.price * 100) / 100 };
     }));
   };
 
   const setQtyManual = (cartKey, val) => {
-    const newQty=parseInt(val); if (!newQty||newQty<=0) return;
-    setCart(prev=>prev.map(item=>{
-      if (item.cartKey!==cartKey) return item;
-      const otherUsed=prev.filter(i=>i.productId===item.productId&&i.variantId===item.variantId&&i.cartKey!==cartKey).reduce((s,i)=>s+getUnitsUsed(i),0);
-      const thisUnits=item.type==='carton'?newQty*item.unites:item.type==='demi'?newQty*Math.ceil(item.unites/2):newQty;
-      if (otherUsed+thisUnits>item.stockUnits) { alert('Stock insuficiente!'); return item; }
-      return {...item,qty:newQty,subtotal:Math.round(newQty*item.price*100)/100};
+    const newQty = parseInt(val); if (!newQty || newQty <= 0) return;
+    setCart(prev => prev.map(item => {
+      if (item.cartKey !== cartKey) return item;
+      const upc = item.unites;
+
+      // ✅ FIX STOCK STALE : relit le stock frais depuis products[] state
+      const freshProduct  = products.find(p => p.id === item.productId);
+      const freshStockUnits = freshProduct
+        ? Math.round((freshProduct.stock_cartons ?? 0) * upc)
+        : item.stockUnits; // fallback sur la valeur initiale si produit introuvable
+
+      const otherUsed  = prev
+        .filter(i => i.productId === item.productId && i.variantId === item.variantId && i.cartKey !== cartKey)
+        .reduce((s, i) => s + getUnitsUsed(i), 0);
+      const thisUnits  = item.type==='carton' ? newQty*upc : item.type==='demi' ? newQty*Math.ceil(upc/2) : newQty;
+      const available  = freshStockUnits - otherUsed;
+
+      if (otherUsed + thisUnits > freshStockUnits) {
+        // ✅ Message lisible en cx/½/un
+        showAlert(
+          t('cashier','stockInsuf') || 'Stock insuffisant !',
+          `Disponível: ${formatAvailableUnits(available, upc)} (${Math.max(0, available)} unid.)`,
+          'warning'
+        );
+        return item;
+      }
+      return { ...item, qty: newQty, subtotal: Math.round(newQty * item.price * 100) / 100 };
     }));
   };
 
@@ -195,10 +278,16 @@ export default function CaissePage() {
   };
 
   const handleSale = async () => {
-    if (payMode==='dinheiro'&&!montantDinheiro) { alert('Informe o valor recebido!'); return; }
-    if (payMode==='express'&&!montantExpress)   { alert('Informe o valor via App Express!'); return; }
-    if (payMode==='misto'&&!montantDinheiro&&!montantExpress) { alert('Informe os valores!'); return; }
-    if (totalPaid<total) { alert(`Valor insuficiente! Faltam: ${(total-totalPaid).toLocaleString('fr-FR')} ${currency}`); return; }
+    if (isProcessing.current) return;
+    // ✅ Remplacé alert() natifs → showAlert React (les validations bloquantes sont déjà gérées
+    //    par disabled sur le bouton Confirmar, mais on garde les guards pour robustesse)
+    if (payMode==='dinheiro'&&!montantDinheiro) { showAlert('', t('cashier','informAmount'), 'warning'); return; }
+    if (payMode==='express'&&!montantExpress)   { showAlert('', t('cashier','informAmountExpress'), 'warning'); return; }
+    if (payMode==='misto'&&!montantDinheiro&&!montantExpress) { showAlert('', t('cashier','informAmounts'), 'warning'); return; }
+    if (totalPaid<total) {
+      showAlert('Valor insuficiente', `Faltam: ${(total-totalPaid).toLocaleString('fr-FR')} ${currency}`, 'warning');
+      return;
+    }
     setLoading(true); setShowPayment(false);
     try {
       const frRes = await window.electron.nextFactureNum();
@@ -226,7 +315,10 @@ export default function CaissePage() {
       window.electron.driveSync().catch(()=>{});
       setShowSuccess({venteId,total,cart:[...cart],cashGiven:totalPaid,change,clientNom:finalClientNom,clientNif:finalClientNif,payMode,montantDinheiro:Number(montantDinheiro)||0,montantExpress:Number(montantExpress)||0,numeroFacture});
       setCart([]); setClientNom(''); setClientNif(''); loadProducts();
-    } catch(e) { alert('Erro na venda: '+e.message); }
+    } catch(e) {
+      // ✅ Remplacé alert() natif → showAlert React
+      showAlert('Erro na venda', e.message, 'error');
+    }
     setLoading(false);
   };
 
@@ -248,6 +340,7 @@ export default function CaissePage() {
 
   const handleReserveA = async () => {
     if (cart.length===0) return;
+    if (isProcessing.current) return;
     setLoading(true);
     try {
       const expiration = reserveExpiry==='0' ? null : new Date(Date.now()+Number(reserveExpiry)*3600000).toISOString();
@@ -260,16 +353,26 @@ export default function CaissePage() {
         setShowReserveModal(false); setReserveNote(''); setReserveExpiry('24');
         setCart([]); setClientNom(''); setClientNif('');
         loadReservations(); loadProducts();
-        alert(`✅ Reserva criada!\nID: #${res.id}`);
-      } else { alert('Erro: '+res.error); }
-    } catch(e) { alert('Erro: '+e.message); }
+        // ✅ Remplacé alert() natif → showAlert React
+        showAlert('✅ Reserva criada!', `ID: #${res.id}`, 'success');
+      } else {
+        showAlert('Erro', res.error, 'error');
+      }
+    } catch(e) {
+      showAlert('Erro', e.message, 'error');
+    }
     setLoading(false);
   };
 
   const handleReserveB = async () => {
     if (cart.length===0) return;
+    if (isProcessing.current) return;
     const pagoTotal = pagoPayMode==='dinheiro'?Number(pagoMontantD)||0:pagoPayMode==='express'?Number(pagoMontantE)||0:(Number(pagoMontantD)||0)+(Number(pagoMontantE)||0);
-    if (pagoTotal<total) { alert(`Valor insuficiente! Faltam: ${(total-pagoTotal).toLocaleString('fr-FR')} ${currency}`); return; }
+    // ✅ Remplacé alert() natif → showAlert React
+    if (pagoTotal<total) {
+      showAlert('Valor insuficiente', `Faltam: ${(total-pagoTotal).toLocaleString('fr-FR')} ${currency}`, 'warning');
+      return;
+    }
     setLoading(true);
     try {
       const res = await window.electron.reservationCreate({
@@ -281,17 +384,27 @@ export default function CaissePage() {
         setShowPagoModal(false); setPagoNote(''); setPagoPayMode('dinheiro'); setPagoMontantD(''); setPagoMontantE('');
         setCart([]); setClientNom(''); setClientNif('');
         loadReservations(); loadProducts();
-        alert(`✅ Pagamento registado!\nProdutos aguardam retirada.\nID: #${res.id}`);
-      } else { alert('Erro: '+res.error); }
-    } catch(e) { alert('Erro: '+e.message); }
+        // ✅ Remplacé alert() natif → showAlert React
+        showAlert('✅ Pagamento registado!', `Produtos aguardam retirada.\nID: #${res.id}`, 'success');
+      } else {
+        showAlert('Erro', res.error, 'error');
+      }
+    } catch(e) {
+      showAlert('Erro', e.message, 'error');
+    }
     setLoading(false);
   };
 
   const handlePayerReserva = async () => {
     if (!showPayerModal) return;
+    if (isProcessing.current) return;
     const r=showPayerModal;
     const pTotal=payerMode==='dinheiro'?Number(payerMontantD)||0:payerMode==='express'?Number(payerMontantE)||0:(Number(payerMontantD)||0)+(Number(payerMontantE)||0);
-    if (pTotal<r.total) { alert('Valor insuficiente!'); return; }
+    // ✅ Remplacé alert() natif → showAlert React
+    if (pTotal<r.total) {
+      showAlert('Valor insuficiente', t('cashier','insufficientAmount'), 'warning');
+      return;
+    }
     setLoading(true);
     try {
       const res=await window.electron.reservationPayer({id:r.id,userId:user.id,modeP:payerMode,montantD:Number(payerMontantD)||0,montantE:Number(payerMontantE)||0,clientNom:r.client_nom,clientNif:r.client_nif});
@@ -304,13 +417,24 @@ export default function CaissePage() {
           total:res.total,cashGiven:pTotal,change:res.change,
           payMode:payerMode,montantDinheiro:Number(payerMontantD)||0,montantExpress:Number(payerMontantE)||0,
         }, items));
-      } else { alert('Erro: '+res.error); }
-    } catch(e) { alert('Erro: '+e.message); }
+      } else {
+        // ✅ Remplacé alert() natif → showAlert React
+        showAlert('Erro', res.error, 'error');
+      }
+    } catch(e) {
+      showAlert('Erro', e.message, 'error');
+    }
     setLoading(false);
   };
 
   const handleEntregar = async (r) => {
-    if (!window.confirm(`Confirmar entrega para ${r.client_nom||'Cliente'}?`)) return;
+    // ✅ Remplacé window.confirm() natif → showConfirm React (async/await)
+    const ok = await showConfirm(
+      t('cashier','confirmDelivery'),
+      `${t('cashier','confirmDelivery')} ${r.client_nom || t('cashier','clientLabel')} ?`,
+      'info'
+    );
+    if (!ok) return;
     setLoading(true);
     try {
       const res=await window.electron.reservationEntregar({id:r.id});
@@ -322,27 +446,37 @@ export default function CaissePage() {
           total:r.total,cashGiven:r.total,change:0,
           payMode:r.mode_paiement,montantDinheiro:r.montant_dinheiro||0,montantExpress:r.montant_express||0,
         }, items));
-      } else { alert('Erro: '+res.error); }
-    } catch(e) { alert('Erro: '+e.message); }
+      } else {
+        showAlert('Erro', res.error, 'error');
+      }
+    } catch(e) {
+      showAlert('Erro', e.message, 'error');
+    }
     setLoading(false);
   };
 
   const handleAnular = async (r) => {
-    const msg=r.type==='pago_retirar'?`Anular reserva de ${r.client_nom||'Cliente'}? O stock será restituído e a venda anulada.`:`Anular reserva de ${r.client_nom||'Cliente'}?`;
-    if (!window.confirm(msg)) return;
+    // ✅ Remplacé window.confirm() natif → showConfirm React (async/await)
+    const msg = r.type==='pago_retirar'
+      ? `Anular reserva de ${r.client_nom||'Cliente'}? O stock será restituído e a venda anulada.`
+      : `Anular reserva de ${r.client_nom||'Cliente'}?`;
+    const ok = await showConfirm('Confirmação', msg, 'warning');
+    if (!ok) return;
     setLoading(true);
     try {
       const res=await window.electron.reservationAnular({id:r.id});
       if (res.success) { loadReservations(); loadProducts(); }
-      else { alert('Erro: '+res.error); }
-    } catch(e) { alert('Erro: '+e.message); }
+      else { showAlert('Erro', res.error, 'error'); }
+    } catch(e) {
+      showAlert('Erro', e.message, 'error');
+    }
     setLoading(false);
   };
 
   const getTimerDisplay = (r) => {
     if (!r.expiration) return null;
     const diff=new Date(r.expiration)-new Date();
-    if (diff<=0) return {text:'Expirada',urgent:true};
+    if (diff<=0) return {text:t('cashier','expired'),urgent:true};
     const h=Math.floor(diff/3600000); const m=Math.floor((diff%3600000)/60000);
     if (h<1) return {text:`Expira em ${m} min`,urgent:true};
     if (h<3) return {text:`Expira em ${h}h${m>0?` ${m}min`:''}`,urgent:true};
@@ -363,18 +497,18 @@ export default function CaissePage() {
         <div style={{padding:16,borderBottom:'1px solid var(--border)',display:'flex',gap:10,alignItems:'center'}}>
           <div style={{position:'relative',flex:1}}>
             <Search size={16} style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:'var(--text-muted)'}}/>
-            <input type="text" className="form-input" placeholder="Buscar produto..." value={search} onChange={e=>setSearch(e.target.value)} style={{paddingLeft:36}}/>
+            <input type="text" className="form-input" placeholder={t('cashier','search')} value={search} onChange={e=>setSearch(e.target.value)} style={{paddingLeft:36}}/>
           </div>
           <button onClick={()=>setShowReservations(!showReservations)}
             style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,border:`2px solid ${showReservations?'var(--accent)':'var(--border)'}`,background:showReservations?'var(--accent-dim)':'transparent',color:showReservations?'var(--accent)':'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:700,position:'relative',flexShrink:0,whiteSpace:'nowrap'}}>
-            <Clock size={15}/>Reservas
+            <Clock size={15}/>{t('cashier','reserves')}
             {pendingCount>0&&<span style={{position:'absolute',top:-6,right:-6,background:'var(--danger)',color:'white',borderRadius:'50%',width:17,height:17,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700}}>{pendingCount}</span>}
           </button>
         </div>
 
         {showReservations ? (
           <div style={{flex:1,overflowY:'auto',padding:16,display:'flex',flexDirection:'column',gap:10}}>
-            <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>📋 Reservas Ativas ({pendingCount})</div>
+            <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>{t('cashier','activeReserves')} ({pendingCount})</div>
             {reservations.filter(r=>r.statut==='pendente').length===0 ? (
               <div style={{textAlign:'center',padding:'40px 0',color:'var(--text-muted)',fontSize:13}}>
                 <Clock size={28} style={{opacity:0.3,marginBottom:8,display:'block',margin:'0 auto 8px'}}/><br/>Nenhuma reserva ativa
@@ -399,7 +533,7 @@ export default function CaissePage() {
                     {items.map(i=>`${i.nom} ×${i.qty}${i.type==='carton'?'cx':i.type==='demi'?'½':'un'}`).join(' · ')}
                   </div>
                   {timer&&<div style={{fontSize:11,fontWeight:700,color:timer.urgent?'var(--danger)':'#4a9eff',marginBottom:8}}>{timer.urgent?'⚠️':'⏳'} {timer.text}</div>}
-                  {isB&&<div style={{fontSize:11,fontWeight:700,color:'#a0e040',marginBottom:8}}>✅ Pago · Stock já deduzido</div>}
+                  {isB&&<div style={{fontSize:11,fontWeight:700,color:'#a0e040',marginBottom:8}}>{t('cashier','pago')} · {t('cashier','stockDeducted')}</div>}
                   <div style={{display:'flex',gap:6}}>
                     {isB ? (
                       <button onClick={()=>handleEntregar(r)} style={{flex:1,padding:'7px 6px',borderRadius:8,border:'none',cursor:'pointer',fontSize:11,fontWeight:700,fontFamily:'inherit',background:'#a0e040',color:'#000',display:'flex',alignItems:'center',justifyContent:'center',gap:4}}>
@@ -449,7 +583,7 @@ export default function CaissePage() {
                         style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 10px',borderRadius:8,border:'1px solid var(--border)',background:canAdd?'var(--bg-hover)':'rgba(0,0,0,0.2)',cursor:canAdd?'pointer':'not-allowed',color:canAdd?'var(--text-primary)':'var(--text-muted)',fontSize:12,fontFamily:'inherit',transition:'all 0.15s ease',opacity:canAdd?1:0.5}}
                         onMouseEnter={e=>canAdd&&(e.currentTarget.style.borderColor=typeColor[type],e.currentTarget.style.color=typeColor[type])}
                         onMouseLeave={e=>canAdd&&(e.currentTarget.style.borderColor='var(--border)',e.currentTarget.style.color='var(--text-primary)')}>
-                        <span>{type==='carton'?'📦 Caixa':type==='demi'?'½ Metade':'🔹 Unidade'}</span>
+                        <span>{type==='carton'?t('cashier','typeBox'):type==='demi'?t('cashier','typeHalf'):t('cashier','typeUnit')}</span>
                         <span style={{fontFamily:'JetBrains Mono,monospace',fontWeight:600}}>{getPrice(product,type).toLocaleString('fr-FR')} {currency}</span>
                       </button>
                     );
@@ -466,7 +600,7 @@ export default function CaissePage() {
       <div style={{width:360,display:'flex',flexDirection:'column',background:'var(--bg-secondary)',overflow:'hidden'}}>
         <div style={{padding:'16px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
           <div style={{display:'flex',alignItems:'center',gap:8,fontWeight:700}}>
-            <ShoppingCart size={18} color="var(--accent)"/>Carrinho ({cart.length})
+            <ShoppingCart size={18} color="var(--accent)"/>{t('cashier','cart')} ({cart.length})
           </div>
           {cart.length>0&&<button onClick={clearCart} style={{background:'none',border:'none',color:'var(--danger)',cursor:'pointer',display:'flex',alignItems:'center',gap:4,fontSize:12,fontFamily:'inherit'}}><Trash2 size={14}/> Limpar</button>}
         </div>
@@ -475,13 +609,13 @@ export default function CaissePage() {
         <div style={{padding:'12px 16px',borderBottom:'1px solid var(--border)',position:'relative',display:'flex',flexDirection:'column',gap:8}}>
           <div style={{position:'relative'}}>
             <User size={14} style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',color:'var(--text-muted)'}}/>
-            <input type="text" className="form-input" placeholder="Nome do cliente (opcional)" value={clientNom}
+            <input type="text" className="form-input" placeholder={t('cashier','clientOptional')} value={clientNom}
               onChange={e=>{setClientNom(e.target.value);setShowClientList(true);setShowEmpresaList(true);}}
               onFocus={()=>{setShowClientList(true);setShowEmpresaList(true);}}
               onBlur={()=>setTimeout(()=>{setShowClientList(false);setShowEmpresaList(false);},200)}
               style={{paddingLeft:32,fontSize:13}}/>
           </div>
-          <input type="text" className="form-input" placeholder="NIF (ou CONSUMIDOR FINAL)" value={clientNif}
+          <input type="text" className="form-input" placeholder={t('cashier','nifPlaceholder')} value={clientNif}
             onChange={e=>setClientNif(e.target.value)}
             style={{fontSize:12,fontFamily:'monospace',borderColor:clientNif&&clientNif!=='CONSUMIDOR FINAL'?'var(--accent)':'var(--border)'}}/>
 
@@ -520,7 +654,7 @@ export default function CaissePage() {
         <div style={{flex:1,overflowY:'auto',padding:12,display:'flex',flexDirection:'column',gap:8}}>
           {cart.length===0?(
             <div style={{textAlign:'center',padding:'60px 0',color:'var(--text-muted)',fontSize:13}}>
-              <ShoppingCart size={32} style={{opacity:0.3,marginBottom:8,display:'block',margin:'0 auto 8px'}}/><br/>Carrinho vazio
+              <ShoppingCart size={32} style={{opacity:0.3,marginBottom:8,display:'block',margin:'0 auto 8px'}}/><br/>{t('cashier','emptyCartMsg')}
             </div>
           ):cart.map(item=>(
             <div key={item.cartKey} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:12}}>
@@ -528,7 +662,7 @@ export default function CaissePage() {
                 <div>
                   <div style={{fontSize:13,fontWeight:600}}>{item.nom}</div>
                   <div style={{fontSize:11,color:typeColor[item.type]}}>
-                    {item.type==='carton'?'📦 Caixa':item.type==='demi'?'½ Metade':'🔹 Unidade'}
+                    {item.type==='carton'?t('cashier','typeBox'):item.type==='demi'?t('cashier','typeHalf'):t('cashier','typeUnit')}
                   </div>
                 </div>
                 <button onClick={()=>removeItem(item.cartKey)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--danger)',padding:2}}><X size={14}/></button>
@@ -553,15 +687,15 @@ export default function CaissePage() {
             <span style={{color:'var(--accent)',fontFamily:'JetBrains Mono,monospace'}}>{total.toLocaleString('fr-FR')} {currency}</span>
           </div>
           <button onClick={openPayment} disabled={cart.length===0||loading} className="btn btn-success" style={{justifyContent:'center',padding:'11px'}}>
-            <CreditCard size={16}/> {loading?'Processando...':'🖨️ Imprimir Imediato'}
+            <CreditCard size={16}/> {loading?t('cashier','processing'):t('cashier','printNow')}
           </button>
           <button onClick={()=>{if(cart.length===0)return;setShowReserveModal(true);}} disabled={cart.length===0||loading}
             style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,padding:'10px',borderRadius:10,border:'2px solid #4a9eff',background:'rgba(74,158,255,0.08)',color:'#4a9eff',cursor:cart.length===0?'not-allowed':'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,opacity:cart.length===0?0.5:1}}>
-            <Clock size={15}/> Reservar sem Pagar
+            <Clock size={15}/> {t('cashier','reserveWithoutPay')}
           </button>
           <button onClick={()=>{if(cart.length===0)return;setShowPagoModal(true);setPagoPayMode('dinheiro');setPagoMontantD('');setPagoMontantE('');}} disabled={cart.length===0||loading}
             style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,padding:'10px',borderRadius:10,border:'2px solid #a0e040',background:'rgba(160,224,64,0.08)',color:'#a0e040',cursor:cart.length===0?'not-allowed':'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,opacity:cart.length===0?0.5:1}}>
-            <CheckCircle size={15}/> Pago — Levar Depois
+            <CheckCircle size={15}/> {t('cashier','paidPickupLater')}
           </button>
         </div>
       </div>
@@ -571,29 +705,42 @@ export default function CaissePage() {
         <div className="modal-overlay">
           <div className="modal" style={{maxWidth:420}}>
             <div className="modal-header">
-              <h2 className="modal-title">{selectedProduct.nom} — {selectedType==='carton'?'📦 Caixa':selectedType==='demi'?'½ Metade':'🔹 Unidade'}</h2>
+              <h2 className="modal-title">{selectedProduct.nom} — {selectedType==='carton'?t('cashier','typeBox'):selectedType==='demi'?t('cashier','typeHalf'):t('cashier','typeUnit')}</h2>
               <button onClick={()=>setShowVariantPopup(false)} className="btn btn-icon btn-secondary"><X size={16}/></button>
             </div>
             <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:16}}>Escolha a variante:</p>
             <div style={{display:'flex',flexDirection:'column',gap:8}}>
               {variants.map(v=>{
-                const price=getPrice(selectedProduct,selectedType,v);
-                const upc=getUnitsPerCarton(selectedProduct);
-                const typeUnits=selectedType==='carton'?upc:selectedType==='demi'?Math.ceil(upc/2):1;
-                const stockUnits=Math.round(v.stock_cartons*upc);
-                const usedUnits=cart.filter(i=>i.productId===selectedProduct.id&&i.variantId===v.id).reduce((s,i)=>s+getUnitsUsed(i),0);
-                const canAdd=stockUnits-usedUnits>=typeUnits;
-                const displayCx=Math.floor((stockUnits-usedUnits)/upc); const remU=(stockUnits-usedUnits)%upc;
+                const price     = getPrice(selectedProduct, selectedType, v);
+                const upc       = getUnitsPerCarton(selectedProduct);
+                const typeUnits = selectedType==='carton' ? upc : selectedType==='demi' ? Math.ceil(upc/2) : 1;
+                // ✅ FIX : v.stock_cartons est frais (rechargé depuis BDD dans handleTypeClick)
+                const stockUnits = Math.round((v.stock_cartons ?? 0) * upc);
+                const usedUnits  = cart
+                  .filter(i => i.productId===selectedProduct.id && i.variantId===v.id)
+                  .reduce((s,i) => s+getUnitsUsed(i), 0);
+                const available = stockUnits - usedUnits;
+                const canAdd    = available >= typeUnits;
+                // Affichage lisible du stock disponible
+                const stockLabel = formatAvailableUnits(available, upc);
                 return (
                   <button key={v.id} onClick={()=>canAdd&&handleVariantSelect(v)}
-                    style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px',borderRadius:10,border:'2px solid var(--border)',background:canAdd?'var(--bg-hover)':'rgba(0,0,0,0.2)',cursor:canAdd?'pointer':'not-allowed',opacity:canAdd?1:0.4,transition:'all 0.15s ease'}}
+                    style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px',borderRadius:10,
+                      border:`2px solid ${canAdd?'var(--border)':'rgba(239,68,68,0.3)'}`,
+                      background:canAdd?'var(--bg-hover)':'rgba(239,68,68,0.05)',
+                      cursor:canAdd?'pointer':'not-allowed',opacity:canAdd?1:0.5,transition:'all 0.15s ease'}}
                     onMouseEnter={e=>canAdd&&(e.currentTarget.style.borderColor='var(--accent)',e.currentTarget.style.background='var(--accent-dim)')}
                     onMouseLeave={e=>canAdd&&(e.currentTarget.style.borderColor='var(--border)',e.currentTarget.style.background='var(--bg-hover)')}>
                     <div>
                       <div style={{fontWeight:700,fontSize:15}}>{v.nom}</div>
-                      <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>Stock: {displayCx>0?`${displayCx}cx`:''}{remU>0?` ${remU}un`:''}{!displayCx&&!remU?'0':''}</div>
+                      <div style={{fontSize:11,color:canAdd?'var(--text-muted)':'var(--danger)',marginTop:2}}>
+                        {/* ✅ Affiche stock réel frais — plus de valeur fantôme */}
+                        Stock: {canAdd ? stockLabel : '0 — indisponível'}
+                      </div>
                     </div>
-                    <div style={{fontFamily:'JetBrains Mono,monospace',fontWeight:800,color:'var(--accent)',fontSize:16}}>{price.toLocaleString('fr-FR')} {currency}</div>
+                    <div style={{fontFamily:'JetBrains Mono,monospace',fontWeight:800,color:canAdd?'var(--accent)':'var(--text-muted)',fontSize:16}}>
+                      {price.toLocaleString('fr-FR')} {currency}
+                    </div>
                   </button>
                 );
               })}
@@ -607,7 +754,7 @@ export default function CaissePage() {
         <div className="modal-overlay">
           <div className="modal" style={{maxWidth:420}}>
             <div className="modal-header">
-              <h2 className="modal-title">💳 Forma de Pagamento</h2>
+              <h2 className="modal-title">{t('cashier','paymentTitle')}</h2>
               <button onClick={()=>setShowPayment(false)} className="btn btn-icon btn-secondary"><X size={16}/></button>
             </div>
             <div style={{marginBottom:16,padding:'12px 16px',background:'var(--bg-hover)',borderRadius:10,display:'flex',justifyContent:'space-between'}}>
@@ -669,7 +816,7 @@ export default function CaissePage() {
         <div className="modal-overlay">
           <div className="modal" style={{maxWidth:420}}>
             <div className="modal-header">
-              <h2 className="modal-title">📋 Reservar sem Pagar</h2>
+              <h2 className="modal-title">{t('cashier','reserveTitle')}</h2>
               <button onClick={()=>setShowReserveModal(false)} className="btn btn-icon btn-secondary"><X size={16}/></button>
             </div>
             <div style={{padding:'10px 14px',borderRadius:8,background:'rgba(74,158,255,0.08)',border:'1px solid rgba(74,158,255,0.3)',fontSize:12,color:'#4a9eff',marginBottom:14,lineHeight:1.8}}>
@@ -677,15 +824,15 @@ export default function CaissePage() {
               🔒 Stock bloqueado · 💳 Pagamento na retirada
             </div>
             <div className="form-group">
-              <label className="form-label">Cliente</label>
-              <input type="text" className="form-input" value={clientNom||'Sem nome'} readOnly style={{opacity:0.7}}/>
+              <label className="form-label">{t('cashier','clientLabel')}</label>
+              <input type="text" className="form-input" value={clientNom||t('cashier','noName')} readOnly style={{opacity:0.7}}/>
             </div>
             <div className="form-group">
-              <label className="form-label">Nota (opcional)</label>
-              <input type="text" className="form-input" value={reserveNote} onChange={e=>setReserveNote(e.target.value)} placeholder="Ex: Buscar amanhã às 10h..."/>
+              <label className="form-label">{t('cashier','noteOptional')}</label>
+              <input type="text" className="form-input" value={reserveNote} onChange={e=>setReserveNote(e.target.value)} placeholder={t('cashier','notePlaceholder')}/>
             </div>
             <div className="form-group">
-              <label className="form-label">Validade</label>
+              <label className="form-label">{t('cashier','validity')}</label>
               <select className="form-input" value={reserveExpiry} onChange={e=>setReserveExpiry(e.target.value)}>
                 <option value="2">2 horas</option>
                 <option value="24">24 horas</option>
@@ -697,7 +844,7 @@ export default function CaissePage() {
             <div style={{display:'flex',gap:10,marginTop:4}}>
               <button onClick={()=>setShowReserveModal(false)} className="btn btn-secondary" style={{flex:1,justifyContent:'center'}}>Cancelar</button>
               <button onClick={handleReserveA} disabled={loading} style={{flex:2,padding:'11px',borderRadius:10,border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,background:'#4a9eff',color:'#000',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
-                <Clock size={15}/> Confirmar Reserva
+                <Clock size={15}/> {t('cashier','confirmReserve')}
               </button>
             </div>
           </div>
@@ -709,16 +856,16 @@ export default function CaissePage() {
         <div className="modal-overlay">
           <div className="modal" style={{maxWidth:420}}>
             <div className="modal-header">
-              <h2 className="modal-title">✅ Pago — Levar Depois</h2>
+              <h2 className="modal-title">{t('cashier','pagoTitle')}</h2>
               <button onClick={()=>setShowPagoModal(false)} className="btn btn-icon btn-secondary"><X size={16}/></button>
             </div>
             <div style={{padding:'10px 14px',borderRadius:8,background:'rgba(160,224,64,0.08)',border:'1px solid rgba(160,224,64,0.3)',fontSize:12,color:'#a0e040',marginBottom:14,lineHeight:1.8}}>
               📦 {cart.length} artigo(s) · <strong>{total.toLocaleString('fr-FR')} {currency}</strong><br/>
-              📉 Stock deduzido imediatamente · 🎫 Ticket na retirada
+              📉 {t('cashier','stockDeducted')} · 🎫 {t('cashier','pickupTicket')}
             </div>
             <div className="form-group">
-              <label className="form-label">Cliente</label>
-              <input type="text" className="form-input" value={clientNom||'Sem nome'} readOnly style={{opacity:0.7}}/>
+              <label className="form-label">{t('cashier','clientLabel')}</label>
+              <input type="text" className="form-input" value={clientNom||t('cashier','noName')} readOnly style={{opacity:0.7}}/>
             </div>
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:14}}>
               {payModes.map(m=>(
@@ -743,8 +890,8 @@ export default function CaissePage() {
               </div>
             )}
             <div className="form-group">
-              <label className="form-label">Nota (opcional)</label>
-              <input type="text" className="form-input" value={pagoNote} onChange={e=>setPagoNote(e.target.value)} placeholder="Ex: Buscar na sexta-feira..."/>
+              <label className="form-label">{t('cashier','noteOptional')}</label>
+              <input type="text" className="form-input" value={pagoNote} onChange={e=>setPagoNote(e.target.value)} placeholder={t('cashier','notePlaceholder2')}/>
             </div>
             <div style={{display:'flex',gap:10,marginTop:4}}>
               <button onClick={()=>setShowPagoModal(false)} className="btn btn-secondary" style={{flex:1,justifyContent:'center'}}>Cancelar</button>
@@ -761,7 +908,7 @@ export default function CaissePage() {
         <div className="modal-overlay">
           <div className="modal" style={{maxWidth:420}}>
             <div className="modal-header">
-              <h2 className="modal-title">💳 Pagar Reserva #{showPayerModal.id}</h2>
+              <h2 className="modal-title">{t('cashier','payReserveTitle')} #{showPayerModal?.id}</h2>
               <button onClick={()=>setShowPayerModal(null)} className="btn btn-icon btn-secondary"><X size={16}/></button>
             </div>
             <div style={{marginBottom:14,padding:'12px 16px',background:'var(--bg-hover)',borderRadius:10,display:'flex',justifyContent:'space-between'}}>
@@ -805,9 +952,9 @@ export default function CaissePage() {
         <div className="modal-overlay">
           <div className="modal" style={{textAlign:'center',maxWidth:380}}>
             <div style={{fontSize:56,marginBottom:12}}>✅</div>
-            <h2 style={{fontSize:20,fontWeight:700,marginBottom:8,color:'var(--success)'}}>Venda realizada!</h2>
+            <h2 style={{fontSize:20,fontWeight:700,marginBottom:8,color:'var(--success)'}}>{t('cashier','saleDone')}</h2>
             {showSuccess.numeroFacture&&<p style={{color:'var(--accent)',fontSize:13,marginBottom:4,fontFamily:'monospace',fontWeight:700}}>{showSuccess.numeroFacture}</p>}
-            <p style={{color:'var(--text-muted)',marginBottom:4}}>Venda #{showSuccess.venteId}</p>
+            <p style={{color:'var(--text-muted)',marginBottom:4}}>{t('cashier','venda')} #{showSuccess.venteId}</p>
             {showSuccess.clientNom&&<p style={{color:'var(--accent)',fontSize:13,marginBottom:4}}>👤 {showSuccess.clientNom}</p>}
             <div style={{fontSize:28,fontWeight:800,color:'var(--accent)',fontFamily:'monospace',marginBottom:8}}>{showSuccess.total.toLocaleString('fr-FR')} {currency}</div>
             <div style={{background:'var(--bg-hover)',borderRadius:10,padding:'10px 16px',marginBottom:12,fontSize:13}}>
@@ -817,12 +964,16 @@ export default function CaissePage() {
               {showSuccess.change>0&&<div style={{color:'var(--success)',fontWeight:600,marginTop:4}}>Troco: {showSuccess.change.toLocaleString('fr-FR')} {currency}</div>}
             </div>
             <div style={{display:'flex',gap:10}}>
-              <button onClick={()=>handlePrint(showSuccess)} className="btn btn-secondary" style={{flex:1,justifyContent:'center'}}><Printer size={16}/> Imprimir</button>
+              <button onClick={async()=>{await handlePrint(showSuccess);setShowSuccess(null);}} className="btn btn-secondary" style={{flex:1,justifyContent:'center'}}><Printer size={16}/> Imprimir</button>
               <button onClick={()=>setShowSuccess(null)} className="btn btn-primary" style={{flex:1,justifyContent:'center'}}>Nova venda</button>
             </div>
           </div>
         </div>
       )}
+
+      {/* ✅ MODALS REACT PURS — zéro dialog natif Electron, zéro focus trap */}
+      {AlertModalComponent}
+      {ConfirmModalComponent}
     </div>
   );
 }

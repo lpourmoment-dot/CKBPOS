@@ -183,7 +183,6 @@ db.exec(`
   "ALTER TABLE users ADD COLUMN pin TEXT",
   // ── v1.1.2 ──────────────────────────────────────────────
   "ALTER TABLE ventes ADD COLUMN machine_id TEXT DEFAULT 'LOCAL'",
-  "ALTER TABLE reservations ADD COLUMN machine_id TEXT DEFAULT 'LOCAL'",
 ].forEach(sql => { try { db.exec(sql); } catch(e){} });
 
 // ── Tables v1.0.9 (CREATE IF NOT EXISTS = safe sur toute DB) ──
@@ -224,6 +223,11 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now','utc'))
   );
 `);
+
+// Migrations post-CREATE (doivent venir apres la creation des tables)
+[
+  "ALTER TABLE reservations ADD COLUMN machine_id TEXT DEFAULT 'LOCAL'",
+].forEach(sql => { try { db.exec(sql); } catch(e){} });
 
 // Admin par defaut
 const adminExists = db.prepare("SELECT id FROM users WHERE role='admin'").get();
