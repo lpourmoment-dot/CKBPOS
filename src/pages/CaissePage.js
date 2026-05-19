@@ -22,6 +22,7 @@ export default function CaissePage() {
   const [cart, setCart]         = useState([]);
   const [loading, setLoading]   = useState(false);
   const isProcessing = useRef(false);
+  const isPrinting    = useRef(false); // ✅ Anti double-impression
 
   // Anti double-clic : wrapper qui bloque re-clic pendant 800ms
   const withDebounce = useCallback((fn) => async (...args) => {
@@ -336,7 +337,17 @@ export default function CaissePage() {
     currency, seller: user.nom, date: new Date().toLocaleString('fr-FR'),
   });
 
-  const handlePrint = async (sd) => { await window.electron.printTicket(buildPrintData(sd)); };
+  const handlePrint = async (sd) => {
+    // ✅ Anti double-impression — bloque tout appel concurrent
+    if (isPrinting.current) return;
+    isPrinting.current = true;
+    try {
+      await window.electron.printTicket(buildPrintData(sd));
+    } finally {
+      // Délai 2s avant de permettre une nouvelle impression
+      setTimeout(() => { isPrinting.current = false; }, 2000);
+    }
+  };
 
   const handleReserveA = async () => {
     if (cart.length===0) return;
@@ -964,7 +975,17 @@ export default function CaissePage() {
               {showSuccess.change>0&&<div style={{color:'var(--success)',fontWeight:600,marginTop:4}}>Troco: {showSuccess.change.toLocaleString('fr-FR')} {currency}</div>}
             </div>
             <div style={{display:'flex',gap:10}}>
-              <button onClick={async()=>{await handlePrint(showSuccess);setShowSuccess(null);}} className="btn btn-secondary" style={{flex:1,justifyContent:'center'}}><Printer size={16}/> Imprimir</button>
+              <button
+                onClick={async () => {
+                  if (isPrinting.current) return;   // ✅ bloque tout clic supplémentaire
+                  isPrinting.current = true;
+                  try { await handlePrint(showSuccess); }
+                  finally { isPrinting.current = false; }
+                  setShowSuccess(null);
+                }}
+                className="btn btn-secondary"
+                style={{flex:1,justifyContent:'center'}}
+              ><Printer size={16}/> Imprimir</button>
               <button onClick={()=>setShowSuccess(null)} className="btn btn-primary" style={{flex:1,justifyContent:'center'}}>Nova venda</button>
             </div>
           </div>
