@@ -3,7 +3,7 @@ import { useTheme } from '../App';
 import { useLang } from '../utils/useLang';
 import { useAuth } from '../App';
 import { Settings, Cloud, CloudOff, Save, ExternalLink, KeyRound, Download, Trash2, AlertTriangle, MapPin, Phone, Hash, Printer, Plus, Minus } from 'lucide-react';
-import { useAlert } from '../components/AlertModal'; // ✅ AJOUT
+import { useAlert, useConfirm } from '../components/AlertModal'; // ✅ AJOUT
 
 export default function SettingsPage() {
   const { theme, toggleTheme } = useTheme();
@@ -12,6 +12,7 @@ export default function SettingsPage() {
 
   // ✅ Hook modal React (remplace alert() natif)
   const { showAlert, AlertModalComponent } = useAlert();
+  const { showConfirm, ConfirmModalComponent } = useConfirm();
 
   // Loja
   const [shopName, setShopName]       = useState('');
@@ -51,7 +52,13 @@ export default function SettingsPage() {
   const [copiesShift, setCopiesShift]         = useState(1);
   const [printerSaved, setPrinterSaved]       = useState(false);
 
-  useEffect(() => { loadSettings(); checkDrive(); loadSecurity(); loadPrinters(); loadMachineId(); }, []);
+  useEffect(() => {
+    loadSettings(); checkDrive(); loadSecurity(); loadPrinters(); loadMachineId();
+    // ✅ Charger la version depuis main.js (package.json)
+    window.electron?.appVersion?.().then(v => {
+      if (v) window.__CKBPOS_VERSION__ = v;
+    }).catch(() => {});
+  }, []);
 
   const loadPrinters = async () => {
     const res = await window.electron.getPrinters();
@@ -117,7 +124,7 @@ export default function SettingsPage() {
   };
 
   const saveSecurity = async () => {
-    if (!question || !resposta) { setSecMsg('❌ Preencha a pergunta e a resposta'); return; }
+    if (!question || !resposta) { setSecMsg('? Preencha a pergunta e a resposta'); return; }
     await window.electron.dbQuery(
       "UPDATE users SET question_secreta=?, resposta_secreta=? WHERE id=?",
       [question, resposta.toLowerCase().trim(), user.id]
@@ -151,10 +158,10 @@ export default function SettingsPage() {
       if (res.success) {
         setMigrateMsg('✅ ' + res.message);
       } else {
-        setMigrateMsg('❌ Erro: ' + res.error);
+        setMigrateMsg('? Erro: ' + res.error);
       }
     } catch(e) {
-      setMigrateMsg('❌ Erro: ' + e.message);
+      setMigrateMsg('? Erro: ' + e.message);
     } finally {
       setMigrating(false);
     }
@@ -163,8 +170,25 @@ export default function SettingsPage() {
   const handleBackupLocal = async () => {
     const res = await window.electron.backupLocal();
     if (res.success) setMsg(`✅ Backup salvo em: ${res.path}`);
-    else setMsg('❌ Erro no backup: ' + res.error);
+    else setMsg('? Erro no backup: ' + res.error);
     setTimeout(() => setMsg(''), 5000);
+  };
+
+  const handleRestoreBackup = async () => {
+    const ok = await showConfirm(
+      '⚠️ Restaurar Backup',
+      'Isso substituirá TODOS os dados atuais pelo backup selecionado.\nUm backup de segurança será criado automaticamente antes.\n\nDeseja continuar?',
+      'warning'
+    );
+    if (!ok) return;
+    const res = await window.electron.backupRestore();
+    if (res.canceled) return;
+    if (!res.success) {
+      showAlert('Erro ao restaurar', res.error, 'error');
+      return;
+    }
+    // success + restarting: app vai reiniciar automaticamente
+    showAlert('✅ Backup restaurado!', 'O aplicativo será reiniciado agora...', 'success');
   };
 
   const handleBackupDrive = async () => {
@@ -175,7 +199,7 @@ export default function SettingsPage() {
       const syncRes = await window.electron.storeGet('last_sync');
       if (syncRes) setLastSync(syncRes);
     } else {
-      setMsg('❌ Erro: ' + res.error);
+      setMsg('? Erro: ' + res.error);
     }
     setTimeout(() => setMsg(''), 4000);
     setConnecting(false);
@@ -196,7 +220,7 @@ export default function SettingsPage() {
     if (res.success) {
       setAuthUrl(res.url);
     } else {
-      setMsg('❌ Erreur: ' + res.error);
+      setMsg('? Erreur: ' + res.error);
       setTimeout(() => setMsg(''), 4000);
     }
     setConnecting(false);
@@ -211,7 +235,7 @@ export default function SettingsPage() {
       setAuthUrl(''); setAuthCode('');
       setMsg('✅ Google Drive conectado!');
     } else {
-      setMsg('❌ Código inválido: ' + res.error);
+      setMsg('? Código inválido: ' + res.error);
     }
     setTimeout(() => setMsg(''), 4000);
     setConnecting(false);
@@ -362,10 +386,13 @@ export default function SettingsPage() {
             <Download size={16}/> 💾 Salvar backup local (escolher pasta)
           </button>
           <button onClick={handleBackupDrive} disabled={connecting||!driveConnected} className="btn btn-secondary" style={{ justifyContent:'flex-start', gap:10 }}>
-            <Cloud size={16}/> ☁️ Enviar backup para Google Drive
+            <Cloud size={16}/> ?? Enviar backup para Google Drive
+          </button>
+          <button onClick={handleRestoreBackup} className="btn btn-secondary" style={{ justifyContent:'flex-start', gap:10, borderColor:'var(--warning)', color:'var(--warning)' }}>
+            <Download size={16}/> 📥 Restaurar backup (.db)
           </button>
           {!driveConnected && <p style={{ fontSize:12, color:'var(--text-muted)' }}>⚠️ Conecte o Google Drive primeiro</p>}
-          {lastSync && driveConnected && <p style={{ fontSize:11, color:'var(--text-muted)' }}>🕐 Último sync: {new Date(lastSync).toLocaleString('fr-FR')}</p>}
+          {lastSync && driveConnected && <p style={{ fontSize:11, color:'var(--text-muted)' }}>? Último sync: {new Date(lastSync).toLocaleString('fr-FR')}</p>}
         </div>
       </div>
 
@@ -431,7 +458,7 @@ export default function SettingsPage() {
             <option value="">— Selecionar impressora —</option>
             {printers.map(p => (
               <option key={p.name} value={p.name}>
-                {p.isDefault ? '⭐ ' : '🖨️ '}{p.name}
+                {p.isDefault ? '🖥️ ' : '🖨️ '}{p.name}
               </option>
             ))}
           </select>
@@ -511,8 +538,8 @@ export default function SettingsPage() {
       </div>
 
       <div style={{ marginTop:16, padding:14, borderRadius:10, background:'var(--bg-card)', border:'1px solid var(--border)', fontSize:12, color:'var(--text-muted)' }}>
-        <div style={{ fontWeight:600, marginBottom:8, color:'var(--text-secondary)', fontSize:13 }}>ℹ️ Informações do sistema</div>
-        <div style={{ marginBottom:4 }}>Versão: <strong style={{color:'var(--accent)'}}>CKBPOS v1.1.5</strong></div>
+        <div style={{ fontWeight:600, marginBottom:8, color:'var(--text-secondary)', fontSize:13 }}>ℹ🏪 Informações do sistema</div>
+        <div style={{ marginBottom:4 }}>Versão: <strong style={{color:'var(--accent)'}}>CKBPOS v{window.__CKBPOS_VERSION__ || '1.1.6'}</strong></div>
         <div style={{ marginBottom:4 }}>Banco de dados: SQLite (local)</div>
         <div style={{ marginBottom:10 }}>Língua: {lang} · Moeda: {currency}</div>
         {machineInfo && (
@@ -536,14 +563,15 @@ export default function SettingsPage() {
               </button>
             </div>
             <div style={{ marginTop:6, fontSize:11, color:'var(--text-muted)' }}>
-              ℹ️ Este ID é único e permanente. Será usado para sincronização LAN na v2.0.0.
+              ℹ? Este ID é único e permanente. Será usado para sincronização LAN na v2.0.0.
             </div>
           </div>
         )}
       </div>
 
-      {/* ✅ Modal React pur — zéro focus trap */}
+      {/* ✅ Modals React purs — zéro focus trap */}
       {AlertModalComponent}
+      {ConfirmModalComponent}
     </div>
   );
 }

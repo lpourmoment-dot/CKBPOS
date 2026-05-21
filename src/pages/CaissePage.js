@@ -23,6 +23,7 @@ export default function CaissePage() {
   const [loading, setLoading]   = useState(false);
   const isProcessing = useRef(false);
   const isPrinting    = useRef(false); // ✅ Anti double-impression
+  const [printingBtn, setPrintingBtn] = useState(false); // ✅ Visuel Imprimindo...
 
   // Anti double-clic : wrapper qui bloque re-clic pendant 800ms
   const withDebounce = useCallback((fn) => async (...args) => {
@@ -338,9 +339,7 @@ export default function CaissePage() {
   });
 
   const handlePrint = async (sd) => {
-    // ✅ Anti double-impression — bloque tout appel concurrent
-    if (isPrinting.current) return;
-    isPrinting.current = true;
+    // ✅ isPrinting géré par le bouton appelant — pas de garde ici
     try {
       await window.electron.printTicket(buildPrintData(sd));
     } finally {
@@ -363,8 +362,11 @@ export default function CaissePage() {
       if (res.success) {
         setShowReserveModal(false); setReserveNote(''); setReserveExpiry('24');
         setCart([]); setClientNom(''); setClientNif('');
-        loadReservations(); loadProducts();
-        // ✅ Remplacé alert() natif → showAlert React
+        // ✅ Délai pour laisser React finir le re-render avant de recharger les réservations
+        setTimeout(async () => {
+          await loadReservations();
+          await loadProducts();
+        }, 100);
         showAlert('✅ Reserva criada!', `ID: #${res.id}`, 'success');
       } else {
         showAlert('Erro', res.error, 'error');
@@ -394,8 +396,11 @@ export default function CaissePage() {
       if (res.success) {
         setShowPagoModal(false); setPagoNote(''); setPagoPayMode('dinheiro'); setPagoMontantD(''); setPagoMontantE('');
         setCart([]); setClientNom(''); setClientNif('');
-        loadReservations(); loadProducts();
-        // ✅ Remplacé alert() natif → showAlert React
+        // ✅ Délai pour laisser React finir le re-render avant de recharger les réservations
+        setTimeout(async () => {
+          await loadReservations();
+          await loadProducts();
+        }, 100);
         showAlert('✅ Pagamento registado!', `Produtos aguardam retirada.\nID: #${res.id}`, 'success');
       } else {
         showAlert('Erro', res.error, 'error');
@@ -977,15 +982,28 @@ export default function CaissePage() {
             <div style={{display:'flex',gap:10}}>
               <button
                 onClick={async () => {
-                  if (isPrinting.current) return;   // ✅ bloque tout clic supplémentaire
+                  if (isPrinting.current) return;
                   isPrinting.current = true;
-                  try { await handlePrint(showSuccess); }
-                  finally { isPrinting.current = false; }
-                  setShowSuccess(null);
+                  setPrintingBtn(true);
+                  try {
+                    await handlePrint(showSuccess);
+                    setShowSuccess(null); // ✅ Ferme modal seulement si impression OK
+                  } catch(e) {
+                    console.error('[Imprimir]', e);
+                  } finally {
+                    isPrinting.current = false;
+                    setPrintingBtn(false);
+                  }
                 }}
+                disabled={printingBtn}
                 className="btn btn-secondary"
-                style={{flex:1,justifyContent:'center'}}
-              ><Printer size={16}/> Imprimir</button>
+                style={{flex:1,justifyContent:'center',opacity:printingBtn?0.6:1,cursor:printingBtn?'not-allowed':'pointer'}}
+              >
+                {printingBtn
+                  ? <><span style={{fontSize:13}}>🚫</span> Imprimindo...</>
+                  : <><Printer size={16}/> Imprimir</>
+                }
+              </button>
               <button onClick={()=>setShowSuccess(null)} className="btn btn-primary" style={{flex:1,justifyContent:'center'}}>Nova venda</button>
             </div>
           </div>
