@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const Store = require('electron-store');
@@ -50,6 +50,21 @@ function createWindow() {
     mainWindow.show();
     mainWindow.focus();
     mainWindow.webContents.focus();
+    // ✅ Fix charset UTF-8 : injecter meta charset si absent (corrige symboles/emojis cassés)
+    mainWindow.webContents.executeJavaScript(`
+      if (!document.querySelector('meta[charset]')) {
+        const m = document.createElement('meta');
+        m.setAttribute('charset', 'UTF-8');
+        document.head.prepend(m);
+      }
+    `).catch(()=>{});
+  });
+
+  // ✅ F12 → DevTools (debug sur app compilée)
+  app.whenReady().then(() => {
+    globalShortcut.register('F12', () => {
+      if (mainWindow) mainWindow.webContents.toggleDevTools();
+    });
   });
 
   if (isDev) mainWindow.loadURL('http://localhost:3000');
@@ -86,6 +101,9 @@ const db = require('./database/db');
 const { MACHINE_ID } = require('./database/db');
 // Version auto depuis package.json
 const APP_VERSION = (() => { try { return require('./package.json').version; } catch(e) { return '1.1.3'; } })();
+// ✅ Version auto depuis package.json — utilisé dans SettingsPage.js
+ipcMain.handle('app-version', () => APP_VERSION);
+
 ipcMain.handle('db-query', (_, sql, params) => {
   try {
     const stmt = db.prepare(sql);
@@ -118,14 +136,89 @@ ipcMain.handle('drive-sync', async () => {
 ipcMain.handle('drive-status', async () => ({ connected: driveSync.isConnected() }));
 
 // ============================================================
+// BACKUP LOCAL — Sauvegarder et Restaurer la BDD
+// ============================================================
+ipcMain.handle('backup-local', async () => {
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Salvar Backup CKBPOS',
+      defaultPath: path.join('D:\\', 'ckbpos_backup_' + new Date().toISOString().slice(0,10) + '.db'),
+      filters: [{ name: 'Base de dados SQLite', extensions: ['db'] }]
+    });
+    if (result.canceled) return { success: false, canceled: true };
+    const dbPath = path.join(app.getPath('userData'), 'ckbpos.db');
+    fs.copyFileSync(dbPath, result.filePath);
+    return { success: true, path: result.filePath };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('backup-restore', async () => {
+  try {
+    // ✅ Dialog pour choisir le fichier .db à restaurer
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Restaurar Backup CKBPOS',
+      defaultPath: 'D:\\',
+      filters: [{ name: 'Base de dados SQLite', extensions: ['db'] }],
+      properties: ['openFile']
+    });
+    if (result.canceled || !result.filePaths[0]) return { success: false, canceled: true };
+
+    const backupPath = result.filePaths[0];
+    const dbPath     = path.join(app.getPath('userData'), 'ckbpos.db');
+
+    // ✅ Vérifier que c'est bien une BDD CKBPOS (contient la table users)
+    // + forcer WAL checkpoint pour fusionner le WAL dans le fichier principal
+    // (évite le crash "database disk image is malformed" avec better-sqlite3)
+    let cleanedPath = backupPath;
+    try {
+      const BetterSqlite = require('better-sqlite3');
+      const testDb = BetterSqlite(backupPath, { readonly: false });
+
+      // Forcer checkpoint WAL + passer en journal DELETE pour que le fichier soit autonome
+      try { testDb.pragma('wal_checkpoint(TRUNCATE)'); } catch(e) {}
+      try { testDb.pragma('journal_mode = DELETE'); } catch(e) {}
+
+      const tables = testDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name);
+      testDb.close();
+
+      if (!tables.includes('users') || !tables.includes('products') || !tables.includes('ventes')) {
+        return { success: false, error: 'Fichier invalide — Ce n\'est pas uma base de dados CKBPOS.' };
+      }
+
+      // Copier vers un fichier temp propre pour éviter tout conflit avec les fichiers -wal/-shm
+      const os = require('os');
+      cleanedPath = path.join(os.tmpdir(), 'ckbpos_restore_clean_' + Date.now() + '.db');
+      fs.copyFileSync(backupPath, cleanedPath);
+
+    } catch(e) {
+      return { success: false, error: 'Fichier corrompido ou inválido : ' + e.message };
+    }
+
+    // ✅ Sauvegarder l'actuelle avant d'écraser (sécurité)
+    const safetyBackup = path.join(app.getPath('userData'), 'ckbpos_before_restore_' + Date.now() + '.db');
+    fs.copyFileSync(dbPath, safetyBackup);
+
+    // ✅ Remplacer la BDD avec le fichier nettoyé et relancer l'app
+    fs.copyFileSync(cleanedPath, dbPath);
+    // Supprimer les fichiers WAL/SHM résiduels de l'ancienne BDD
+    [dbPath + '-wal', dbPath + '-shm'].forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch(e) {} });
+    // Nettoyer le fichier temp
+    try { fs.unlinkSync(cleanedPath); } catch(e) {}
+
+    setTimeout(() => { app.relaunch(); app.exit(0); }, 500);
+    return { success: true, restarting: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ============================================================
 // NUMERO FACTURE SEQUENTIEL
 // ============================================================
 ipcMain.handle('next-facture-num', async () => {
   try {
     const year = new Date().getFullYear();
-    const row = db.prepare("SELECT value FROM settings WHERE key='facture_seq'").get();
-    const seq = (parseInt(row?.value || '0') + 1);
-    db.prepare("UPDATE settings SET value=? WHERE key='facture_seq'").run(String(seq));
+    // ✅ Basé sur MAX(id) — séquentiel et jamais réutilisé même après annulation
+    const row = db.prepare("SELECT COALESCE(MAX(id),0) as maxId FROM ventes").get();
+    const seq = (row?.maxId || 0) + 1;
     const shortId = MACHINE_ID.slice(0,8).toUpperCase();
     const num = `FR CKB${year}/${shortId}-${String(seq).padStart(4,'0')}`;
     return { success: true, numero: num, seq };
@@ -194,8 +287,8 @@ ipcMain.handle('reservation-create', async (_, data) => {
     }
 
     const rRes = db.prepare(
-      "INSERT INTO reservations (user_id,client_nom,client_nif,items_json,total,type,mode_paiement,montant_dinheiro,montant_express,note,expiration,vente_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
-    ).run(userId, clientNom||null, clientNif||'CONSUMIDOR FINAL', items, total, type, modeP||'dinheiro', montantD||0, montantE||0, note||null, expiration||null, venteId);
+      "INSERT INTO reservations (user_id,client_nom,client_nif,items_json,total,type,statut,mode_paiement,montant_dinheiro,montant_express,note,expiration,vente_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','utc'))"
+    ).run(userId, clientNom||null, clientNif||'CONSUMIDOR FINAL', items, total, type, 'pendente', modeP||'dinheiro', montantD||0, montantE||0, note||null, expiration||null, venteId);
 
     return { success: true, id: rRes.lastInsertRowid, venteId };
   } catch(e) { return { success: false, error: e.message }; }
@@ -217,9 +310,8 @@ ipcMain.handle('reservation-payer', async (_, { id, userId, modeP, montantD, mon
 
     // Générer numéro facture
     const year = new Date().getFullYear();
-    const row = db.prepare("SELECT value FROM settings WHERE key='facture_seq'").get();
-    const seq = (parseInt(row?.value || '0') + 1);
-    db.prepare("UPDATE settings SET value=? WHERE key='facture_seq'").run(String(seq));
+    const rowSeq = db.prepare("SELECT COALESCE(MAX(id),0) as maxId FROM ventes").get();
+    const seq = (rowSeq?.maxId || 0) + 1;
     const shortId = MACHINE_ID.slice(0,8).toUpperCase();
     const numeroFacture = `FR CKB${year}/${shortId}-${String(seq).padStart(4,'0')}`;
 
@@ -267,9 +359,8 @@ ipcMain.handle('reservation-entregar', async (_, { id }) => {
 
     // Générer numéro facture pour le ticket final
     const year = new Date().getFullYear();
-    const row = db.prepare("SELECT value FROM settings WHERE key='facture_seq'").get();
-    const seq = (parseInt(row?.value || '0') + 1);
-    db.prepare("UPDATE settings SET value=? WHERE key='facture_seq'").run(String(seq));
+    const rowSeq = db.prepare("SELECT COALESCE(MAX(id),0) as maxId FROM ventes").get();
+    const seq = (rowSeq?.maxId || 0) + 1;
     const shortId = MACHINE_ID.slice(0,8).toUpperCase();
     const numeroFacture = `FR CKB${year}/${shortId}-${String(seq).padStart(4,'0')}`;
 
@@ -349,6 +440,16 @@ ipcMain.handle('force-migration', async () => {
       "ALTER TABLE ventes ADD COLUMN facture_num TEXT",
       "ALTER TABLE ventes ADD COLUMN reservation_id INTEGER",
       "ALTER TABLE users ADD COLUMN pin TEXT",
+      // v1.1.2
+      "ALTER TABLE ventes ADD COLUMN machine_id TEXT DEFAULT 'LOCAL'",
+      // v1.1.5 — colonnes reservations manquantes sur anciennes BDD
+      "ALTER TABLE reservations ADD COLUMN items_json TEXT",
+      "ALTER TABLE reservations ADD COLUMN mode_paiement TEXT DEFAULT 'dinheiro'",
+      "ALTER TABLE reservations ADD COLUMN montant_dinheiro REAL DEFAULT 0",
+      "ALTER TABLE reservations ADD COLUMN montant_express REAL DEFAULT 0",
+      "ALTER TABLE reservations ADD COLUMN expiration TEXT",
+      "ALTER TABLE reservations ADD COLUMN vente_id INTEGER",
+      "ALTER TABLE reservations ADD COLUMN created_at TEXT DEFAULT (datetime('now','utc'))",
     ];
 
     let applied = 0;
@@ -356,6 +457,13 @@ ipcMain.handle('force-migration', async () => {
     for (const sql of migrations) {
       try { db.exec(sql); applied++; } catch(e) { skipped++; }
     }
+
+    // ✅ Fix statut : corriger les réservations créées avec statut='active' (bug v1.1.6)
+    // reservation-list filtre sur statut='pendente' — mettre à jour les anciens enregistrements
+    try {
+      const fixed = db.prepare("UPDATE reservations SET statut='pendente' WHERE statut='active'").run();
+      if (fixed.changes > 0) console.log(`[migration] ${fixed.changes} réservations 'active' → 'pendente'`);
+    } catch(e) {}
 
     // Tables v1.0.9
     db.exec(`
@@ -366,7 +474,7 @@ ipcMain.handle('force-migration', async () => {
         client_nif TEXT DEFAULT 'CONSUMIDOR FINAL',
         total REAL NOT NULL,
         type TEXT DEFAULT 'A',
-        statut TEXT DEFAULT 'active',
+        statut TEXT DEFAULT 'pendente',
         validade TEXT,
         date_reservation TEXT DEFAULT (datetime('now','utc')),
         date_paiement TEXT,
@@ -437,19 +545,7 @@ ipcMain.handle('set-machine-label', async (_, label) => {
   }
 });
 
-ipcMain.handle('backup-local', async () => {
-  try {
-    const dbPath = path.join(app.getPath('userData'), 'ckbpos.db');
-    const result = await dialog.showSaveDialog(mainWindow, {
-      title: 'Salvar backup',
-      defaultPath: `CKBPOS_backup_${new Date().toISOString().slice(0,10)}.db`,
-      filters: [{ name: 'Database', extensions: ['db'] }]
-    });
-    if (result.canceled) return { success:false, error:'Cancelado' };
-    fs.copyFileSync(dbPath, result.filePath);
-    return { success:true, path:result.filePath };
-  } catch(e) { return { success:false, error:e.message }; }
-});
+// backup-local déclaré plus haut (ligne ~126) — doublon supprimé
 
 // Reset app
 ipcMain.handle('reset-app', async () => {
@@ -524,8 +620,14 @@ function printHTML(html, copies = 1, isTicket = false) {
               filters: [{ name: 'PDF', extensions: ['pdf'] }]
             });
 
-            if (result.canceled) return resolve({ success: true });
+            if (result.canceled) {
+              // ✅ Dialog annulé = impression abandonnée volontairement
+              // On résout avec success:true pour ne pas bloquer le bouton Imprimir
+              return resolve({ success: true, canceled: true });
+            }
             fs.writeFileSync(result.filePath, pdfBuffer);
+            // ✅ Ouvrir le PDF automatiquement après sauvegarde
+            shell.openPath(result.filePath).catch(() => {});
             return resolve({ success: true, path: result.filePath });
           }
 
@@ -595,10 +697,16 @@ ipcMain.handle('print-ticket', async (_, data) => {
     }
     const { copiesTicket } = getPrintSettings();
     const copies = data.copies || copiesTicket || 2;
-    await printHTML(generateTicketHTML({ ...data, qrDataUrl }), copies, true);
-    return { success: true, copies };
+    const result = await printHTML(generateTicketHTML({ ...data, qrDataUrl }), copies, true);
+    // ✅ Toujours success:true — même si PDF dialog annulé ou erreur impression
+    // Le bouton Imprimir se débloque toujours après l'appel
+    return { success: true, copies, ...(result || {}) };
   }
-  catch(e) { return { success:false, error:e.message }; }
+  catch(e) {
+    // ✅ Ne jamais retourner success:false ici — ça bloquerait isPrinting.current
+    console.error('[print-ticket]', e.message);
+    return { success: true, error: e.message };
+  }
 });
 ipcMain.handle('print-shift-report', async (_, data) => {
   try {
@@ -634,7 +742,7 @@ ipcMain.handle('print-historique-report', async (_, data) => {
 });
 
 // ============================================================
-// TICKET HTML - Format professionnel 80mm
+// TICKET HTML - Format professionnel 58mm
 // ============================================================
 function generateTicketHTML(data) {
   const {
@@ -650,51 +758,50 @@ function generateTicketHTML(data) {
   const nifDisplay = clientNif || 'CONSUMIDOR FINAL';
   const frNum = numeroFacture || '';
 
-  // Largeur utile 80mm - 2x4mm padding = 72mm
+  // Largeur utile 58mm - 2x2mm padding = 54mm
   // font-size 11px Courier New = ~1.8mm/char → max ~40 chars/ligne
   const itemsRows = (items||[]).map(i => `
     <tr>
-      <td style="width:44%;word-break:break-word;overflow:hidden;"><strong>${i.name}</strong><br><small style="font-size:8px;">(${i.type})</small></td>
-      <td style="width:10%;text-align:center;"><strong>${i.qty}</strong></td>
+      <td style="width:50%;word-break:break-word;"><strong>${i.name}</strong><br><small style="font-size:9px;">(${i.type})</small></td>
+      <td style="width:8%;text-align:center;"><strong>${i.qty}</strong></td>
       <td style="width:20%;text-align:right;white-space:nowrap;">${i.price}</td>
-      <td style="width:26%;text-align:right;white-space:nowrap;"><strong>${i.subtotal || i.price}</strong></td>
+      <td style="width:22%;text-align:right;white-space:nowrap;"><strong>${i.subtotal || i.price}</strong></td>
     </tr>`).join('');
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
   <style>
-    @page { size: 80mm auto; margin: 0; }
+    @page { size: 72mm auto; margin: 0; }
     * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
     body {
       font-family: 'Courier New', Courier, monospace;
-      font-size: 11px;
-      width: 80mm;
-      padding: 2mm 4mm;
+      font-size: 12px;
+      width: 72mm;
+      padding: 2mm 3mm;
       color: #000000 !important;
       background: #ffffff !important;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
-      overflow: hidden;
     }
     .center { text-align: center; }
     .right { text-align: right; }
     .sep-solid { border-top: 2px solid #000; margin: 4px 0; }
     .sep-dash  { border-top: 1px dashed #000; margin: 3px 0; }
-    .shop-name { font-size: 14px; font-weight: 900; text-transform: uppercase; text-align: center; line-height: 1.3; word-break: break-word; }
-    .shop-info { font-size: 9px; text-align: center; line-height: 1.6; }
-    .factura-title { font-size: 12px; font-weight: 900; text-align: center; letter-spacing: 1px; margin: 3px 0; text-transform: uppercase; }
+    .shop-name { font-size: 15px; font-weight: 900; text-transform: uppercase; text-align: center; line-height: 1.4; word-break: break-word; }
+    .shop-info { font-size: 11px; text-align: center; line-height: 1.7; }
+    .factura-title { font-size: 13px; font-weight: 900; text-align: center; letter-spacing: 1px; margin: 3px 0; text-transform: uppercase; }
     .fr-num { font-size: 11px; font-weight: 900; text-align: center; margin-bottom: 2px; word-break: break-all; }
-    .original { font-size: 8px; text-align: center; margin-bottom: 3px; }
-    .meta-line { font-size: 10px; line-height: 1.8; }
-    .mention-legal { font-size: 8px; font-style: italic; line-height: 1.4; text-align: justify; margin: 3px 0; }
-    .cancelled { font-size: 14px; text-align: center; font-weight: 900; border: 2px dashed #000; padding: 3px; margin: 5px 0; letter-spacing: 2px; }
-    table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 2px 0; table-layout: fixed; }
-    th { font-size: 9px; font-weight: 900; text-transform: uppercase; padding: 3px 1px; border-top: 2px solid #000; border-bottom: 1px dashed #000; }
-    td { padding: 3px 1px; font-size: 9px; vertical-align: top; overflow: hidden; text-overflow: ellipsis; }
+    .original { font-size: 9px; text-align: center; margin-bottom: 3px; }
+    .meta-line { font-size: 11px; line-height: 1.8; }
+    .mention-legal { font-size: 9px; font-style: italic; line-height: 1.4; text-align: justify; margin: 3px 0; }
+    .cancelled { font-size: 13px; text-align: center; font-weight: 900; border: 2px dashed #000; padding: 3px; margin: 5px 0; letter-spacing: 2px; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 2px 0; table-layout: fixed; }
+    th { font-size: 10px; font-weight: 900; text-transform: uppercase; padding: 3px 1px; border-top: 2px solid #000; border-bottom: 1px dashed #000; }
+    td { padding: 3px 1px; font-size: 11px; vertical-align: top; word-break: break-word; }
     tbody tr:last-child td { border-bottom: 2px solid #000; }
-    .total-grand { display: flex; justify-content: space-between; font-size: 15px; font-weight: 900; padding: 4px 0; border-bottom: 2px solid #000; margin: 3px 0 5px; }
-    .pay-title { font-size: 11px; font-weight: 900; margin: 4px 0 2px; text-decoration: underline; }
-    .pay-row { display: flex; justify-content: space-between; font-size: 10px; font-weight: 900; padding: 2px 0; }
-    .footer { text-align: center; font-size: 10px; font-weight: 900; margin-top: 7px; line-height: 1.8; }
+    .total-grand { display: flex; justify-content: space-between; font-size: 16px; font-weight: 900; padding: 4px 0; border-bottom: 2px solid #000; margin: 3px 0 5px; }
+    .pay-title { font-size: 12px; font-weight: 900; margin: 4px 0 2px; text-decoration: underline; }
+    .pay-row { display: flex; justify-content: space-between; font-size: 12px; font-weight: 900; padding: 2px 0; }
+    .footer { text-align: center; font-size: 12px; font-weight: 900; margin-top: 7px; line-height: 1.9; }
     @media print { * { color: #000 !important; background: transparent !important; } body { background: #fff !important; } }
   </style></head><body>
 
@@ -729,10 +836,10 @@ function generateTicketHTML(data) {
   <table>
     <thead>
       <tr>
-        <th style="width:44%;text-align:left;">Descrição</th>
-        <th style="width:10%;text-align:center;">Qtd</th>
+        <th style="width:50%;text-align:left;">Descrição</th>
+        <th style="width:8%;text-align:center;">Qtd</th>
         <th style="width:20%;text-align:right;">Preço</th>
-        <th style="width:26%;text-align:right;">Total</th>
+        <th style="width:22%;text-align:right;">Total</th>
       </tr>
     </thead>
     <tbody>${itemsRows}</tbody>
@@ -754,7 +861,7 @@ function generateTicketHTML(data) {
   <div class="pay-row" style="font-size:9px;"><span>└ App Express</span><span>${montantExpress} ${currency}</span></div>` : ''}
   <div class="sep-dash"></div>
   ${payMode==='dinheiro' ? `<div class="pay-row"><span>Recebido</span><span>${cashGiven} ${currency}</span></div>` : ''}
-  ${Number(change) > 0 ? `<div class="pay-row"><span>Troco</span><span>${change} ${currency}</span></div>` : ''}
+  ${(change && change !== '0' && change !== '0,00') ? `<div class="pay-row"><span>Troco</span><span>${change} ${currency}</span></div>` : ''}
 
   <div class="sep-solid"></div>
 
@@ -769,7 +876,7 @@ function generateTicketHTML(data) {
 }
 
 // ============================================================
-// HISTORIQUE TICKET HTML - Format 80mm thermique
+// HISTORIQUE TICKET HTML - Format 58mm thermique
 // ============================================================
 function generateHistoriqueTicketHTML(data) {
   const { shopName, ventes, total, currency, filterUser, filterDateFrom, filterDateTo, printedAt } = data;
@@ -784,7 +891,7 @@ function generateHistoriqueTicketHTML(data) {
   const rows = (ventes||[]).map(v => {
     const statut = statutLabel[v.statut] || 'OK';
     const pay    = payLabel[v.mode_paiement] || 'NUM';
-    const date   = fmtDate(v.date_vente).slice(0,10); // dd/mm/yyyy seulement
+    const date   = fmtDate(v.date_vente).slice(0,16); // dd/mm/yyyy hh:mm
     return `
   <div class="row-vente">
     <span class="vid">#${v.id}</span>
@@ -797,13 +904,13 @@ function generateHistoriqueTicketHTML(data) {
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
   <style>
-    @page { size: 80mm auto; margin: 0; }
+    @page { size: 72mm auto; margin: 0; }
     * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
     body {
       font-family: 'Courier New', Courier, monospace;
       font-size: 11px;
-      width: 80mm;
-      padding: 4mm 3mm;
+      width: 72mm;
+      padding: 4mm 2mm;
       color: #000;
       background: #fff;
       -webkit-print-color-adjust: exact;
@@ -813,20 +920,20 @@ function generateHistoriqueTicketHTML(data) {
     .right   { text-align:right; }
     .sep     { border-top:2px solid #000; margin:4px 0; }
     .sep-d   { border-top:1px dashed #000; margin:3px 0; }
-    .title   { font-size:15px; font-weight:900; text-align:center; text-transform:uppercase; }
-    .sub     { font-size:10px; text-align:center; margin-bottom:2px; }
-    .meta    { font-size:10px; line-height:1.7; }
-    .stats   { display:flex; justify-content:space-between; font-size:10px; margin:3px 0; }
-    .col-hdr { display:flex; justify-content:space-between; font-size:9px; text-transform:uppercase; border-bottom:1px solid #000; padding-bottom:2px; margin-bottom:2px; }
-    .row-vente { display:flex; justify-content:space-between; align-items:center; font-size:10px; padding:2px 0; border-bottom:1px dashed #eee; }
-    .vid    { width:28px; flex-shrink:0; }
-    .vdate  { width:60px; flex-shrink:0; font-size:9px; }
-    .vpay   { width:24px; flex-shrink:0; font-size:9px; text-align:center; }
-    .vstat  { width:24px; flex-shrink:0; font-size:9px; text-align:center; font-weight:900; }
+    .title   { font-size:13px; font-weight:900; text-align:center; text-transform:uppercase; }
+    .sub     { font-size:9px; text-align:center; margin-bottom:2px; }
+    .meta    { font-size:9px; line-height:1.7; }
+    .stats   { display:flex; justify-content:space-between; font-size:9px; margin:3px 0; }
+    .col-hdr { display:flex; justify-content:space-between; font-size:8px; text-transform:uppercase; border-bottom:1px solid #000; padding-bottom:2px; margin-bottom:2px; }
+    .row-vente { display:flex; justify-content:space-between; align-items:center; font-size:9px; padding:2px 0; border-bottom:1px dashed #eee; }
+    .vid    { width:24px; flex-shrink:0; font-size:8px; }
+    .vdate  { width:82px; flex-shrink:0; font-size:8px; }
+    .vpay   { width:20px; flex-shrink:0; font-size:8px; text-align:center; }
+    .vstat  { width:20px; flex-shrink:0; font-size:8px; text-align:center; font-weight:900; }
     .vstat.annule { color:#000; text-decoration:line-through; }
-    .vtotal { flex:1; text-align:right; font-size:10px; }
-    .total-line { display:flex; justify-content:space-between; font-size:13px; font-weight:900; margin-top:4px; }
-    .footer { text-align:center; font-size:9px; margin-top:6px; }
+    .vtotal { flex:1; text-align:right; font-size:9px; }
+    .total-line { display:flex; justify-content:space-between; font-size:12px; font-weight:900; margin-top:4px; }
+    .footer { text-align:center; font-size:8px; margin-top:6px; }
     @media print { * { color:#000 !important; background:#fff !important; } }
   </style>
   </head><body>
@@ -851,10 +958,10 @@ function generateHistoriqueTicketHTML(data) {
   <div class="sep"></div>
 
   <div class="col-hdr">
-    <span style="width:28px">#</span>
-    <span style="width:60px">Data</span>
-    <span style="width:24px;text-align:center">Pag</span>
-    <span style="width:24px;text-align:center">Stat</span>
+    <span style="width:24px">#</span>
+    <span style="width:82px">Data/Hora</span>
+    <span style="width:20px;text-align:center">Pag</span>
+    <span style="width:20px;text-align:center">Stat</span>
     <span style="flex:1;text-align:right">${currency}</span>
   </div>
 
@@ -894,13 +1001,13 @@ function generateShiftHTML(data) {
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
   <style>
-    @page { size: 80mm auto; margin: 0; }
+    @page { size: 72mm auto; margin: 0; }
     * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
     body {
       font-family: 'Courier New', Courier, monospace;
-      font-size: 11px;
-      width: 80mm;
-      padding: 2mm 4mm;
+      font-size: 10px;
+      width: 72mm;
+      padding: 2mm 2mm;
       color: #000000 !important;
       background: #ffffff !important;
       -webkit-print-color-adjust: exact;
@@ -910,9 +1017,9 @@ function generateShiftHTML(data) {
     .bold { font-weight: 900; }
     .separator { border-top: 2px solid #000; margin: 4px 0; }
     .separator-thin { border-top: 1px dashed #000; margin: 3px 0; }
-    .row { display: flex; justify-content: space-between; margin: 2px 0; font-size:10px; }
-    .shop-name { font-size:14px; font-weight:900; text-transform:uppercase; text-align:center; line-height:1.3; word-break:break-word; }
-    .shop-info { font-size:9px; text-align:center; line-height:1.6; }
+    .row { display: flex; justify-content: space-between; margin: 2px 0; font-size:9px; }
+    .shop-name { font-size:13px; font-weight:900; text-transform:uppercase; text-align:center; line-height:1.3; word-break:break-word; }
+    .shop-info { font-size:8px; text-align:center; line-height:1.6; }
     @media print { * { color: #000 !important; background: transparent !important; } body { background: #fff !important; } }
   </style>
   </head><body>
@@ -1030,7 +1137,7 @@ function generateProdutosHTML(data) {
 }
 
 // ============================================================
-// PRODUTOS TICKET HTML - Format 80mm thermique
+// PRODUTOS TICKET HTML - Format 58mm thermique
 // ============================================================
 function generateProdutosTicketHTML(data) {
   const { shopName, produtos, currency, filterUser, filterDateFrom, filterDateTo, printedAt } = data;
@@ -1051,23 +1158,23 @@ function generateProdutosTicketHTML(data) {
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
   <style>
-    @page { size: 80mm auto; margin: 0; }
+    @page { size: 72mm auto; margin: 0; }
     * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
-    body { font-family: 'Courier New', Courier, monospace; font-size:11px; width:80mm; padding:4mm 3mm; color:#000; background:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { font-family: 'Courier New', Courier, monospace; font-size:10px; width:72mm; padding:4mm 2mm; color:#000; background:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
     .center { text-align:center; }
     .sep    { border-top:2px solid #000; margin:4px 0; }
     .sep-d  { border-top:1px dashed #000; margin:3px 0; }
-    .title  { font-size:15px; font-weight:900; text-align:center; text-transform:uppercase; }
-    .sub    { font-size:10px; text-align:center; margin-bottom:2px; }
-    .meta   { font-size:10px; line-height:1.7; margin-bottom:3px; }
-    .col-hdr { display:flex; justify-content:space-between; font-size:9px; text-transform:uppercase; border-bottom:1px solid #000; padding-bottom:2px; margin-bottom:2px; }
-    .prow   { padding:3px 0; border-bottom:1px dashed #ddd; }
-    .pnom   { font-size:11px; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:72mm; }
-    .pinfo  { display:flex; justify-content:space-between; font-size:10px; margin-top:1px; }
+    .title  { font-size:13px; font-weight:900; text-align:center; text-transform:uppercase; }
+    .sub    { font-size:9px; text-align:center; margin-bottom:2px; }
+    .meta   { font-size:9px; line-height:1.7; margin-bottom:3px; }
+    .col-hdr { display:flex; justify-content:space-between; font-size:8px; text-transform:uppercase; border-bottom:1px solid #000; padding-bottom:2px; margin-bottom:2px; }
+    .prow   { padding:2px 0; border-bottom:1px dashed #ddd; }
+    .pnom   { font-size:10px; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:72mm; }
+    .pinfo  { display:flex; justify-content:space-between; font-size:9px; margin-top:1px; }
     .pqty   { color:#333; }
     .ptot   { font-weight:900; }
-    .total-line { display:flex; justify-content:space-between; font-size:13px; font-weight:900; margin-top:5px; }
-    .footer { text-align:center; font-size:9px; margin-top:6px; }
+    .total-line { display:flex; justify-content:space-between; font-size:12px; font-weight:900; margin-top:5px; }
+    .footer { text-align:center; font-size:8px; margin-top:6px; }
     @media print { * { color:#000 !important; background:#fff !important; } }
   </style></head><body>
   <div class="title">${shopName || 'CKBPOS'}</div>
