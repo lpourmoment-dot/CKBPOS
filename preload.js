@@ -25,8 +25,12 @@ contextBridge.exposeInMainWorld('electron', {
   forceMigration:   () => ipcRenderer.invoke('force-migration'),
   getMachineId:     () => ipcRenderer.invoke('get-machine-id'),
   setMachineLabel:  (label) => ipcRenderer.invoke('set-machine-label', label),
-  backupLocal: () => ipcRenderer.invoke('backup-local'),
-  resetApp:    () => ipcRenderer.invoke('reset-app'),
+  backupLocal:    () => ipcRenderer.invoke('backup-local'),
+  backupRestore:  () => ipcRenderer.invoke('backup-restore'),  // ✅ v1.1.6 — Restaurer backup
+  resetApp:       () => ipcRenderer.invoke('reset-app'),
+
+  // ── v1.1.6 ──────────────────────────────────
+  appVersion:     () => ipcRenderer.invoke('app-version'),     // ✅ Version depuis package.json
 
   // Impression
   printTicket:          (data) => ipcRenderer.invoke('print-ticket', data),

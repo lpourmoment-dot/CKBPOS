@@ -194,7 +194,7 @@ db.exec(`
     client_nif TEXT DEFAULT 'CONSUMIDOR FINAL',
     total REAL NOT NULL,
     type TEXT DEFAULT 'A',
-    statut TEXT DEFAULT 'active',
+    statut TEXT DEFAULT 'pendente',
     validade TEXT,
     date_reservation TEXT DEFAULT (datetime('now','utc')),
     date_paiement TEXT,
@@ -227,7 +227,22 @@ db.exec(`
 // Migrations post-CREATE (doivent venir apres la creation des tables)
 [
   "ALTER TABLE reservations ADD COLUMN machine_id TEXT DEFAULT 'LOCAL'",
+  // ── v1.1.5 — colonnes reservations manquantes sur anciennes BDD ──
+  "ALTER TABLE reservations ADD COLUMN items_json TEXT",
+  "ALTER TABLE reservations ADD COLUMN mode_paiement TEXT DEFAULT 'dinheiro'",
+  "ALTER TABLE reservations ADD COLUMN montant_dinheiro REAL DEFAULT 0",
+  "ALTER TABLE reservations ADD COLUMN montant_express REAL DEFAULT 0",
+  "ALTER TABLE reservations ADD COLUMN expiration TEXT",
+  "ALTER TABLE reservations ADD COLUMN vente_id INTEGER",
+  "ALTER TABLE reservations ADD COLUMN created_at TEXT DEFAULT (datetime('now','utc'))",
 ].forEach(sql => { try { db.exec(sql); } catch(e){} });
+
+// ✅ Fix v1.1.7 — corriger les réservations créées avec statut='active' (bug)
+// reservation-list filtre sur statut='pendente' → les anciennes réservations étaient invisibles
+try {
+  const fixed = db.prepare("UPDATE reservations SET statut='pendente' WHERE statut='active'").run();
+  if (fixed.changes > 0) console.log(`[CKBPOS] ${fixed.changes} réservations 'active' → 'pendente' corrigées`);
+} catch(e) {}
 
 // Admin par defaut
 const adminExists = db.prepare("SELECT id FROM users WHERE role='admin'").get();
