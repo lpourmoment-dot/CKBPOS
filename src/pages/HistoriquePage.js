@@ -19,6 +19,9 @@ export default function HistoriquePage() {
   const [items, setItems] = useState({});
   const [search, setSearch] = useState('');
   const [shopName, setShopName] = useState('CKBPOS');
+  const [shopAddress, setShopAddress] = useState('');
+  const [shopPhone, setShopPhone]   = useState('');
+  const [shopNif, setShopNif]       = useState('');
   const [editVente, setEditVente] = useState(null);
   const [editItems, setEditItems] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -40,6 +43,12 @@ export default function HistoriquePage() {
   const loadSettings = async () => {
     const res = await window.electron.dbGet("SELECT value FROM settings WHERE key='shop_name'");
     if (res.data) setShopName(res.data.value);
+    const addr = await window.electron.dbGet("SELECT value FROM settings WHERE key='shop_address'");
+    if (addr.data) setShopAddress(addr.data.value);
+    const phone = await window.electron.dbGet("SELECT value FROM settings WHERE key='shop_phone'");
+    if (phone.data) setShopPhone(phone.data.value);
+    const nif = await window.electron.dbGet("SELECT value FROM settings WHERE key='shop_nif'");
+    if (nif.data) setShopNif(nif.data.value);
   };
 
   const loadUsers = async () => {
@@ -194,7 +203,11 @@ export default function HistoriquePage() {
       return res.data || [];
     })();
     await window.electron.printTicket({
-      shopName, clientNom: v.client_nom,
+      shopName, shopAddress, shopPhone, shopNif,
+      clientNom: v.client_nom || 'CONSUMIDOR FINAL',
+      clientNif: v.client_nif || 'CONSUMIDOR FINAL',
+      numeroFacture: v.facture_num || '',
+      segundaVia: true, // ✅ Mention "2ème exemplaire / Segunda via"
       items: venteItems.filter(i => i.statut !== 'retourne').map(i => ({
         name: i.variant_nom ? `${i.nom} ${i.variant_nom}` : i.nom,
         type: i.type_vente, qty: i.quantite,
@@ -202,8 +215,8 @@ export default function HistoriquePage() {
         subtotal: i.sous_total.toLocaleString('fr-FR'),
       })),
       total: v.total.toLocaleString('fr-FR'),
-      cashGiven: v.montant_recu.toLocaleString('fr-FR'),
-      change: v.monnaie_rendue.toLocaleString('fr-FR'),
+      cashGiven: (v.montant_recu||0).toLocaleString('fr-FR'),
+      change: (v.monnaie_rendue||0).toLocaleString('fr-FR'),
       payMode: v.mode_paiement || 'dinheiro',
       montantDinheiro: (v.montant_dinheiro||0).toLocaleString('fr-FR'),
       montantExpress: (v.montant_express||0).toLocaleString('fr-FR'),

@@ -183,6 +183,8 @@ db.exec(`
   "ALTER TABLE users ADD COLUMN pin TEXT",
   // ── v1.1.2 ──────────────────────────────────────────────
   "ALTER TABLE ventes ADD COLUMN machine_id TEXT DEFAULT 'LOCAL'",
+  // ── v1.2.3 — code-barres produits ───────────────────────
+  "ALTER TABLE products ADD COLUMN barcode TEXT",
 ].forEach(sql => { try { db.exec(sql); } catch(e){} });
 
 // ── Tables v1.0.9 (CREATE IF NOT EXISTS = safe sur toute DB) ──
