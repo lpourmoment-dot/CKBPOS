@@ -71,7 +71,8 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
       totalDinheiro: totalRes.data?.total_dinheiro || 0,
       totalExpress: totalRes.data?.total_express || 0,
       items: itemsRes.data || [],
-      date: new Date().toLocaleString('fr-FR'),
+      date: new Date().toLocaleString('fr-FR'),       // heure de fermeture (fin)
+      dateDebut: new Date().toLocaleString('fr-FR'),  // ✅ heure d'ouverture du fecho (début)
       today: today,
       shopName: shopNameRes.data?.value || 'CKBPOS',
       shopAddress: shopAddrRes.data?.value || '',
@@ -87,14 +88,14 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
     setLoading(true);
     try {
       await window.electron.dbQuery(
-        "INSERT INTO shifts (user_id,debut,fin,total_ventes,total_dinheiro,total_express,argent_en_main,argent_envoye,note,actif) VALUES (?,date('now'),datetime('now'),?,?,?,?,?,?,0)",
+        "INSERT INTO shifts (user_id,debut,fin,total_ventes,total_dinheiro,total_express,argent_en_main,argent_envoye,note,actif) VALUES (?,datetime('now'),datetime('now'),?,?,?,?,?,?,0)",
         [user.id, shiftData.total, shiftData.totalDinheiro, shiftData.totalExpress,
          Number(argentEnMain) || 0, Number(argentEnvoye) || 0, note]
       );
 
       await window.electron.printShiftReport({
         vendeur: user.nom,
-        dateDebut: shiftData.today,
+        dateDebut: shiftData.dateDebut, // ✅ heure réelle d'ouverture de session
         dateFin: shiftData.date,
         items: shiftData.items,
         totalVentes: shiftData.total,
