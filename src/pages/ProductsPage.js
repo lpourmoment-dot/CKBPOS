@@ -7,7 +7,8 @@ import { useAlert, useConfirm } from '../components/AlertModal'; // ✅ AJOUT
 const emptyForm = {
   nom:'', categorie:'General', prix_carton:'', cout_carton:'',
   unites_par_carton:12, stock_cartons:0, prix_demi:'', prix_unite:'',
-  prix_demi_manual:false, prix_unite_manual:false, has_variants:false
+  prix_demi_manual:false, prix_unite_manual:false, has_variants:false,
+  barcode:'' // ✅ v1.2.3 — code-barres EAN-13/CODE128
 };
 
 const emptyVariant = { nom:'', prix_carton:'', prix_demi:'', prix_unite:'', stock_cartons:0 };
@@ -62,6 +63,7 @@ export default function ProductsPage() {
       prix_demi_manual: !!p.prix_demi_manual,
       prix_unite_manual: !!p.prix_unite_manual,
       has_variants: !!p.has_variants,
+      barcode: p.barcode || '', // ✅ v1.2.3
     });
     setEditing(p.id);
     const vars = await loadVariants(p.id);
@@ -107,10 +109,10 @@ export default function ProductsPage() {
 
       if (editing) {
         await window.electron.dbQuery(
-          "UPDATE products SET nom=?,categorie=?,prix_carton=?,cout_carton=?,unites_par_carton=?,stock_cartons=?,prix_demi=?,prix_unite=?,prix_demi_manual=?,prix_unite_manual=?,has_variants=?,updated_at=datetime('now') WHERE id=?",
+          "UPDATE products SET nom=?,categorie=?,prix_carton=?,cout_carton=?,unites_par_carton=?,stock_cartons=?,prix_demi=?,prix_unite=?,prix_demi_manual=?,prix_unite_manual=?,has_variants=?,barcode=?,updated_at=datetime('now') WHERE id=?",
           [form.nom,form.categorie,Number(form.prix_carton),Number(form.cout_carton),
            Number(form.unites_par_carton),Number(form.stock_cartons),prixDemi,prixUnite,
-           form.prix_demi_manual?1:0,form.prix_unite_manual?1:0,form.has_variants?1:0,editing]
+           form.prix_demi_manual?1:0,form.prix_unite_manual?1:0,form.has_variants?1:0,form.barcode||null,editing]
         );
         await window.electron.dbQuery(
           "INSERT INTO historique_modifications (user_id,table_name,record_id,action,details) VALUES (?,?,?,?,?)",
@@ -118,9 +120,9 @@ export default function ProductsPage() {
         );
       } else {
         const res = await window.electron.dbQuery(
-          "INSERT INTO products (nom,categorie,prix_carton,cout_carton,unites_par_carton,stock_cartons,prix_demi,prix_unite,prix_demi_manual,prix_unite_manual,has_variants) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO products (nom,categorie,prix_carton,cout_carton,unites_par_carton,stock_cartons,prix_demi,prix_unite,prix_demi_manual,prix_unite_manual,has_variants,barcode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
           [form.nom,form.categorie,Number(form.prix_carton),Number(form.cout_carton),
-           Number(form.unites_par_carton),Number(form.stock_cartons),prixDemi,prixUnite,0,0,form.has_variants?1:0]
+           Number(form.unites_par_carton),Number(form.stock_cartons),prixDemi,prixUnite,0,0,form.has_variants?1:0,form.barcode||null]
         );
         productId = res.data.lastInsertRowid;
         await window.electron.dbQuery(
@@ -315,6 +317,32 @@ export default function ProductsPage() {
                   <input type="number" className="form-input" value={form.stock_cartons}
                     onChange={e=>f('stock_cartons',e.target.value)} min="0" step="0.5"/>
                 </div>
+              </div>
+
+              {/* ✅ v1.2.3 — Code-barres */}
+              <div className="form-group">
+                <label className="form-label" style={{ display:'flex', alignItems:'center', gap:6 }}>
+                  <span>📦</span> Código de Barras (EAN-13 / CODE128)
+                </label>
+                <div style={{ position:'relative' }}>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={form.barcode}
+                    onChange={e => f('barcode', e.target.value)}
+                    placeholder="Ex: 5449000000996 — ou scanner directement ici"
+                    style={{ paddingRight: form.barcode ? 36 : 12, fontFamily:'monospace', letterSpacing:1 }}
+                  />
+                  {form.barcode && (
+                    <button type="button" onClick={() => f('barcode','')}
+                      style={{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', fontSize:16 }}>
+                      ×
+                    </button>
+                  )}
+                </div>
+                <p style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>
+                  Positionne le curseur ici et scanne le produit pour remplir automatiquement.
+                </p>
               </div>
 
               {/* Variants toggle */}

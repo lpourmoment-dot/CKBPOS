@@ -23,6 +23,12 @@ export default function CaissePage() {
   const [loading, setLoading]   = useState(false);
   const isProcessing = useRef(false);
   const isPrinting    = useRef(false); // ✅ Anti double-impression
+
+  // ✅ v1.2.3 — Scanner code-barres USB/sans fil
+  // Détection : saisie rapide (< 80ms entre chars) = scanner, pas humain
+  const scanBuffer    = useRef('');
+  const scanLastTime  = useRef(0);
+  const [scanFeedback, setScanFeedback] = useState(null); // { nom, type } pour feedback visuel
   const [printingBtn, setPrintingBtn] = useState(false); // ✅ Visuel Imprimindo...
 
   // Anti double-clic : wrapper qui bloque re-clic pendant 800ms
@@ -74,6 +80,48 @@ export default function CaissePage() {
     loadProducts(); loadSettings(); loadClients(); loadEmpresas(); loadReservations();
   }, []);
 
+  // ✅ v1.2.3 — Handler global scanner code-barres USB/sans fil
+  // Le scanner simule un clavier : tape le code + Entrée très rapidement (< 80ms par char)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Ignorer si focus sur un input texte (sauf si c'est le champ search)
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      const type = document.activeElement?.type?.toLowerCase();
+      if (tag === 'input' && type !== 'text' && type !== 'search') return;
+      if (tag === 'textarea') return;
+
+      const now = Date.now();
+      const timeSinceLastChar = now - scanLastTime.current;
+
+      if (e.key === 'Enter') {
+        const code = scanBuffer.current.trim();
+        scanBuffer.current = '';
+        scanLastTime.current = 0;
+
+        // Seulement si le code a été tapé très vite (< 80ms/char) = scanner
+        if (code.length >= 4) {
+          handleBarcodeScanned(code);
+        }
+        return;
+      }
+
+      // Accumuler le buffer si saisie rapide (< 80ms entre chars = scanner)
+      if (timeSinceLastChar < 80 || scanBuffer.current.length === 0) {
+        if (e.key.length === 1) { // Seulement les chars imprimables
+          scanBuffer.current += e.key;
+          scanLastTime.current = now;
+        }
+      } else {
+        // Saisie lente = humain → vider le buffer
+        scanBuffer.current = e.key.length === 1 ? e.key : '';
+        scanLastTime.current = now;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [products]); // re-register quand products change
+
   const loadSettings = async () => {
     for (const key of ['shop_name','shop_address','shop_phone','shop_nif']) {
       const res = await window.electron.dbGet(`SELECT value FROM settings WHERE key='${key}'`);
@@ -104,6 +152,34 @@ export default function CaissePage() {
   const loadReservations = async () => {
     const res = await window.electron.reservationList();
     setReservations(res.data || []);
+  };
+
+  // ✅ v1.2.3 — Traitement du code-barres scanné
+  const handleBarcodeScanned = (code) => {
+    // Chercher le produit par barcode exact
+    const product = products.find(p => p.barcode && p.barcode.trim() === code.trim());
+    if (!product) {
+      setScanFeedback({ type: 'error', msg: `Code non trouvé : ${code}` });
+      setTimeout(() => setScanFeedback(null), 2500);
+      return;
+    }
+    if (!product.actif) {
+      setScanFeedback({ type: 'error', msg: `${product.nom} — produit inactif` });
+      setTimeout(() => setScanFeedback(null), 2500);
+      return;
+    }
+    // Ajouter au panier en mode carton par défaut
+    // Si le produit a des variants → ouvrir le sélecteur de variant
+    if (product.has_variants) {
+      setSelectedProduct(product);
+      setSelectedType('carton');
+      setShowVariantPopup(true);
+      setScanFeedback({ type: 'success', msg: `${product.nom} — choisir variant` });
+    } else {
+      addToCart(product, 'carton', null);
+      setScanFeedback({ type: 'success', msg: `✓ ${product.nom} ajouté` });
+    }
+    setTimeout(() => setScanFeedback(null), 2000);
   };
 
   const getUnitsPerCarton = (p) => Math.max(1, Math.round(p.unites_par_carton));
@@ -515,6 +591,18 @@ export default function CaissePage() {
             <Search size={16} style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:'var(--text-muted)'}}/>
             <input type="text" className="form-input" placeholder={t('cashier','search')} value={search} onChange={e=>setSearch(e.target.value)} style={{paddingLeft:36}}/>
           </div>
+          {/* ✅ v1.2.3 — Feedback scanner code-barres */}
+          {scanFeedback && (
+            <div style={{
+              position:'fixed', bottom:24, left:'50%', transform:'translateX(-50%)',
+              background: scanFeedback.type === 'success' ? 'var(--success)' : 'var(--danger)',
+              color:'#fff', padding:'10px 20px', borderRadius:8, fontWeight:700, fontSize:14,
+              zIndex:9999, boxShadow:'0 4px 20px rgba(0,0,0,0.3)',
+              animation:'slideUp 0.2s ease'
+            }}>
+              {scanFeedback.msg}
+            </div>
+          )}
           <button onClick={()=>setShowReservations(!showReservations)}
             style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,border:`2px solid ${showReservations?'var(--accent)':'var(--border)'}`,background:showReservations?'var(--accent-dim)':'transparent',color:showReservations?'var(--accent)':'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:700,position:'relative',flexShrink:0,whiteSpace:'nowrap'}}>
             <Clock size={15}/>{t('cashier','reserves')}

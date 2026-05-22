@@ -608,7 +608,7 @@ function printHTML(html, copies = 1, isTicket = false) {
             // ── Chemin PDF : printToPDF avec dimensions 72mm ──────
             const pdfBuffer = await win.webContents.printToPDF({
               printBackground: true,
-              pageSize: { width: 80000, height: 400000 },
+              pageSize: { width: 72100, height: 400000 },
               margins: { marginType: 'none' },
             });
             win.close();
@@ -642,7 +642,7 @@ function printHTML(html, copies = 1, isTicket = false) {
           };
 
           if (isTicket) {
-            printOptions.pageSize = { width: 80000, height: 400000 };
+            printOptions.pageSize = { width: 72100, height: 400000 };
           }
 
           if (printerName && printerName.trim()) {
@@ -664,7 +664,7 @@ function printHTML(html, copies = 1, isTicket = false) {
               win2.webContents.on('did-finish-load', () => {
                 setTimeout(() => {
                   const fallbackOpts = { silent: true, printBackground: true, color: false, copies: Math.max(1, copies), margins: { marginType: 'none' }, scaleFactor: 100 };
-                  if (isTicket) fallbackOpts.pageSize = { width: 80000, height: 400000 };
+                  if (isTicket) fallbackOpts.pageSize = { width: 72100, height: 400000 };
                   win2.webContents.print(fallbackOpts, (s2, e2) => {
                     win2.close(); cleanup2();
                     if (s2) resolve({ success: true });
@@ -691,8 +691,22 @@ ipcMain.handle('print-ticket', async (_, data) => {
     let qrDataUrl = '';
     if (QRCode) {
       try {
-        const qrText = `${data.shopName}|${data.date}|${data.total} ${data.currency}|${data.seller}`;
-        qrDataUrl = await QRCode.toDataURL(qrText, { width: 100, margin: 1, color: { dark:'#000000', light:'#ffffff' } });
+        // ✅ QR enrichi : toutes les infos de la facture
+        const qrData = {
+          loja: data.shopName,
+          nif: data.shopNif || '',
+          factura: data.numeroFacture || '',
+          data: data.date,
+          vendedor: data.seller,
+          cliente: data.clientNom || 'CONSUMIDOR FINAL',
+          produtos: (data.items || []).map(i => `${i.name} x${i.qty} = ${i.subtotal}`).join(' | '),
+          total: `${data.total} ${data.currency}`,
+        };
+        qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrData), {
+          width: 120, margin: 1,
+          color: { dark:'#000000', light:'#ffffff' },
+          errorCorrectionLevel: 'M'
+        });
       } catch(e) { console.log('QR error:', e.message); }
     }
     const { copiesTicket } = getPrintSettings();
@@ -750,7 +764,8 @@ function generateTicketHTML(data) {
     clientNom, clientNif, items, total, cashGiven, change,
     seller, date, currency, statut,
     payMode, montantDinheiro, montantExpress,
-    qrDataUrl, numeroFacture
+    qrDataUrl, numeroFacture,
+    segundaVia // ✅ true = réimpression → affiche "2ème exemplaire — Segunda via"
   } = data;
 
   const payLabel = payMode==='dinheiro'?'Numerário':payMode==='express'?'App Express':'Misto';
@@ -816,7 +831,7 @@ function generateTicketHTML(data) {
 
   <div class="factura-title">FACTURA RECIBO</div>
   ${frNum ? `<div class="fr-num">${frNum}</div>` : ''}
-  <div class="original">Original</div>
+  <div class="original">${segundaVia ? '2ème exemplaire — Segunda via' : 'Original'}</div>
 
   <div class="sep-dash"></div>
 
@@ -870,7 +885,11 @@ function generateTicketHTML(data) {
     CKBPOS v${APP_VERSION}
   </div>
 
-  ${qrDataUrl ? `<div style="text-align:center;margin-top:8px;"><img src="${qrDataUrl}" width="80" height="80" style="display:inline-block;"/></div>` : ''}
+  ${qrDataUrl ? `
+  <div style="text-align:center;margin-top:10px;padding-top:6px;border-top:1px dashed #000;">
+    <img src="${qrDataUrl}" width="120" height="120" style="display:inline-block;"/>
+    <div style="font-size:8px;color:#666;margin-top:3px;font-family:'Courier New',monospace;">Escaneie para verificar</div>
+  </div>` : ''}
 
   </body></html>`;
 }
