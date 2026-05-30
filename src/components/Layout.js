@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../App';
 import { useLang } from '../utils/useLang';
-import { LayoutDashboard, ShoppingCart, Package, Warehouse, History, Users, Settings, LogOut, Minus, Square, X, ChevronLeft, ChevronRight, RefreshCw, AlertTriangle, BookOpen } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Package, Warehouse, History, Users, Settings, LogOut, Minus, Square, X, ChevronLeft, ChevronRight, RefreshCw, AlertTriangle, BookOpen, Terminal } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ShiftModal from './ShiftModal';
 
@@ -64,6 +64,14 @@ export default function Layout() {
   const [stockAlertas, setStockAlertas] = useState([]);
   const [showAlertPopup, setShowAlertPopup] = useState(false);
   const [clock, setClock] = useState('');
+  // ── v1.4.1 Console in-app ──
+  const [showConsole, setShowConsole]     = useState(false);
+  const [consoleLogs, setConsoleLogs]     = useState([]);
+  const [consoleFilter, setConsoleFilter] = useState('ALL');
+  const [hasError, setHasError]           = useState(false);
+  const consoleEndRef = useRef(null);
+  // ── v1.5.0 Sync status ──
+  const [syncSt, setSyncSt] = useState({ status: 'idle', pending: 0, online: 0 });
 
   // Horloge temps réel
   useEffect(() => {
@@ -74,6 +82,45 @@ export default function Layout() {
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
+  }, []);
+
+  // ── v1.4.1 Console in-app — abonnement aux logs ──
+  useEffect(() => {
+    window.electron.debugLogsGet()
+      .then(res => { if (res?.success) setConsoleLogs(res.data || []); })
+      .catch(() => {});
+    const cleanup = window.electron.onDebugLog((entry) => {
+      setConsoleLogs(l => [...l.slice(-249), entry]);
+      if (entry.level === 'error') setHasError(true);
+    });
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
+  // Auto-scroll console vers le bas
+  useEffect(() => {
+    if (showConsole && consoleEndRef.current) {
+      consoleEndRef.current.scrollIntoView({ behavior: 'auto' });
+    }
+  }, [consoleLogs, showConsole]);
+
+  // Raccourci clavier Ctrl+` pour toggle la console
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.ctrlKey && (e.key === '`' || e.code === 'Backquote')) {
+        e.preventDefault();
+        setShowConsole(s => !s);
+        setHasError(false);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // ── v1.5.0 Sync status ──
+  useEffect(() => {
+    window.electron.syncStatus().then(res => { if (res?.success) setSyncSt(res); }).catch(() => {});
+    const cleanup = window.electron.onSyncUpdate((data) => setSyncSt(data));
+    return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
   const isAdmin = user?.role === 'admin';
@@ -135,6 +182,30 @@ export default function Layout() {
             </span>
           )}
         </div>
+
+        {/* ── v1.5.0 Indicateur sync ── */}
+        {(() => {
+          const CFG = {
+            synced:  { color: 'var(--success)', dot: '#22c55e', label: 'Synced'   },
+            syncing: { color: 'var(--accent)',  dot: '#e8c547', label: 'Syncing\u2026' },
+            pending: { color: '#f97316',        dot: '#f97316', label: `${syncSt.pending} pend.` },
+            offline: { color: 'var(--danger)',  dot: '#ef4444', label: 'Offline'  },
+            idle:    { color: 'var(--text-muted)', dot: '#444', label: ''         },
+          };
+          const c = CFG[syncSt.status] || CFG.idle;
+          if (!c.label) return null;
+          return (
+            <div
+              title={`Sync: ${syncSt.status} — ${syncSt.pending || 0} pend. — ${syncSt.online || 0} pairs`}
+              onClick={() => window.electron.syncForce()}
+              style={{ display:'flex', alignItems:'center', gap:5, marginRight:12, cursor:'pointer', padding:'2px 8px', borderRadius:4, background: c.dot + '14', border:`1px solid ${c.dot}33` }}
+            >
+              <span style={{ width:6, height:6, borderRadius:'50%', background:c.dot, flexShrink:0, animation: syncSt.status==='syncing' ? 'pulse 1s infinite' : 'none' }} />
+              <span style={{ fontSize:10, color:c.color, fontFamily:'monospace', fontWeight:600, whiteSpace:'nowrap' }}>{c.label}</span>
+            </div>
+          );
+        })()}
+
         <div className="titlebar-controls">
           <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="titlebar-btn" onClick={() => window.electron.minimize()}><Minus size={14} /></motion.button>
           <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="titlebar-btn" onClick={() => window.electron.maximize()}><Square size={12} /></motion.button>
@@ -245,6 +316,31 @@ export default function Layout() {
             <motion.button
               whileHover={{ x: collapsed ? 0 : 3 }}
               whileTap={{ scale: 0.97 }}
+              onClick={() => { setShowConsole(s => !s); setHasError(false); }}
+              style={{ display:'flex', alignItems:'center', gap:10, padding:collapsed?'10px':'10px 12px', borderRadius:8, border:'none', cursor:'pointer', background:showConsole?'var(--accent)22':hasError?'rgba(239,68,68,0.08)':'transparent', color:showConsole?'var(--accent)':hasError?'var(--danger)':'var(--text-secondary)', fontSize:14, fontFamily:'inherit', justifyContent:collapsed?'center':'flex-start', width:'100%', transition:'background 0.2s, color 0.2s', position:'relative' }}
+            >
+              <span style={{ position:'relative', flexShrink:0 }}>
+                <Terminal size={18} />
+                {hasError && !showConsole && (
+                  <span style={{ position:'absolute', top:-3, right:-3, width:6, height:6, borderRadius:'50%', background:'var(--danger)' }} />
+                )}
+              </span>
+              <AnimatePresence>
+                {!collapsed && (
+                  <motion.span variants={navLabelVariants} initial="hidden" animate="visible" exit="hidden" style={{ fontSize:13, display:'flex', alignItems:'center', gap:6 }}>
+                    Console
+                    {consoleLogs.length > 0 && (
+                      <span style={{ fontSize:9, background:'var(--bg-hover)', color:'var(--text-muted)', borderRadius:4, padding:'1px 5px', fontFamily:'monospace' }}>
+                        {consoleLogs.length}
+                      </span>
+                    )}
+                  </motion.span>
+                )}
+              </AnimatePresence>
+            </motion.button>
+            <motion.button
+              whileHover={{ x: collapsed ? 0 : 3 }}
+              whileTap={{ scale: 0.97 }}
               onClick={() => setCollapsed(!collapsed)}
               style={{ display: 'flex', alignItems: 'center', gap: 10, padding: collapsed ? '10px' : '10px 12px', borderRadius: 8, border: 'none', cursor: 'pointer', background: 'transparent', color: 'var(--text-secondary)', fontSize: 14, fontFamily: 'inherit', justifyContent: collapsed ? 'center' : 'flex-start', width: '100%' }}
             >
@@ -342,6 +438,67 @@ export default function Layout() {
                 </motion.button>
               </div>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Console in-app v1.4.1 ── */}
+      <AnimatePresence>
+        {showConsole && (
+          <motion.div
+            initial={{ y: 280, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 280, opacity: 0 }}
+            transition={{ duration: 0.22, ease: [0.25, 0.46, 0.45, 0.94] }}
+            style={{ position:'fixed', bottom:0, left:0, right:0, height:268, background:'#080808', borderTop:'2px solid var(--accent)', zIndex:998, display:'flex', flexDirection:'column', fontFamily:'monospace' }}
+          >
+            {/* Header */}
+            <div style={{ padding:'5px 14px', borderBottom:'1px solid #1e1e1e', display:'flex', alignItems:'center', gap:10, flexShrink:0, background:'#0a0a0a' }}>
+              <Terminal size={13} color="var(--accent)" />
+              <span style={{ fontSize:11, fontWeight:700, color:'var(--accent)', letterSpacing:'1px' }}>CONSOLE</span>
+              <span style={{ fontSize:10, color:'#444' }}>{consoleLogs.length} logs</span>
+              <span style={{ fontSize:9, color:'#333', marginLeft:4 }}>Ctrl+`</span>
+              <div style={{ flex:1 }} />
+              {/* Filtres */}
+              {['ALL','LAN','SYNC','ERROR'].map(f => (
+                <button key={f} onClick={() => setConsoleFilter(f)} style={{ background:consoleFilter===f?'var(--accent)':'transparent', color:consoleFilter===f?'#000':'#555', border:`1px solid ${consoleFilter===f?'var(--accent)':'#2a2a2a'}`, borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', fontWeight:700, letterSpacing:'0.5px', transition:'all 0.15s' }}>
+                  {f}
+                </button>
+              ))}
+              <button onClick={() => setConsoleLogs([])} style={{ background:'transparent', border:'1px solid #2a2a2a', color:'#555', borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', marginLeft:4 }}>
+                CLEAR
+              </button>
+              <button onClick={() => setShowConsole(false)} style={{ background:'transparent', border:'none', color:'#555', cursor:'pointer', fontSize:16, lineHeight:1, padding:'0 4px', marginLeft:4 }}>
+                \u00d7
+              </button>
+            </div>
+
+            {/* Lignes de log */}
+            <div style={{ flex:1, overflowY:'auto', padding:'4px 0' }}>
+              {(() => {
+                const TAG_COLOR = { '[LAN]':'#60a5fa','[SYNC]':'#f59e0b','[BEAT]':'#f97316','[BOOT]':'#e8c547','[DB]':'#a78bfa','[IPC]':'#9ca3af','[LOG]':'#6b7280','[CKBPOS]':'#e8c547' };
+                const filtered = consoleFilter === 'ALL'   ? consoleLogs
+                               : consoleFilter === 'ERROR' ? consoleLogs.filter(l => l.level === 'error')
+                               : consoleLogs.filter(l => l.tag === `[${consoleFilter}]`);
+                if (filtered.length === 0) return (
+                  <div style={{ color:'#2a2a2a', fontSize:11, paddingTop:24, textAlign:'center' }}>
+                    {consoleLogs.length === 0 ? 'Aguardando logs\u2026' : 'Nenhum log para este filtro'}
+                  </div>
+                );
+                return filtered.map((log, i) => {
+                  const tc = TAG_COLOR[log.tag] || '#6b7280';
+                  const mc = log.level==='error'?'#ef4444':log.level==='warn'?'#fbbf24':log.level==='success'?'#22c55e':'#888';
+                  return (
+                    <div key={i} style={{ display:'flex', gap:10, fontSize:11, lineHeight:'1.85', padding:'0 14px', borderBottom:'1px solid #0f0f0f' }}>
+                      <span style={{ color:'#2e2e2e', flexShrink:0, width:64 }}>{log.time}</span>
+                      <span style={{ color:tc, background:tc+'18', padding:'0 5px', borderRadius:2, flexShrink:0, minWidth:52, textAlign:'center', fontWeight:700, fontSize:10 }}>{log.tag}</span>
+                      <span style={{ color:mc, flex:1, wordBreak:'break-all' }}>{log.msg}</span>
+                    </div>
+                  );
+                });
+              })()}
+              <div ref={consoleEndRef} />
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
