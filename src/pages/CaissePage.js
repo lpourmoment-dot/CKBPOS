@@ -24,10 +24,18 @@ export default function CaissePage() {
   const isProcessing = useRef(false);
   const isPrinting    = useRef(false); // ✅ Anti double-impression
 
-  // ✅ v1.2.3 — Scanner code-barres USB/sans fil
-  // Détection : saisie rapide (< 80ms entre chars) = scanner, pas humain
-  const scanBuffer    = useRef('');
-  const scanLastTime  = useRef(0);
+  // ✅ v1.2.4 — Flags personnalisation ticket (lus depuis settings)
+  const [ticketFlags, setTicketFlags] = useState({
+    showFactureNum:true, showClientNom:true, showSeller:true,
+    showObrigado:true, showVersion:true, showSecondaVia:true,
+    showQr:true, showAddress:true, showPhone:true, showNif:true,
+    showClientNif:true, showMentionLegal:true,
+  });
+
+  const gridRef      = useRef(null);
+  const scanBuffer   = useRef('');   // ✅ buffer scanner code-barres
+  const scanLastTime = useRef(0);
+  const totalRef     = useRef(0);   // ✅ ref pour accès dans useEffect sans TDZ
   const [scanFeedback, setScanFeedback] = useState(null); // { nom, type } pour feedback visuel
   const [printingBtn, setPrintingBtn] = useState(false); // ✅ Visuel Imprimindo...
 
@@ -80,14 +88,22 @@ export default function CaissePage() {
     loadProducts(); loadSettings(); loadClients(); loadEmpresas(); loadReservations();
   }, []);
 
+  // ✅ Déclaré ici pour être accessible par le useEffect scanner/navigation ci-dessous
+  const filtered = products.filter(p =>
+    p.nom.toLowerCase().includes(search.toLowerCase()) ||
+    (p.categorie||'').toLowerCase().includes(search.toLowerCase()) ||
+    (p.barcode && p.barcode.includes(search))
+  );
+
   // ✅ v1.2.3 — Handler global scanner code-barres USB/sans fil
-  // Le scanner simule un clavier : tape le code + Entrée très rapidement (< 80ms par char)
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Ignorer si focus sur un input texte (sauf si c'est le champ search)
       const tag = document.activeElement?.tagName?.toLowerCase();
-      const type = document.activeElement?.type?.toLowerCase();
-      if (tag === 'input' && type !== 'text' && type !== 'search') return;
+      const isInput = tag === 'input' || tag === 'textarea' || tag === 'select';
+
+      // ── Scanner code-barres : saisie rapide ──
+      if (!isInput) return;
+      if (document.activeElement?.type !== 'text' && document.activeElement?.type !== 'search') return;
       if (tag === 'textarea') return;
 
       const now = Date.now();
@@ -97,22 +113,13 @@ export default function CaissePage() {
         const code = scanBuffer.current.trim();
         scanBuffer.current = '';
         scanLastTime.current = 0;
-
-        // Seulement si le code a été tapé très vite (< 80ms/char) = scanner
-        if (code.length >= 4) {
-          handleBarcodeScanned(code);
-        }
+        if (code.length >= 4) handleBarcodeScanned(code);
         return;
       }
 
-      // Accumuler le buffer si saisie rapide (< 80ms entre chars = scanner)
       if (timeSinceLastChar < 80 || scanBuffer.current.length === 0) {
-        if (e.key.length === 1) { // Seulement les chars imprimables
-          scanBuffer.current += e.key;
-          scanLastTime.current = now;
-        }
+        if (e.key.length === 1) { scanBuffer.current += e.key; scanLastTime.current = now; }
       } else {
-        // Saisie lente = humain → vider le buffer
         scanBuffer.current = e.key.length === 1 ? e.key : '';
         scanLastTime.current = now;
       }
@@ -120,7 +127,7 @@ export default function CaissePage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [products]); // re-register quand products change
+  }, [products]);
 
   const loadSettings = async () => {
     for (const key of ['shop_name','shop_address','shop_phone','shop_nif']) {
@@ -131,6 +138,11 @@ export default function CaissePage() {
         if (key==='shop_phone')   setShopPhone(res.data.value);
         if (key==='shop_nif')     setShopNif(res.data.value);
       }
+    }
+    // ✅ v1.2.4 — Charger les flags de personnalisation du ticket
+    const flagRes = await window.electron.dbGet("SELECT value FROM settings WHERE key='ticket_flags'");
+    if (flagRes.data?.value) {
+      try { setTicketFlags(prev => ({ ...prev, ...JSON.parse(flagRes.data.value) })); } catch(e) {}
     }
   };
 
@@ -198,10 +210,6 @@ export default function CaissePage() {
     return (p.prix_carton||product.prix_carton)/product.unites_par_carton;
   };
 
-  const filtered = products.filter(p =>
-    p.nom.toLowerCase().includes(search.toLowerCase()) ||
-    (p.categorie||'').toLowerCase().includes(search.toLowerCase())
-  );
 
   const handleTypeClick = async (product, type) => {
     if (product.has_variants) {
@@ -335,6 +343,7 @@ export default function CaissePage() {
 
   const total     = Math.round(cart.reduce((s,i)=>s+i.subtotal,0)*100)/100;
   const totalPaid = payMode==='dinheiro'?Number(montantDinheiro)||0:payMode==='express'?Number(montantExpress)||0:(Number(montantDinheiro)||0)+(Number(montantExpress)||0);
+  totalRef.current = total; // ✅ mise à jour ref après déclaration
   const change    = Math.max(0,Math.round((totalPaid-total)*100)/100);
 
   const openPayment = () => { if (cart.length===0) return; setMontantDinheiro(''); setMontantExpress(''); setPayMode('dinheiro'); setShowPayment(true); };
@@ -657,8 +666,8 @@ export default function CaissePage() {
             })}
           </div>
         ) : (
-          <div style={{flex:1,overflowY:'auto',padding:16,display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:12,alignContent:'start'}}>
-            {filtered.map(product=>{
+          <div ref={gridRef} style={{flex:1,overflowY:'auto',padding:16,display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:12,alignContent:'start'}}>
+            {filtered.map((product, idx)=>{
               const upc=getUnitsPerCarton(product);
               const stockUnits=getStockInUnits(product);
               const usedUnits=cart.filter(i=>i.productId===product.id).reduce((s,i)=>s+getUnitsUsed(i),0);
@@ -671,7 +680,13 @@ export default function CaissePage() {
               if(displayUn>0) stockDisplay+=` ${displayUn}un`;
               if(!stockDisplay) stockDisplay=`${availUnits}un`;
               return (
-                <div key={product.id} className="card" style={{padding:16,display:'flex',flexDirection:'column',gap:10}}>
+                <div key={product.id}
+                                    className="card product-grid-card"
+                  style={{
+                    padding:16, display:'flex', flexDirection:'column', gap:10,
+                                        outline: 'none',
+                    transition: 'outline 0.1s, box-shadow 0.1s, transform 0.1s',
+                  }}>
                   <div>
                     <div style={{fontWeight:600,fontSize:14,marginBottom:2,display:'flex',alignItems:'center',gap:6}}>
                       {product.nom}{product.has_variants&&<Layers size={12} color="var(--accent)"/>}
@@ -679,12 +694,17 @@ export default function CaissePage() {
                     <div style={{fontSize:11,color:'var(--text-muted)'}}>{product.categorie}</div>
                     <div style={{fontSize:11,color:availUnits<=upc?'var(--warning)':'var(--text-muted)',marginTop:4}}>Stock: {stockDisplay}</div>
                   </div>
-                  {['carton','demi','unite'].map(type=>{
+                  {['carton','demi','unite'].map((type, tIdx)=>{
                     const typeUnits=type==='carton'?upc:type==='demi'?Math.ceil(upc/2):1;
                     const canAdd=availUnits>=typeUnits;
                     return (
                       <button key={type} onClick={()=>canAdd&&handleTypeClick(product,type)}
-                        style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 10px',borderRadius:8,border:'1px solid var(--border)',background:canAdd?'var(--bg-hover)':'rgba(0,0,0,0.2)',cursor:canAdd?'pointer':'not-allowed',color:canAdd?'var(--text-primary)':'var(--text-muted)',fontSize:12,fontFamily:'inherit',transition:'all 0.15s ease',opacity:canAdd?1:0.5}}
+                        style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 10px',borderRadius:8,
+                          border: '1px solid var(--border)',
+                          background: canAdd?'var(--bg-hover)':'rgba(0,0,0,0.2)',
+                          cursor:canAdd?'pointer':'not-allowed',
+                          color: canAdd?'var(--text-primary)':'var(--text-muted)',
+                          fontSize:12,fontFamily:'inherit',transition:'all 0.15s ease',opacity:canAdd?1:0.5}}
                         onMouseEnter={e=>canAdd&&(e.currentTarget.style.borderColor=typeColor[type],e.currentTarget.style.color=typeColor[type])}
                         onMouseLeave={e=>canAdd&&(e.currentTarget.style.borderColor='var(--border)',e.currentTarget.style.color='var(--text-primary)')}>
                         <span>{type==='carton'?t('cashier','typeBox'):type==='demi'?t('cashier','typeHalf'):t('cashier','typeUnit')}</span>
@@ -760,8 +780,14 @@ export default function CaissePage() {
             <div style={{textAlign:'center',padding:'60px 0',color:'var(--text-muted)',fontSize:13}}>
               <ShoppingCart size={32} style={{opacity:0.3,marginBottom:8,display:'block',margin:'0 auto 8px'}}/><br/>{t('cashier','emptyCartMsg')}
             </div>
-          ):cart.map(item=>(
-            <div key={item.cartKey} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:12}}>
+          ):cart.map((item, cIdx)=>(
+            <div key={item.cartKey} style={{
+              background:'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderRadius:10, padding:12,
+
+              transition:'border 0.1s, box-shadow 0.1s',
+            }}>
               <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
                 <div>
                   <div style={{fontSize:13,fontWeight:600}}>{item.nom}</div>
@@ -790,15 +816,24 @@ export default function CaissePage() {
             <span>TOTAL</span>
             <span style={{color:'var(--accent)',fontFamily:'JetBrains Mono,monospace'}}>{total.toLocaleString('fr-FR')} {currency}</span>
           </div>
-          <button onClick={openPayment} disabled={cart.length===0||loading} className="btn btn-success" style={{justifyContent:'center',padding:'11px'}}>
+          <button id="ckb-btn-imprimir" onClick={openPayment} disabled={cart.length===0||loading} className="btn btn-success"
+            style={{justifyContent:'center',padding:'11px',}}>
             <CreditCard size={16}/> {loading?t('cashier','processing'):t('cashier','printNow')}
           </button>
-          <button onClick={()=>{if(cart.length===0)return;setShowReserveModal(true);}} disabled={cart.length===0||loading}
-            style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,padding:'10px',borderRadius:10,border:'2px solid #4a9eff',background:'rgba(74,158,255,0.08)',color:'#4a9eff',cursor:cart.length===0?'not-allowed':'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,opacity:cart.length===0?0.5:1}}>
+          <button id="ckb-btn-reservar" onClick={()=>{if(cart.length===0)return;setShowReserveModal(true);}} disabled={cart.length===0||loading}
+            style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,padding:'10px',borderRadius:10,
+              border: '2px solid #4a9eff',
+              background:'rgba(74,158,255,0.08)',color:'#4a9eff',cursor:cart.length===0?'not-allowed':'pointer',
+              fontFamily:'inherit',fontSize:13,fontWeight:700,opacity:cart.length===0?0.5:1,
+}}>
             <Clock size={15}/> {t('cashier','reserveWithoutPay')}
           </button>
-          <button onClick={()=>{if(cart.length===0)return;setShowPagoModal(true);setPagoPayMode('dinheiro');setPagoMontantD('');setPagoMontantE('');}} disabled={cart.length===0||loading}
-            style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,padding:'10px',borderRadius:10,border:'2px solid #a0e040',background:'rgba(160,224,64,0.08)',color:'#a0e040',cursor:cart.length===0?'not-allowed':'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,opacity:cart.length===0?0.5:1}}>
+          <button id="ckb-btn-pago" onClick={()=>{if(cart.length===0)return;setShowPagoModal(true);setPagoPayMode('dinheiro');setPagoMontantD('');setPagoMontantE('');}} disabled={cart.length===0||loading}
+            style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,padding:'10px',borderRadius:10,
+              border: '2px solid #a0e040',
+              background:'rgba(160,224,64,0.08)',color:'#a0e040',cursor:cart.length===0?'not-allowed':'pointer',
+              fontFamily:'inherit',fontSize:13,fontWeight:700,opacity:cart.length===0?0.5:1,
+}}>
             <CheckCircle size={15}/> {t('cashier','paidPickupLater')}
           </button>
         </div>
@@ -868,7 +903,12 @@ export default function CaissePage() {
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:16}}>
               {payModes.map(m=>(
                 <button key={m.key} onClick={()=>{setPayMode(m.key);setMontantDinheiro('');setMontantExpress('');}}
-                  style={{padding:'10px 6px',borderRadius:10,border:`2px solid ${payMode===m.key?'var(--accent)':'var(--border)'}`,background:payMode===m.key?'var(--accent-dim)':'var(--bg-hover)',cursor:'pointer',color:payMode===m.key?'var(--accent)':'var(--text-secondary)',fontFamily:'inherit',fontSize:12,fontWeight:payMode===m.key?700:400,textAlign:'center'}}>
+                  style={{padding:'10px 6px',borderRadius:10,
+                    border:`2px solid ${payMode===m.key?'var(--accent)':'var(--border)'}`,
+                    background:payMode===m.key?'var(--accent-dim)':'var(--bg-hover)',
+                    cursor:'pointer',color:payMode===m.key?'var(--accent)':'var(--text-secondary)',
+                    fontFamily:'inherit',fontSize:12,fontWeight:payMode===m.key?700:400,textAlign:'center',
+                    outlineOffset:2}}>
                   {m.label}
                 </button>
               ))}
@@ -877,14 +917,14 @@ export default function CaissePage() {
               <div className="form-group" style={{marginBottom:12}}>
                 <label className="form-label">💵 Valor em Dinheiro ({currency})</label>
                 <input type="number" className="form-input" value={montantDinheiro} onChange={e=>setMontantDinheiro(e.target.value)} placeholder="0" style={{fontSize:16,fontFamily:'JetBrains Mono,monospace'}} autoFocus/>
-                {payMode==='dinheiro'&&<button type="button" onClick={()=>setMontantDinheiro(String(total))} style={{marginTop:6,width:'100%',padding:'8px',borderRadius:8,border:'1px solid var(--success)',background:'rgba(34,197,94,0.08)',color:'var(--success)',fontWeight:700,fontSize:13,cursor:'pointer',fontFamily:'inherit',letterSpacing:.3}}>✓ Exato — {total.toLocaleString('fr-FR')} {currency}</button>}
+                {payMode==='dinheiro'&&<button type="button" onClick={()=>{setMontantDinheiro(String(total));}} style={{marginTop:6,width:'100%',padding:'8px',borderRadius:8,border:'1px solid var(--success)',background:'rgba(34,197,94,0.08)',color:'var(--success)',fontWeight:700,fontSize:13,cursor:'pointer',fontFamily:'inherit',letterSpacing:.3}}>✓ Exato — {total.toLocaleString('fr-FR')} {currency}</button>}
               </div>
             )}
             {(payMode==='express'||payMode==='misto')&&(
               <div className="form-group" style={{marginBottom:12}}>
                 <label className="form-label">📱 Valor via App Express ({currency})</label>
                 <input type="number" className="form-input" value={montantExpress} onChange={e=>setMontantExpress(e.target.value)} placeholder="0" style={{fontSize:16,fontFamily:'JetBrains Mono,monospace'}}/>
-                {payMode==='express'&&<button type="button" onClick={()=>setMontantExpress(String(total))} style={{marginTop:6,width:'100%',padding:'8px',borderRadius:8,border:'1px solid var(--success)',background:'rgba(34,197,94,0.08)',color:'var(--success)',fontWeight:700,fontSize:13,cursor:'pointer',fontFamily:'inherit',letterSpacing:.3}}>✓ Exato — {total.toLocaleString('fr-FR')} {currency}</button>}
+                {payMode==='express'&&<button type="button" onClick={()=>{setMontantExpress(String(total));}} style={{marginTop:6,width:'100%',padding:'8px',borderRadius:8,border:'1px solid var(--success)',background:'rgba(34,197,94,0.08)',color:'var(--success)',fontWeight:700,fontSize:13,cursor:'pointer',fontFamily:'inherit',letterSpacing:.3}}>✓ Exato — {total.toLocaleString('fr-FR')} {currency}</button>}
               </div>
             )}
             {totalPaid>0&&(
@@ -905,9 +945,16 @@ export default function CaissePage() {
               </div>
             )}
             <div style={{display:'flex',gap:10}}>
-              <button onClick={()=>setShowPayment(false)} className="btn btn-secondary" style={{flex:1,justifyContent:'center'}}>Cancelar</button>
-              <button onClick={handleSale} disabled={loading||totalPaid<total||(payMode==='dinheiro'&&!montantDinheiro)||(payMode==='express'&&!montantExpress)}
-                className="btn btn-success" style={{flex:2,justifyContent:'center',padding:'12px'}}>
+              <button onClick={()=>setShowPayment(false)} className="btn btn-secondary"
+                style={{flex:1,justifyContent:'center',
+}}>
+                Cancelar
+              </button>
+              <button id="ckb-btn-confirmar-venda" onClick={handleSale}
+                disabled={loading||totalPaid<total||(payMode==='dinheiro'&&!montantDinheiro)||(payMode==='express'&&!montantExpress)}
+                className="btn btn-success"
+                style={{flex:2,justifyContent:'center',padding:'12px',
+}}>
                 <CreditCard size={16}/> Confirmar Venda
               </button>
             </div>
@@ -1057,9 +1104,13 @@ export default function CaissePage() {
           <div className="modal" style={{textAlign:'center',maxWidth:380}}>
             <div style={{fontSize:56,marginBottom:12}}>✅</div>
             <h2 style={{fontSize:20,fontWeight:700,marginBottom:8,color:'var(--success)'}}>{t('cashier','saleDone')}</h2>
-            {showSuccess.numeroFacture&&<p style={{color:'var(--accent)',fontSize:13,marginBottom:4,fontFamily:'monospace',fontWeight:700}}>{showSuccess.numeroFacture}</p>}
+            {ticketFlags.showFactureNum && showSuccess.numeroFacture && (
+              <p style={{color:'var(--accent)',fontSize:13,marginBottom:4,fontFamily:'monospace',fontWeight:700}}>{showSuccess.numeroFacture}</p>
+            )}
             <p style={{color:'var(--text-muted)',marginBottom:4}}>{t('cashier','venda')} #{showSuccess.venteId}</p>
-            {showSuccess.clientNom&&<p style={{color:'var(--accent)',fontSize:13,marginBottom:4}}>👤 {showSuccess.clientNom}</p>}
+            {ticketFlags.showClientNom && showSuccess.clientNom && (
+              <p style={{color:'var(--accent)',fontSize:13,marginBottom:4}}>👤 {showSuccess.clientNom}</p>
+            )}
             <div style={{fontSize:28,fontWeight:800,color:'var(--accent)',fontFamily:'monospace',marginBottom:8}}>{showSuccess.total.toLocaleString('fr-FR')} {currency}</div>
             <div style={{background:'var(--bg-hover)',borderRadius:10,padding:'10px 16px',marginBottom:12,fontSize:13}}>
               {showSuccess.payMode==='dinheiro'&&<div>💵 Numerário: {showSuccess.montantDinheiro.toLocaleString('fr-FR')} {currency}</div>}
@@ -1067,15 +1118,22 @@ export default function CaissePage() {
               {showSuccess.payMode==='misto'&&<><div>💵 Numerário: {showSuccess.montantDinheiro.toLocaleString('fr-FR')} {currency}</div><div>📱 Express: {showSuccess.montantExpress.toLocaleString('fr-FR')} {currency}</div></>}
               {showSuccess.change>0&&<div style={{color:'var(--success)',fontWeight:600,marginTop:4}}>Troco: {showSuccess.change.toLocaleString('fr-FR')} {currency}</div>}
             </div>
+            {ticketFlags.showSeller && (
+              <p style={{fontSize:11,color:'var(--text-muted)',marginBottom:8}}>Vendedor: {user.nom}</p>
+            )}
+            {ticketFlags.showObrigado && (
+              <p style={{fontSize:12,color:'var(--text-muted)',marginBottom:12,fontStyle:'italic'}}>Obrigado pela sua compra!</p>
+            )}
             <div style={{display:'flex',gap:10}}>
               <button
+                id="ckb-btn-success-imprimir"
                 onClick={async () => {
                   if (isPrinting.current) return;
                   isPrinting.current = true;
                   setPrintingBtn(true);
                   try {
                     await handlePrint(showSuccess);
-                    setShowSuccess(null); // ✅ Ferme modal seulement si impression OK
+                    setShowSuccess(null);
                   } catch(e) {
                     console.error('[Imprimir]', e);
                   } finally {
@@ -1085,14 +1143,22 @@ export default function CaissePage() {
                 }}
                 disabled={printingBtn}
                 className="btn btn-secondary"
-                style={{flex:1,justifyContent:'center',opacity:printingBtn?0.6:1,cursor:printingBtn?'not-allowed':'pointer'}}
+                style={{flex:1,justifyContent:'center',opacity:printingBtn?0.6:1,cursor:printingBtn?'not-allowed':'pointer',
+}}
               >
                 {printingBtn
                   ? <><span style={{fontSize:13}}>🚫</span> Imprimindo...</>
                   : <><Printer size={16}/> Imprimir</>
                 }
               </button>
-              <button onClick={()=>setShowSuccess(null)} className="btn btn-primary" style={{flex:1,justifyContent:'center'}}>Nova venda</button>
+              <button
+                id="ckb-btn-success-nova"
+                onClick={()=>setShowSuccess(null)}
+                className="btn btn-primary"
+                style={{flex:1,justifyContent:'center',
+}}>
+                Nova venda
+              </button>
             </div>
           </div>
         </div>

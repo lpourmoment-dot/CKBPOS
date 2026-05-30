@@ -1,6 +1,6 @@
 {
   "name": "ckbpos",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "CKBPOS - Application Point de Vente Professionnelle",
   "main": "main.js",
   "author": "CKB",
@@ -51,6 +51,7 @@
     "framer-motion": "^11.18.2",
     "googleapis": "^140.0.0",
     "lucide-react": "^0.344.0",
+    "qrcode": "^1.5.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.22.0",

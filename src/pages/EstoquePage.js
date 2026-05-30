@@ -55,19 +55,6 @@ export default function EstoquePage() {
     setVariants(res.data || []);
   };
 
-  const openModal = async (product, type) => {
-    setSelectedProduct(product);
-    setModalType(type);
-    setSelectedVariant(null);
-    setTypeMesure('carton');
-    setQuantite('');
-    setMotif('');
-    setNote('');
-    if (product.has_variants) await loadVariants(product.id);
-    else setVariants([]);
-    setShowModal(true);
-  };
-
   const getUnitsPerCarton = (p) => Math.max(1, Math.round(p.unites_par_carton));
 
   const convertToCartons = (qty, type, upc) => {
@@ -159,6 +146,22 @@ export default function EstoquePage() {
     (p.categorie||'').toLowerCase().includes(search.toLowerCase())
   );
 
+
+  // Reset sélection quand search/tab change
+
+  const openModal = async (product, type) => {
+    setSelectedProduct(product);
+    setModalType(type);
+    setSelectedVariant(null);
+    setTypeMesure('carton');
+    setQuantite('');
+    setMotif('');
+    setNote('');
+    if (product.has_variants) await loadVariants(product.id);
+    else setVariants([]);
+    setShowModal(true);
+  };
+
   const filteredMouvements = mouvements.filter(m =>
     m.product_nom?.toLowerCase().includes(search.toLowerCase()) ||
     (m.variant_nom||'').toLowerCase().includes(search.toLowerCase())
@@ -192,7 +195,7 @@ export default function EstoquePage() {
   ];
 
   return (
-    <div style={{ padding:24, height:'100%', overflowY:'auto' }}>
+    <div className="estoque-scroll" style={{ padding:24, height:'100%', overflowY:'auto' }}>
       {/* Header */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
         <div>
@@ -240,10 +243,11 @@ export default function EstoquePage() {
               </tr>
             </thead>
             <tbody>
-              {filteredProducts.map(p => {
+              {filteredProducts.map((p, rIdx) => {
                 const isLow = p.stock_cartons <= p.stock_alerte;
                 return (
-                  <tr key={p.id} style={{ opacity: isLow ? 1 : 1 }}>
+                  <tr key={p.id} className="estoque-row"
+                    style={{ cursor:'pointer' }}>
                     <td>
                       <div style={{ fontWeight:600, display:'flex', alignItems:'center', gap:6 }}>
                         {p.nom}

@@ -226,6 +226,59 @@ db.exec(`
   );
 `);
 
+// ── Tables Caderno de Caixa v1.2.7 ──────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS caderno_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nom TEXT NOT NULL,
+    motivo TEXT NOT NULL,
+    montant REAL DEFAULT 0,
+    montant_raw TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    direction TEXT NOT NULL CHECK(direction IN ('entree','sortie','perte')),
+    est_dette INTEGER DEFAULT 0,
+    statut_dette TEXT DEFAULT NULL CHECK(statut_dette IN ('pendente','pago') OR statut_dette IS NULL),
+    date_pago TEXT DEFAULT NULL,
+    user_id INTEGER NOT NULL,
+    machine_id TEXT DEFAULT 'LOCAL',
+    date_jour TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now','utc')),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
+  CREATE TABLE IF NOT EXISTS caderno_trabalhadores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nom TEXT NOT NULL UNIQUE,
+    created_at TEXT DEFAULT (datetime('now','utc'))
+  );
+  CREATE TABLE IF NOT EXISTS caderno_produtos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nom TEXT NOT NULL UNIQUE,
+    created_at TEXT DEFAULT (datetime('now','utc'))
+  );
+  CREATE TABLE IF NOT EXISTS caderno_motivos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT NOT NULL UNIQUE,
+    icone TEXT DEFAULT '📌',
+    direction TEXT NOT NULL CHECK(direction IN ('entree','sortie','perte')),
+    est_dette INTEGER DEFAULT 0,
+    role TEXT DEFAULT 'Geral' CHECK(role IN ('Geral','Admin')),
+    actif INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now','utc'))
+  );
+`);
+
+// ── Motivos par défaut (INSERT OR IGNORE = safe) ──
+[
+  ['🍽', 'Almoço',                 'sortie', 0, 'Geral'],
+  ['💸', 'Kilape',                 'sortie', 1, 'Geral'],
+  ['📦', 'Produto não registrado', 'entree', 0, 'Geral'],
+  ['🔻', 'Retirada de caixa',      'sortie', 0, 'Admin'],
+  ['⚠',  'Sem pagar',             'perte',  1, 'Geral'],
+].forEach(([icone, label, direction, est_dette, role]) => {
+  db.prepare('INSERT OR IGNORE INTO caderno_motivos (icone,label,direction,est_dette,role) VALUES (?,?,?,?,?)')
+    .run(icone, label, direction, est_dette, role);
+});
+
 // Migrations post-CREATE (doivent venir apres la creation des tables)
 [
   "ALTER TABLE reservations ADD COLUMN machine_id TEXT DEFAULT 'LOCAL'",

@@ -22,6 +22,7 @@ export default function UsersPage() {
 
   useEffect(() => { loadUsers(); }, []);
 
+
   const loadUsers = async () => {
     const res = await window.electron.dbQuery("SELECT * FROM users ORDER BY role, nom", []);
     setUsers(res.data || []);
@@ -103,7 +104,7 @@ export default function UsersPage() {
   const f = (key, val) => setForm(p => ({ ...p, [key]: val }));
 
   return (
-    <div style={{ padding:24, height:'100%', overflowY:'auto' }}>
+    <div className="users-scroll" style={{ padding:24, height:'100%', overflowY:'auto' }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24 }}>
         <div>
           <h1 style={{ fontSize:22, fontWeight:700 }}>{t('users','title')}</h1>
@@ -126,8 +127,9 @@ export default function UsersPage() {
             </tr>
           </thead>
           <tbody>
-            {users.map(u => (
-              <tr key={u.id}>
+            {users.map((u, rIdx) => (
+              <tr key={u.id} className="users-row"
+                style={{ cursor:'pointer' }}>
                 <td>
                   <div style={{ fontWeight:600 }}>{u.nom}</div>
                   <div style={{ fontSize:11, color:'var(--text-muted)' }}>{u.email}</div>

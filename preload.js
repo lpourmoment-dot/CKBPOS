@@ -55,4 +55,33 @@ contextBridge.exposeInMainWorld('electron', {
   reservationPayer:   (data) => ipcRenderer.invoke('reservation-payer', data),
   reservationEntregar:(data) => ipcRenderer.invoke('reservation-entregar', data),
   reservationAnular:  (data) => ipcRenderer.invoke('reservation-anular', data),
+
+  // ── Caderno de Caixa v1.2.7 ─────────────────────────────
+  // Motivos
+  cadernoMotivosList:   ()       => ipcRenderer.invoke('caderno-motivos-list'),
+  cadernoMotivosAdd:    (data)   => ipcRenderer.invoke('caderno-motivos-add', data),
+  cadernoMotivosDelete: (id)     => ipcRenderer.invoke('caderno-motivos-delete', id),
+
+  // Travailleurs
+  cadernoTrabalhList:   ()    => ipcRenderer.invoke('caderno-trabalhadores-list'),
+  cadernoTrabalhAdd:    (nom) => ipcRenderer.invoke('caderno-trabalhadores-add', nom),
+  cadernoTrabalhDelete: (id)  => ipcRenderer.invoke('caderno-trabalhadores-delete', id),
+
+  // Produits caderno
+  cadernoProdutosList:   ()    => ipcRenderer.invoke('caderno-produtos-list'),
+  cadernoProdutosAdd:    (nom, prix) => ipcRenderer.invoke('caderno-produtos-add', nom, prix),
+  cadernoProdutosDelete: (id)  => ipcRenderer.invoke('caderno-produtos-delete', id),
+
+  // Entrées
+  cadernoEntriesList:   (params) => ipcRenderer.invoke('caderno-entries-list', params),
+  cadernoEntriesAdd:    (entry)  => ipcRenderer.invoke('caderno-entries-add', entry),
+  cadernoEntriesDelete: (id)     => ipcRenderer.invoke('caderno-entries-delete', id),
+  cadernoEntriesPago:   (id)     => ipcRenderer.invoke('caderno-entries-pago', id),
+  cadernoEntriesClear:  (params) => ipcRenderer.invoke('caderno-entries-clear', params),
+
+  // Jours disponibles
+  cadernoDaysList: (params) => ipcRenderer.invoke('caderno-days-list', params),
+
+  // Impression Caderno du jour
+  printCaderno: (data) => ipcRenderer.invoke('print-caderno', data),
 });

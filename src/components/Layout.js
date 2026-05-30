@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../App';
 import { useLang } from '../utils/useLang';
-import { LayoutDashboard, ShoppingCart, Package, Warehouse, History, Users, Settings, LogOut, Minus, Square, X, ChevronLeft, ChevronRight, RefreshCw, AlertTriangle } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Package, Warehouse, History, Users, Settings, LogOut, Minus, Square, X, ChevronLeft, ChevronRight, RefreshCw, AlertTriangle, BookOpen } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ShiftModal from './ShiftModal';
 
@@ -63,6 +63,18 @@ export default function Layout() {
   const [showShift, setShowShift] = useState(false);
   const [stockAlertas, setStockAlertas] = useState([]);
   const [showAlertPopup, setShowAlertPopup] = useState(false);
+  const [clock, setClock] = useState('');
+
+  // Horloge temps réel
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      setClock(now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const isAdmin = user?.role === 'admin';
 
@@ -87,15 +99,16 @@ export default function Layout() {
   };
 
   const navItems = [
-    { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
-    { to: '/caisse', icon: ShoppingCart, label: 'Caisse' },
+    { to: '/', icon: LayoutDashboard, label: t('nav','dashboard'), end: true },
+    { to: '/caisse', icon: ShoppingCart, label: t('nav','cashier') },
     ...(isAdmin ? [
-      { to: '/products', icon: Package, label: 'Produits' },
-      { to: '/estoque', icon: Warehouse, label: 'Estoque', badge: stockAlertas.length },
-      { to: '/users', icon: Users, label: 'Utilisateurs' },
+      { to: '/products', icon: Package, label: t('nav','products') },
+      { to: '/estoque', icon: Warehouse, label: t('nav','stock'), badge: stockAlertas.length },
+      { to: '/users', icon: Users, label: t('nav','users') },
     ] : []),
-    { to: '/historique', icon: History, label: 'Historique' },
-    ...(isAdmin ? [{ to: '/settings', icon: Settings, label: 'Paramètres' }] : []),
+    { to: '/historique', icon: History, label: t('nav','history') },
+    { to: '/caderno', icon: BookOpen, label: t('nav','caderno') },
+    ...(isAdmin ? [{ to: '/settings', icon: Settings, label: t('nav','settings') }] : []),
   ];
 
   const handleSync = async () => {
@@ -115,6 +128,13 @@ export default function Layout() {
         <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)', letterSpacing: 2 }}>
           CKB<span style={{ color: 'var(--text-secondary)' }}>POS</span>
         </span>
+        <div style={{ flex: 1, textAlign: 'center' }}>
+          {clock && (
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace', fontWeight: 600, letterSpacing: 1 }}>
+              {clock}
+            </span>
+          )}
+        </div>
         <div className="titlebar-controls">
           <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="titlebar-btn" onClick={() => window.electron.minimize()}><Minus size={14} /></motion.button>
           <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="titlebar-btn" onClick={() => window.electron.maximize()}><Square size={12} /></motion.button>
@@ -216,7 +236,7 @@ export default function Layout() {
                 <AnimatePresence>
                   {!collapsed && (
                     <motion.span variants={navLabelVariants} initial="hidden" animate="visible" exit="hidden" style={{ fontSize: 13 }}>
-                      {syncing ? 'Sync...' : 'Sync Drive'}
+                      {syncing ? t('nav','syncing') : t('nav','syncDrive')}
                     </motion.span>
                   )}
                 </AnimatePresence>
@@ -234,7 +254,7 @@ export default function Layout() {
               <AnimatePresence>
                 {!collapsed && (
                   <motion.span variants={navLabelVariants} initial="hidden" animate="visible" exit="hidden">
-                    Réduire
+                    {t('nav','collapse')}
                   </motion.span>
                 )}
               </AnimatePresence>
@@ -249,7 +269,7 @@ export default function Layout() {
               <AnimatePresence>
                 {!collapsed && (
                   <motion.span variants={navLabelVariants} initial="hidden" animate="visible" exit="hidden">
-                    Déconnexion
+                    {t('nav','logout')}
                   </motion.span>
                 )}
               </AnimatePresence>
