@@ -37,6 +37,18 @@ export default function DashboardPage() {
           "SELECT COUNT(*) as count FROM products WHERE stock_cartons < 1 AND actif = 1", []
         );
 
+        // Stats Caderno du jour (admin)
+        const cadernoRes = await window.electron.dbQuery(
+          `SELECT
+            COALESCE(SUM(CASE WHEN direction='entree' THEN montant ELSE 0 END),0) as total_plus,
+            COALESCE(SUM(CASE WHEN direction!='entree' THEN montant ELSE 0 END),0) as total_moins,
+            COALESCE(SUM(CASE WHEN est_dette=1 AND (statut_dette IS NULL OR statut_dette!='pago') THEN montant ELSE 0 END),0) as dettes
+           FROM caderno_entries WHERE date_jour=date('now')`, []
+        );
+        const cPlus  = cadernoRes.data?.[0]?.total_plus  || 0;
+        const cMoins = cadernoRes.data?.[0]?.total_moins || 0;
+        const cDett  = cadernoRes.data?.[0]?.dettes      || 0;
+
         setStats({
           today: todayRes.data?.total || 0,
           todayCount: todayRes.data?.count || 0,
@@ -45,6 +57,7 @@ export default function DashboardPage() {
           products: prodRes.data?.count || 0,
           users: userRes.data?.count || 0,
           lowStock: lowStockRes.data?.[0]?.count || 0,
+          caderno_plus: cPlus, caderno_moins: cMoins, caderno_dettes: cDett, caderno_net: cPlus - cMoins,
         });
 
         const topRes = await window.electron.dbQuery(
@@ -65,9 +78,21 @@ export default function DashboardPage() {
           count: d.count
         })));
       } else {
+        // Stats Caderno du jour (non-admin)
+        const cadernoRes = await window.electron.dbQuery(
+          `SELECT
+            COALESCE(SUM(CASE WHEN direction='entree' THEN montant ELSE 0 END),0) as total_plus,
+            COALESCE(SUM(CASE WHEN direction!='entree' THEN montant ELSE 0 END),0) as total_moins,
+            COALESCE(SUM(CASE WHEN est_dette=1 AND (statut_dette IS NULL OR statut_dette!='pago') THEN montant ELSE 0 END),0) as dettes
+           FROM caderno_entries WHERE date_jour=date('now') AND user_id=${user.id}`, []
+        );
+        const cPlus  = cadernoRes.data?.[0]?.total_plus  || 0;
+        const cMoins = cadernoRes.data?.[0]?.total_moins || 0;
+        const cDett  = cadernoRes.data?.[0]?.dettes      || 0;
         setStats({
           today: todayRes.data?.total || 0,
           todayCount: todayRes.data?.count || 0,
+          caderno_plus: cPlus, caderno_moins: cMoins, caderno_dettes: cDett, caderno_net: cPlus - cMoins,
         });
       }
 
@@ -177,6 +202,41 @@ export default function DashboardPage() {
                 {t('dashboard','noSales')}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Caderno du jour */}
+      {(stats.caderno_plus > 0 || stats.caderno_moins > 0) && (
+        <div style={{ marginBottom:24 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:10 }}>
+            \uD83D\uDCD3 Caderno de Caixa \u2014 Hoje
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12 }}>
+            <div className="stat-card" style={{ borderLeft:'3px solid var(--success)' }}>
+              <div className="stat-label">TOTAL +</div>
+              <div className="stat-value" style={{ color:'var(--success)', fontSize:16 }}>+{fmt(stats.caderno_plus)}</div>
+              <div className="stat-sub">Entradas hoje</div>
+            </div>
+            <div className="stat-card" style={{ borderLeft:'3px solid var(--danger)' }}>
+              <div className="stat-label">TOTAL \u2212</div>
+              <div className="stat-value" style={{ color:'var(--danger)', fontSize:16 }}>\u2212{fmt(stats.caderno_moins)}</div>
+              <div className="stat-sub">Sa\u00eddas hoje</div>
+            </div>
+            <div className="stat-card" style={{ borderLeft:'3px solid var(--warning)' }}>
+              <div className="stat-label">D\u00edvidas</div>
+              <div className="stat-value" style={{ color:stats.caderno_dettes>0?'var(--danger)':'var(--text-muted)', fontSize:16 }}>
+                {stats.caderno_dettes > 0 ? `\u2212${fmt(stats.caderno_dettes)}` : '\u2014'}
+              </div>
+              <div className="stat-sub">Pendentes</div>
+            </div>
+            <div className="stat-card" style={{ borderLeft:'3px solid var(--accent)' }}>
+              <div className="stat-label">Net caderno</div>
+              <div className="stat-value" style={{ color:(stats.caderno_net||0)>=0?'var(--success)':'var(--danger)', fontSize:16 }}>
+                {(stats.caderno_net||0)>=0?'+':'\u2212'}{fmt(Math.abs(stats.caderno_net||0))}
+              </div>
+              <div className="stat-sub">Balan\u00e7o do dia</div>
+            </div>
           </div>
         </div>
       )}

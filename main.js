@@ -116,6 +116,191 @@ ipcMain.handle('db-get', (_, sql, params) => {
   catch(err) { return { success:false, error:err.message }; }
 });
 
+// ============================================================
+// CADERNO DE CAIXA — v1.2.7
+// ============================================================
+
+// ── Lister les motivos actifs ──
+ipcMain.handle('caderno-motivos-list', () => {
+  try {
+    const rows = db.prepare('SELECT * FROM caderno_motivos WHERE actif=1 ORDER BY id').all();
+    return { success:true, data:rows };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Ajouter un motivo ──
+ipcMain.handle('caderno-motivos-add', (_, { icone, label, direction, est_dette, role }) => {
+  try {
+    const r = db.prepare('INSERT INTO caderno_motivos (icone,label,direction,est_dette,role) VALUES (?,?,?,?,?)')
+      .run(icone||'📌', label, direction, est_dette||0, role||'Geral');
+    return { success:true, id:r.lastInsertRowid };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Supprimer un motivo ──
+ipcMain.handle('caderno-motivos-delete', (_, id) => {
+  try {
+    db.prepare('UPDATE caderno_motivos SET actif=0 WHERE id=?').run(id);
+    return { success:true };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Lister les travailleurs ──
+ipcMain.handle('caderno-trabalhadores-list', () => {
+  try {
+    return { success:true, data:db.prepare('SELECT * FROM caderno_trabalhadores ORDER BY nom').all() };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Ajouter un travailleur ──
+ipcMain.handle('caderno-trabalhadores-add', (_, nom) => {
+  try {
+    const r = db.prepare('INSERT OR IGNORE INTO caderno_trabalhadores (nom) VALUES (?)').run(nom.trim());
+    return { success:true, id:r.lastInsertRowid };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Supprimer un travailleur ──
+ipcMain.handle('caderno-trabalhadores-delete', (_, id) => {
+  try {
+    db.prepare('DELETE FROM caderno_trabalhadores WHERE id=?').run(id);
+    return { success:true };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Lister les produits caderno ──
+ipcMain.handle('caderno-produtos-list', () => {
+  try {
+    return { success:true, data:db.prepare('SELECT * FROM caderno_produtos ORDER BY nom').all() };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Ajouter un produit caderno ──
+ipcMain.handle('caderno-produtos-add', (_, payload, prixArg) => {
+  try {
+    const nom  = typeof payload === 'string' ? payload : (payload?.nom || '');
+    const prix = parseFloat(typeof payload === 'string' ? prixArg : payload?.prix) || 0;
+    if (!nom.trim()) return { success:false, error:'nom vide' };
+
+    // Ajouter colonne prix si absente
+    const cols = db.pragma('table_info(caderno_produtos)').map(c => c.name);
+    if (!cols.includes('prix')) {
+      db.prepare('ALTER TABLE caderno_produtos ADD COLUMN prix REAL DEFAULT 0').run();
+    }
+
+    // Upsert propre
+    const r = db.prepare(
+      'INSERT INTO caderno_produtos (nom, prix) VALUES (?,?) ON CONFLICT(nom) DO UPDATE SET prix=excluded.prix'
+    ).run(nom.trim(), prix);
+    return { success:true, id:r.lastInsertRowid };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Supprimer un produit caderno ──
+ipcMain.handle('caderno-produtos-delete', (_, id) => {
+  try {
+    db.prepare('DELETE FROM caderno_produtos WHERE id=?').run(id);
+    return { success:true };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Charger les entrées d'un jour ──
+ipcMain.handle('caderno-entries-list', (_, { date_jour, user_id, is_admin }) => {
+  try {
+    let sql = `SELECT e.*, u.nom as user_nom
+               FROM caderno_entries e
+               JOIN users u ON e.user_id = u.id
+               WHERE e.date_jour = ?`;
+    const params = [date_jour];
+    if (!is_admin) { sql += ' AND e.user_id = ?'; params.push(user_id); }
+    sql += ' ORDER BY e.created_at ASC';
+    return { success:true, data:db.prepare(sql).all(...params) };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Ajouter ou cumuler une entrée ──
+// Règle : même nom + même motivo + même date_jour → additionne le montant
+ipcMain.handle('caderno-entries-add', (_, entry) => {
+  try {
+    const { nom, motivo, montant, montant_raw, note, direction, est_dette, user_id, machine_id, date_jour } = entry;
+
+    // Chercher si une entrée identique existe déjà aujourd'hui
+    const existing = db.prepare(
+      'SELECT * FROM caderno_entries WHERE nom=? AND motivo=? AND date_jour=? LIMIT 1'
+    ).get(nom, motivo, date_jour);
+
+    if (existing) {
+      // Cumuler
+      const newMontant = existing.montant + (montant || 0);
+      const newRaw = existing.montant_raw
+        ? existing.montant_raw + '+' + (montant_raw || montant)
+        : (montant_raw || String(montant));
+      db.prepare(
+        'UPDATE caderno_entries SET montant=?, montant_raw=?, note=? WHERE id=?'
+      ).run(newMontant, newRaw, note || existing.note, existing.id);
+      return { success:true, id:existing.id, cumul:true };
+    } else {
+      // Nouvelle entrée
+      const statutDette = est_dette ? 'pendente' : null;
+      const r = db.prepare(
+        `INSERT INTO caderno_entries
+         (nom, motivo, montant, montant_raw, note, direction, est_dette, statut_dette, user_id, machine_id, date_jour)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+      ).run(nom, motivo, montant||0, montant_raw||'', note||'', direction, est_dette?1:0, statutDette, user_id, machine_id||'LOCAL', date_jour);
+      return { success:true, id:r.lastInsertRowid, cumul:false };
+    }
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Supprimer une entrée ──
+ipcMain.handle('caderno-entries-delete', (_, id) => {
+  try {
+    db.prepare('DELETE FROM caderno_entries WHERE id=?').run(id);
+    return { success:true };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Marquer dette comme payée ──
+ipcMain.handle('caderno-entries-pago', (_, id) => {
+  try {
+    db.prepare(
+      "UPDATE caderno_entries SET statut_dette='pago', date_pago=datetime('now','utc') WHERE id=?"
+    ).run(id);
+    return { success:true };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Limpar histórico ──
+ipcMain.handle('caderno-entries-clear', (_, { mode, date_jour, user_id, is_admin }) => {
+  try {
+    let sql = '';
+    const params = [];
+    if (mode === 'today') {
+      sql = 'DELETE FROM caderno_entries WHERE date_jour=?';
+      params.push(date_jour);
+    } else if (mode === 'week') {
+      sql = "DELETE FROM caderno_entries WHERE date_jour >= date('now','-6 days')";
+    } else if (mode === 'all') {
+      sql = 'DELETE FROM caderno_entries';
+    }
+    if (!is_admin) { sql += (sql.includes('WHERE') ? ' AND' : ' WHERE') + ' user_id=?'; params.push(user_id); }
+    db.prepare(sql).run(...params);
+    return { success:true };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+// ── Lister les jours disponibles ──
+ipcMain.handle('caderno-days-list', (_, { user_id, is_admin }) => {
+  try {
+    let sql = 'SELECT DISTINCT date_jour FROM caderno_entries';
+    const params = [];
+    if (!is_admin) { sql += ' WHERE user_id=?'; params.push(user_id); }
+    sql += ' ORDER BY date_jour DESC LIMIT 30';
+    return { success:true, data:db.prepare(sql).all(...params) };
+  } catch(e) { return { success:false, error:e.message }; }
+});
+
+
 // Google Drive
 const driveSync = require('./database/driveSync');
 ipcMain.handle('drive-auth', async () => {
@@ -450,6 +635,8 @@ ipcMain.handle('force-migration', async () => {
       "ALTER TABLE reservations ADD COLUMN expiration TEXT",
       "ALTER TABLE reservations ADD COLUMN vente_id INTEGER",
       "ALTER TABLE reservations ADD COLUMN created_at TEXT DEFAULT (datetime('now','utc'))",
+      // v1.2.9 — prix pour caderno_produtos
+      "ALTER TABLE caderno_produtos ADD COLUMN prix REAL DEFAULT 0",
     ];
 
     let applied = 0;
@@ -570,12 +757,29 @@ function getPrintSettings() {
   const printerName  = db.prepare("SELECT value FROM settings WHERE key='printer_name'").get()?.value  || '';
   const copiesTicket = parseInt(db.prepare("SELECT value FROM settings WHERE key='printer_copies_ticket'").get()?.value || '2');
   const copiesShift  = parseInt(db.prepare("SELECT value FROM settings WHERE key='printer_copies_shift'").get()?.value  || '1');
-  return { printerName, copiesTicket, copiesShift };
+  const ticketSizeMm = parseInt(db.prepare("SELECT value FROM settings WHERE key='ticket_size_mm'").get()?.value || '72');
+  const ticketWidthMicrons = (ticketSizeMm * 1000) + 100; // ex: 72 -> 72100
+  return { printerName, copiesTicket, copiesShift, ticketSizeMm, ticketWidthMicrons };
+}
+
+// ✅ v1.2.3 — Lire les flags de personnalisation du ticket depuis settings
+function getTicketFlags() {
+  const defaults = {
+    showQr: true, showAddress: true, showPhone: true, showNif: true,
+    showFactureNum: true, showClientNom: true, showClientNif: true,
+    showSeller: true, showObrigado: true, showVersion: true, showSecondaVia: true,
+    showMentionLegal: true, // ✅ Séparé de showAddress — mention légale Angola
+  };
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key='ticket_flags'").get();
+    if (row?.value) return { ...defaults, ...JSON.parse(row.value) };
+  } catch(e) {}
+  return defaults;
 }
 
 function printHTML(html, copies = 1, isTicket = false) {
   return new Promise((resolve, reject) => {
-    const { printerName } = getPrintSettings();
+    const { printerName, ticketWidthMicrons } = getPrintSettings();
     const os = require('os');
     const fs = require('fs');
 
@@ -605,10 +809,10 @@ function printHTML(html, copies = 1, isTicket = false) {
       setTimeout(async () => {
         try {
           if (isMicrosoftPdf && isTicket) {
-            // ── Chemin PDF : printToPDF avec dimensions 72mm ──────
+            // -- Chemin PDF : printToPDF avec dimensions dynamiques --
             const pdfBuffer = await win.webContents.printToPDF({
               printBackground: true,
-              pageSize: { width: 72100, height: 400000 },
+              pageSize: { width: ticketWidthMicrons || 72100, height: 400000 },
               margins: { marginType: 'none' },
             });
             win.close();
@@ -642,7 +846,7 @@ function printHTML(html, copies = 1, isTicket = false) {
           };
 
           if (isTicket) {
-            printOptions.pageSize = { width: 72100, height: 400000 };
+            printOptions.pageSize = { width: ticketWidthMicrons || 72100, height: 400000 };
           }
 
           if (printerName && printerName.trim()) {
@@ -664,7 +868,7 @@ function printHTML(html, copies = 1, isTicket = false) {
               win2.webContents.on('did-finish-load', () => {
                 setTimeout(() => {
                   const fallbackOpts = { silent: true, printBackground: true, color: false, copies: Math.max(1, copies), margins: { marginType: 'none' }, scaleFactor: 100 };
-                  if (isTicket) fallbackOpts.pageSize = { width: 72100, height: 400000 };
+                  if (isTicket) fallbackOpts.pageSize = { width: ticketWidthMicrons || 72100, height: 400000 };
                   win2.webContents.print(fallbackOpts, (s2, e2) => {
                     win2.close(); cleanup2();
                     if (s2) resolve({ success: true });
@@ -691,29 +895,27 @@ ipcMain.handle('print-ticket', async (_, data) => {
     let qrDataUrl = '';
     if (QRCode) {
       try {
-        // ✅ QR enrichi : toutes les infos de la facture
-        const qrData = {
-          loja: data.shopName,
-          nif: data.shopNif || '',
-          factura: data.numeroFacture || '',
-          data: data.date,
-          vendedor: data.seller,
-          cliente: data.clientNom || 'CONSUMIDOR FINAL',
-          produtos: (data.items || []).map(i => `${i.name} x${i.qty} = ${i.subtotal}`).join(' | '),
-          total: `${data.total} ${data.currency}`,
-        };
-        qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrData), {
-          width: 120, margin: 1,
-          color: { dark:'#000000', light:'#ffffff' },
-          errorCorrectionLevel: 'M'
+        // ✅ Contenu minimal → QR peu dense → lisible sur imprimante thermique 203dpi
+        // Format : FR-NUM|TOTAL AOA|DATE|VENDEUR
+        const qrText = [
+          data.numeroFacture || 'N/A',
+          `${data.total} ${data.currency}`,
+          data.date,
+          data.seller
+        ].join('|');
+        qrDataUrl = await QRCode.toDataURL(qrText, {
+          width: 128,
+          margin: 2,
+          errorCorrectionLevel: 'L', // ✅ L = moins de modules = QR plus simple
+          color: { dark: '#000000', light: '#ffffff' }
         });
       } catch(e) { console.log('QR error:', e.message); }
     }
-    const { copiesTicket } = getPrintSettings();
+    const { copiesTicket, ticketSizeMm } = getPrintSettings();
     const copies = data.copies || copiesTicket || 2;
-    const result = await printHTML(generateTicketHTML({ ...data, qrDataUrl }), copies, true);
-    // ✅ Toujours success:true — même si PDF dialog annulé ou erreur impression
-    // Le bouton Imprimir se débloque toujours après l'appel
+    // ✅ v1.2.3 — Appliquer les flags de personnalisation du ticket
+    const flags = getTicketFlags();
+    const result = await printHTML(generateTicketHTML({ ...data, qrDataUrl, flags, ticketSizeMm }), copies, true);
     return { success: true, copies, ...(result || {}) };
   }
   catch(e) {
@@ -724,9 +926,21 @@ ipcMain.handle('print-ticket', async (_, data) => {
 });
 ipcMain.handle('print-shift-report', async (_, data) => {
   try {
-    const { copiesShift } = getPrintSettings();
+    const { copiesShift, ticketSizeMm } = getPrintSettings();
     const copies = data.copies || copiesShift || 1;
-    await printHTML(generateShiftHTML(data), copies);
+    // v1.3.0 — Résumé caderno du jour injecté automatiquement dans le ticket de fermeture
+    let cadernoResume = null;
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const rows = db.prepare('SELECT direction, montant, est_dette, statut_dette FROM caderno_entries WHERE date_jour=?').all(today);
+      if (rows.length > 0) {
+        const totalPlus  = rows.filter(e => e.direction === 'entree').reduce((s,e) => s + e.montant, 0);
+        const totalMoins = rows.filter(e => e.direction !== 'entree').reduce((s,e) => s + e.montant, 0);
+        const dettes     = rows.filter(e => e.est_dette && e.statut_dette !== 'pago').reduce((s,e) => s + e.montant, 0);
+        cadernoResume = { totalPlus, totalMoins, dettes, net: totalPlus - totalMoins };
+      }
+    } catch(err) { console.error('[shift caderno]', err.message); }
+    await printHTML(generateShiftHTML({ ...data, cadernoResume, ticketSizeMm }), copies, true);
     return { success: true, copies };
   }
   catch(e) { return { success:false, error:e.message }; }
@@ -734,7 +948,8 @@ ipcMain.handle('print-shift-report', async (_, data) => {
 ipcMain.handle('print-produtos-report', async (_, data) => {
   try {
     const isTicket = data.format === 'ticket';
-    const html = isTicket ? generateProdutosTicketHTML(data) : generateProdutosHTML(data);
+    const { ticketSizeMm } = getPrintSettings();
+    const html = isTicket ? generateProdutosTicketHTML({ ...data, ticketSizeMm }) : generateProdutosHTML(data);
     await printHTML(html, 1, isTicket);
     return { success: true };
   } catch(e) {
@@ -746,12 +961,26 @@ ipcMain.handle('print-produtos-report', async (_, data) => {
 ipcMain.handle('print-historique-report', async (_, data) => {
   try {
     const isTicket = data.format === 'ticket';
-    const html = isTicket ? generateHistoriqueTicketHTML(data) : generateHistoriqueHTML(data);
+    const { ticketSizeMm } = getPrintSettings();
+    const html = isTicket ? generateHistoriqueTicketHTML({ ...data, ticketSizeMm }) : generateHistoriqueHTML(data);
     await printHTML(html, 1, isTicket);
     return { success: true };
   } catch(e) {
     console.error('[print-historique-report] ERREUR:', e.message);
     return { success: false, error: e.message };
+  }
+});
+
+// v1.3.0 -- Impression Caderno de Caixa (résumé du jour)
+ipcMain.handle('print-caderno', async (_, data) => {
+  try {
+    const { ticketSizeMm } = getPrintSettings();
+    const html = generateCadernoTicketHTML({ ...data, ticketSizeMm });
+    await printHTML(html, 1, true);
+    return { success: true };
+  } catch(e) {
+    console.error('[print-caderno]', e.message);
+    return { success: true, error: e.message };
   }
 });
 
@@ -765,8 +994,18 @@ function generateTicketHTML(data) {
     seller, date, currency, statut,
     payMode, montantDinheiro, montantExpress,
     qrDataUrl, numeroFacture,
-    segundaVia // ✅ true = réimpression → affiche "2ème exemplaire — Segunda via"
+    segundaVia,
+    flags: rawFlags,
+    ticketSizeMm: _tMm,
   } = data;
+  const ticketW = `${_tMm || 72}mm`;
+
+  // Valeurs par défaut si flags absents (tout visible)
+  const flags = rawFlags || {
+    showQr:true, showAddress:true, showPhone:true, showNif:true,
+    showFactureNum:true, showClientNom:true, showClientNif:true,
+    showSeller:true, showObrigado:true, showVersion:true, showSecondaVia:true,
+  };
 
   const payLabel = payMode==='dinheiro'?'Numerário':payMode==='express'?'App Express':'Misto';
   const clientDisplay = clientNom || 'CONSUMIDOR FINAL';
@@ -785,12 +1024,12 @@ function generateTicketHTML(data) {
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
   <style>
-    @page { size: 72mm auto; margin: 0; }
+    @page { size: ${ticketW} auto; margin: 0; }
     * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
     body {
       font-family: 'Courier New', Courier, monospace;
       font-size: 12px;
-      width: 72mm;
+      width: ${ticketW};
       padding: 2mm 3mm;
       color: #000000 !important;
       background: #ffffff !important;
@@ -822,27 +1061,27 @@ function generateTicketHTML(data) {
 
   <div class="shop-name">${shopName}</div>
   <div class="shop-info">
-    ${shopNif ? `Contribuinte Nº ${shopNif}<br>` : ''}
-    ${shopPhone ? `Tel: ${shopPhone}<br>` : ''}
-    ${shopAddress ? `${shopAddress}` : ''}
+    ${flags.showNif && shopNif ? `Contribuinte Nº ${shopNif}<br>` : ''}
+    ${flags.showPhone && shopPhone ? `Tel: ${shopPhone}<br>` : ''}
+    ${flags.showAddress && shopAddress ? `${shopAddress}` : ''}
   </div>
 
   <div class="sep-solid"></div>
 
   <div class="factura-title">FACTURA RECIBO</div>
-  ${frNum ? `<div class="fr-num">${frNum}</div>` : ''}
-  <div class="original">${segundaVia ? '2ème exemplaire — Segunda via' : 'Original'}</div>
+  ${flags.showFactureNum && frNum ? `<div class="fr-num">${frNum}</div>` : ''}
+  ${flags.showSecondaVia ? `<div class="original">${segundaVia ? '2ème exemplaire — Segunda via' : 'Original'}</div>` : ''}
 
   <div class="sep-dash"></div>
 
   <div class="meta-line">
-    <div>Cliente: ${clientDisplay}</div>
-    <div>NIF: ${nifDisplay}</div>
+    ${flags.showClientNom ? `<div>Cliente: ${clientDisplay}</div>` : ''}
+    ${flags.showClientNif ? `<div>NIF: ${nifDisplay}</div>` : ''}
     <div>Data e Hora: ${date}</div>
-    <div>Vendedor: ${seller.toUpperCase()}</div>
+    ${flags.showSeller ? `<div>Vendedor: ${seller.toUpperCase()}</div>` : ''}
   </div>
 
-  ${shopAddress ? `<div class="mention-legal">Os bens/Serviços foram colocados à disposição do adquirente na data do documento: ${shopAddress}.</div>` : ''}
+  ${flags.showMentionLegal && shopAddress ? `<div class="mention-legal">Os bens/Serviços foram colocados à disposição do adquirente na data do documento: ${shopAddress}.</div>` : ''}
 
   ${statut==='annule' ? '<div class="cancelled">*** ANULADO ***</div>' : ''}
 
@@ -881,11 +1120,11 @@ function generateTicketHTML(data) {
   <div class="sep-solid"></div>
 
   <div class="footer">
-    OBRIGADO PELA SUA COMPRA!<br>
-    CKBPOS v${APP_VERSION}
+    ${flags.showObrigado ? 'OBRIGADO PELA SUA COMPRA!<br>' : ''}
+    ${flags.showVersion ? `CKBPOS v${APP_VERSION}` : ''}
   </div>
 
-  ${qrDataUrl ? `
+  ${flags.showQr && qrDataUrl ? `
   <div style="text-align:center;margin-top:10px;padding-top:6px;border-top:1px dashed #000;">
     <img src="${qrDataUrl}" width="120" height="120" style="display:inline-block;"/>
     <div style="font-size:8px;color:#666;margin-top:3px;font-family:'Courier New',monospace;">Escaneie para verificar</div>
@@ -898,7 +1137,8 @@ function generateTicketHTML(data) {
 // HISTORIQUE TICKET HTML - Format 58mm thermique
 // ============================================================
 function generateHistoriqueTicketHTML(data) {
-  const { shopName, ventes, total, currency, filterUser, filterDateFrom, filterDateTo, printedAt } = data;
+  const { shopName, ventes, total, currency, filterUser, filterDateFrom, filterDateTo, printedAt, ticketSizeMm: _tMm } = data;
+  const ticketW = `${_tMm || 72}mm`;
 
   const statutLabel = { annule:'ANUL', modifie:'MOD', normal:'OK', pago_retirar:'RES' };
   const payLabel    = { dinheiro:'NUM', express:'EXP', misto:'MIS' };
@@ -923,12 +1163,12 @@ function generateHistoriqueTicketHTML(data) {
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
   <style>
-    @page { size: 72mm auto; margin: 0; }
+    @page { size: ${ticketW} auto; margin: 0; }
     * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
     body {
       font-family: 'Courier New', Courier, monospace;
       font-size: 11px;
-      width: 72mm;
+      width: ${ticketW};
       padding: 4mm 2mm;
       color: #000;
       background: #fff;
@@ -999,7 +1239,8 @@ function generateHistoriqueTicketHTML(data) {
   </body></html>`;
 }
 function generateShiftHTML(data) {
-  const { vendeur, dateDebut, dateFin, items, totalVentes, totalDinheiro, totalExpress, argentEnMain, argentEnvoye, note, currency, shopName, shopAddress, shopPhone, shopNif } = data;
+  const { vendeur, dateDebut, dateFin, items, totalVentes, totalDinheiro, totalExpress, argentEnMain, argentEnvoye, note, currency, shopName, shopAddress, shopPhone, shopNif, cadernoResume, ticketSizeMm: _tMm } = data;
+  const ticketW = `${_tMm || 72}mm`;
   const diffMain = argentEnMain - totalDinheiro;
   const diffExpress = argentEnvoye - totalExpress;
 
@@ -1020,12 +1261,12 @@ function generateShiftHTML(data) {
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
   <style>
-    @page { size: 72mm auto; margin: 0; }
+    @page { size: ${ticketW} auto; margin: 0; }
     * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
     body {
       font-family: 'Courier New', Courier, monospace;
       font-size: 10px;
-      width: 72mm;
+      width: ${ticketW};
       padding: 2mm 2mm;
       color: #000000 !important;
       background: #ffffff !important;
@@ -1074,6 +1315,13 @@ function generateShiftHTML(data) {
   <div class="row"><span>App Express</span><span>${diffExpress>=0?'+':''}${diffExpress.toLocaleString('fr-FR')} ${currency}</span></div>
   ${note ? `<div class="separator-thin"></div><div>Obs: ${note}</div>` : ''}
   <div class="separator"></div>
+  ${cadernoResume ? `
+  <div class="bold" style="margin-bottom:4px;">CADERNO DE CAIXA:</div>
+  <div class="row"><span>Entradas (+)</span><span>${cadernoResume.totalPlus.toLocaleString('fr-FR')} ${currency}</span></div>
+  <div class="row"><span>Sa\u00eddas (-)</span><span>${cadernoResume.totalMoins.toLocaleString('fr-FR')} ${currency}</span></div>
+  ${cadernoResume.dettes > 0 ? `<div class="row" style="font-size:8px;"><span>D\u00edvidas pend.</span><span>${cadernoResume.dettes.toLocaleString('fr-FR')} ${currency}</span></div>` : ''}
+  <div class="row bold"><span>Net caderno</span><span>${cadernoResume.net>=0?'+':''}${cadernoResume.net.toLocaleString('fr-FR')} ${currency}</span></div>
+  <div class="separator"></div>` : ''}
   <div class="separator-thin"></div>
   <div class="center" style="margin-top:6px;font-size:10px;">Assinatura: ____________________</div>
   <div class="center" style="margin-top:6px;font-size:9px;">CKBPOS v${APP_VERSION}</div>
@@ -1159,7 +1407,8 @@ function generateProdutosHTML(data) {
 // PRODUTOS TICKET HTML - Format 58mm thermique
 // ============================================================
 function generateProdutosTicketHTML(data) {
-  const { shopName, produtos, currency, filterUser, filterDateFrom, filterDateTo, printedAt } = data;
+  const { shopName, produtos, currency, filterUser, filterDateFrom, filterDateTo, printedAt, ticketSizeMm: _tMm } = data;
+  const ticketW = `${_tMm || 72}mm`;
   const totalRevenue = (produtos||[]).reduce((s,p) => s + (p.total||0), 0);
 
   const rows = (produtos||[]).map(p => {
@@ -1177,9 +1426,9 @@ function generateProdutosTicketHTML(data) {
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
   <style>
-    @page { size: 72mm auto; margin: 0; }
+    @page { size: ${ticketW} auto; margin: 0; }
     * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
-    body { font-family: 'Courier New', Courier, monospace; font-size:10px; width:72mm; padding:4mm 2mm; color:#000; background:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    body { font-family: 'Courier New', Courier, monospace; font-size:10px; width:${ticketW}; padding:4mm 2mm; color:#000; background:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
     .center { text-align:center; }
     .sep    { border-top:2px solid #000; margin:4px 0; }
     .sep-d  { border-top:1px dashed #000; margin:3px 0; }
@@ -1358,5 +1607,68 @@ function generateHistoriqueHTML(data) {
 
   <div class="footer">CKBPOS — Relatório gerado automaticamente em ${printedAt || '-'}</div>
 
+  </body></html>`;
+}
+
+// ============================================================
+// CADERNO TICKET HTML - Format thermique (résumé du jour)
+// ============================================================
+function generateCadernoTicketHTML(data) {
+  const { shopName, entries, date_jour, currency, printedAt, ticketSizeMm: _tMm } = data;
+  const ticketW = `${_tMm || 72}mm`;
+
+  const totalPlus  = (entries||[]).filter(e => e.direction === 'entree').reduce((s,e) => s + (e.montant||0), 0);
+  const totalMoins = (entries||[]).filter(e => e.direction !== 'entree').reduce((s,e) => s + (e.montant||0), 0);
+  const dettes     = (entries||[]).filter(e => e.est_dette && e.statut_dette !== 'pago').reduce((s,e) => s + (e.montant||0), 0);
+  const net        = totalPlus - totalMoins;
+
+  const rows = (entries||[]).map(e => {
+    const signe = e.direction === 'entree' ? '+' : '-';
+    const col   = e.direction === 'entree' ? '#2d9e6b' : '#cc4444';
+    const motTxt = (e.motivo || '').substring(0, 16);
+    const nomTxt = (e.nom    || '-').substring(0, 18);
+    return `<div class="erow">
+      <span class="enom">${nomTxt}</span>
+      <span class="emot">${motTxt}</span>
+      <span class="eamt" style="color:${col};">${signe}${fmtNum(e.montant||0)}</span>
+    </div>`;
+  }).join('');
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <style>
+    @page { size: ${ticketW} auto; margin: 0; }
+    * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
+    body { font-family: 'Courier New', Courier, monospace; font-size:10px; width:${ticketW}; padding:4mm 2mm; color:#000; background:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    .center { text-align:center; }
+    .sep    { border-top:2px solid #000; margin:4px 0; }
+    .sep-d  { border-top:1px dashed #000; margin:3px 0; }
+    .title  { font-size:13px; font-weight:900; text-align:center; text-transform:uppercase; }
+    .sub    { font-size:9px; text-align:center; margin-bottom:2px; }
+    .meta   { font-size:9px; line-height:1.7; margin-bottom:3px; }
+    .erow   { display:flex; justify-content:space-between; align-items:center; font-size:9px; padding:2px 0; border-bottom:1px dashed #ccc; gap:3px; }
+    .enom   { flex:1; font-size:9px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .emot   { width:60px; font-size:8px; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0; }
+    .eamt   { width:50px; text-align:right; font-size:9px; flex-shrink:0; }
+    .totrow { display:flex; justify-content:space-between; font-size:10px; padding:2px 0; }
+    .totbig { display:flex; justify-content:space-between; font-size:12px; font-weight:900; margin-top:3px; padding:3px 0; border-top:2px solid #000; }
+    .footer { text-align:center; font-size:8px; margin-top:6px; }
+    @media print { * { color:#000 !important; background:#fff !important; } }
+  </style></head><body>
+  <div class="title">${shopName || 'CKBPOS'}</div>
+  <div class="sub">Caderno de Caixa</div>
+  <div class="sep"></div>
+  <div class="meta">
+    <div>Data: ${date_jour || '-'}</div>
+    <div>Impresso: ${printedAt || '-'}</div>
+  </div>
+  <div class="sep-d"></div>
+  ${rows || '<div class="center" style="padding:6px 0;font-size:9px;">Nenhum registo</div>'}
+  <div class="sep"></div>
+  <div class="totrow"><span>TOTAL +</span><span>+${fmtNum(totalPlus)} ${currency || 'Kz'}</span></div>
+  <div class="totrow"><span>TOTAL -</span><span>-${fmtNum(totalMoins)} ${currency || 'Kz'}</span></div>
+  ${dettes > 0 ? `<div class="totrow" style="color:#b00;"><span>D\u00edvidas pend.</span><span>-${fmtNum(dettes)} ${currency || 'Kz'}</span></div>` : ''}
+  <div class="totbig"><span>NET DO DIA</span><span>${net>=0?'+':''}${fmtNum(net)} ${currency || 'Kz'}</span></div>
+  <div class="sep-d"></div>
+  <div class="footer">CKBPOS \u2014 ${printedAt || '-'}</div>
   </body></html>`;
 }

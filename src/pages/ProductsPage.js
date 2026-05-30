@@ -31,7 +31,14 @@ export default function ProductsPage() {
   const [expandedProduct, setExpandedProduct] = useState(null);
   const [productVariants, setProductVariants] = useState({});
 
+
   useEffect(() => { loadProducts(); }, []);
+
+  // ✅ Déclaré avant le useEffect pour éviter TDZ
+  const filtered = products.filter(p =>
+    p.nom.toLowerCase().includes(search.toLowerCase()) ||
+    (p.categorie||'').toLowerCase().includes(search.toLowerCase())
+  );
 
   const loadProducts = async () => {
     const res = await window.electron.dbQuery("SELECT * FROM products WHERE actif=1 ORDER BY nom", []);
@@ -45,11 +52,6 @@ export default function ProductsPage() {
     setProductVariants(prev => ({ ...prev, [productId]: res.data || [] }));
     return res.data || [];
   };
-
-  const filtered = products.filter(p =>
-    p.nom.toLowerCase().includes(search.toLowerCase()) ||
-    (p.categorie||'').toLowerCase().includes(search.toLowerCase())
-  );
 
   const openAdd = () => { setForm(emptyForm); setEditing(null); setVariants([]); setShowModal(true); };
 
@@ -179,7 +181,7 @@ export default function ProductsPage() {
   const roundStock = (n) => Math.round(n * 100) / 100;
 
   return (
-    <div style={{ padding:24, height:'100%', overflowY:'auto' }}>
+    <div className="products-scroll" style={{ padding:24, height:'100%', overflowY:'auto' }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24 }}>
         <div>
           <h1 style={{ fontSize:22, fontWeight:700 }}>{t('products','title')}</h1>
@@ -195,8 +197,11 @@ export default function ProductsPage() {
       </div>
 
       <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-        {filtered.map(p => (
-          <div key={p.id} className="card" style={{ padding:0, overflow:'hidden' }}>
+        {filtered.map((p, rIdx) => (
+          <div key={p.id} className="card products-row" style={{ padding:0, overflow:'hidden',
+            border: '1px solid var(--border)',
+            transition:'border 0.1s, box-shadow 0.1s' }}
+>
             <div style={{ padding:'14px 16px', display:'flex', alignItems:'center', gap:12 }}>
               <div style={{ flex:1 }}>
                 <div style={{ display:'flex', alignItems:'center', gap:8 }}>
