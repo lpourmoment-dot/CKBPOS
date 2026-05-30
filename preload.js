@@ -84,4 +84,33 @@ contextBridge.exposeInMainWorld('electron', {
 
   // Impression Caderno du jour
   printCaderno: (data) => ipcRenderer.invoke('print-caderno', data),
+
+  // ── v1.4.0 Réseau P2P LAN ────────────────────────────────
+  networkPeersList: () => ipcRenderer.invoke('network-peers-list'),
+  networkStatus:    () => ipcRenderer.invoke('network-status'),
+
+  // Écouter les mises à jour de pairs en temps réel
+  // Retourne une fonction de cleanup à appeler dans useEffect return
+  onNetworkPeersUpdate: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('network-peers-changed', handler);
+    return () => ipcRenderer.removeListener('network-peers-changed', handler);
+  },
+
+  // ── v1.4.1 Console in-app ────────────────────────────────
+  debugLogsGet: () => ipcRenderer.invoke('debug-logs-get'),
+  onDebugLog: (cb) => {
+    const handler = (_, entry) => cb(entry);
+    ipcRenderer.on('debug-log', handler);
+    return () => ipcRenderer.removeListener('debug-log', handler);
+  },
+
+  // ── v1.5.0 Sync Delta LAN ────────────────────────────────
+  syncStatus: () => ipcRenderer.invoke('sync-status'),
+  syncForce:  () => ipcRenderer.invoke('sync-force'),
+  onSyncUpdate: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('sync-status-changed', handler);
+    return () => ipcRenderer.removeListener('sync-status-changed', handler);
+  },
 });
