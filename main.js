@@ -1983,6 +1983,62 @@ ipcMain.handle('network-peers-list', () => {
   catch(e) { return { success: false, error: e.message, data: [] }; }
 });
 
+// ── v1.6.0 — Stats multi-machines ──────────────────────────
+ipcMain.handle('machines-stats', () => {
+  try {
+    const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
+
+    // Machine locale toujours en premier
+    const localMachine = {
+      machine_id:    MACHINE_ID,
+      machine_label: labelRow?.value || 'Esta m\u00e1quina',
+      ip:            'LOCAL',
+      isLocal:       true,
+      status:        'online',
+    };
+
+    // Pairs connus en DB + statut live
+    const peers = db.prepare('SELECT * FROM network_peers ORDER BY last_seen DESC').all()
+      .map(p => ({ ...p, isLocal: false, status: peersMap.has(p.machine_id) ? 'online' : 'offline' }));
+
+    const all = [localMachine, ...peers];
+
+    const result = all.map(m => {
+      const day = db.prepare(
+        "SELECT COUNT(*) as cnt, COALESCE(SUM(total),0) as tot FROM ventes WHERE date(date_vente)=date('now') AND machine_id=?"
+      ).get(m.machine_id) || { cnt: 0, tot: 0 };
+
+      const week = db.prepare(
+        "SELECT COALESCE(SUM(total),0) as tot FROM ventes WHERE date_vente>=date('now','-6 days') AND machine_id=?"
+      ).get(m.machine_id) || { tot: 0 };
+
+      const month = db.prepare(
+        "SELECT COALESCE(SUM(total),0) as tot FROM ventes WHERE strftime('%Y-%m',date_vente)=strftime('%Y-%m','now') AND machine_id=?"
+      ).get(m.machine_id) || { tot: 0 };
+
+      const topProd = db.prepare(`
+        SELECT p.nom, SUM(vi.sous_total) as rev
+        FROM vente_items vi
+        JOIN ventes v  ON vi.vente_id  = v.id
+        JOIN products p ON vi.product_id = p.id
+        WHERE date(v.date_vente)=date('now') AND v.machine_id=?
+        GROUP BY p.id ORDER BY rev DESC LIMIT 1
+      `).get(m.machine_id);
+
+      return {
+        ...m,
+        today_total:  day.tot,
+        today_count:  day.cnt,
+        week_total:   week.tot,
+        month_total:  month.tot,
+        top_product:  topProd?.nom || null,
+      };
+    });
+
+    return { success: true, data: result };
+  } catch(e) { return { success: false, error: e.message, data: [] }; }
+});
+
 ipcMain.handle('network-status', () => {
   try {
     return {
@@ -2247,3 +2303,275 @@ setInterval(() => {
 // Les blocs WS existants appellent handleSyncMessage() dans leur clause else
 // Ceci est fait en monkey-patching le prototype via un registre global simple
 global._ckbSyncHandlers = { handleSyncMessage, onPeerRegistered };
+
+// ============================================================
+// SUPABASE CLOUD BRIDGE — v1.7.0
+// Sync bidirectionnel cloud via Supabase (REST + Realtime)
+// Config : settings → supabase_url + supabase_key
+// Table Supabase requise : cloud_sync_log (voir SQL ci-dessous)
+// ============================================================
+
+let _supabase     = null; // client Supabase actif
+let _supaChannel  = null; // canal Realtime
+let _cloudStatus  = { status: 'disconnected', lastSync: null, error: null };
+let _cloudPushBusy = false;
+
+// ── Envoi du statut cloud au renderer ──────────────────────
+function sendCloudStatus(patch) {
+  _cloudStatus = { ..._cloudStatus, ...patch };
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('cloud-sync-status', _cloudStatus); } catch(_e) {}
+  }
+}
+
+// ── Initialiser le client Supabase ─────────────────────────
+function initSupabase() {
+  try {
+    const urlRow = db.prepare("SELECT value FROM settings WHERE key='supabase_url'").get();
+    const keyRow = db.prepare("SELECT value FROM settings WHERE key='supabase_key'").get();
+    const url = urlRow?.value?.trim();
+    const key = keyRow?.value?.trim();
+
+    if (!url || !key || url === '' || key === '') {
+      sendCloudStatus({ status: 'not_configured', error: null });
+      return null;
+    }
+
+    // Charger le module dynamiquement (asarUnpack requis)
+    let createClient;
+    try { ({ createClient } = require('@supabase/supabase-js')); }
+    catch(_e) {
+      console.error('[CLOUD] @supabase/supabase-js non installé — npm install @supabase/supabase-js');
+      sendCloudStatus({ status: 'error', error: 'Module non installé' });
+      return null;
+    }
+
+    _supabase = createClient(url, key, {
+      auth:     { persistSession: false },
+      realtime: { params: { eventsPerSecond: 2 } },
+    });
+
+    console.log('[CLOUD] Client Supabase initialisé');
+    sendCloudStatus({ status: 'connecting', error: null });
+    return _supabase;
+  } catch(e) {
+    console.error('[CLOUD] initSupabase:', e.message);
+    sendCloudStatus({ status: 'error', error: e.message });
+    return null;
+  }
+}
+
+// ── Tester la connexion Supabase ───────────────────────────
+async function testSupabaseConnection() {
+  if (!_supabase) { initSupabase(); }
+  if (!_supabase) return false;
+  try {
+    const { error } = await _supabase.from('cloud_sync_log').select('id').limit(1);
+    if (error) throw error;
+    sendCloudStatus({ status: 'connected', error: null });
+    console.log('[CLOUD] Connexion Supabase OK');
+    return true;
+  } catch(e) {
+    console.error('[CLOUD] test connexion:', e.message);
+    sendCloudStatus({ status: 'error', error: e.message });
+    return false;
+  }
+}
+
+// ── Pousser les nouvelles entrées sync_log vers Supabase ───
+async function pushToCloud() {
+  if (!_supabase || _cloudPushBusy) return;
+  _cloudPushBusy = true;
+  try {
+    // Récupérer les entrées non encore poussées vers le cloud
+    const pending = db.prepare(
+      "SELECT * FROM sync_log WHERE machine_id=? AND (synced_to NOT LIKE '%\"cloud\"%' OR synced_to='[]') ORDER BY id LIMIT 100"
+    ).all(MACHINE_ID);
+
+    if (pending.length === 0) { _cloudPushBusy = false; return; }
+
+    sendCloudStatus({ status: 'syncing' });
+
+    // Enrichir avec les données de ligne actuelles
+    const rows = pending.map(e => {
+      if (!SYNC_TABLES.has(e.table_name)) return null;
+      let row_data = null;
+      if (e.operation !== 'DELETE') {
+        try { row_data = db.prepare('SELECT * FROM "' + e.table_name + '" WHERE id=?').get(e.record_id) || null; } catch(_e) {}
+      }
+      return {
+        source_machine_id: MACHINE_ID,
+        source_seq:        e.id,
+        table_name:        e.table_name,
+        record_id:         e.record_id,
+        operation:         row_data ? e.operation : 'DELETE',
+        row_data:          row_data,
+        created_at:        e.created_at,
+      };
+    }).filter(Boolean);
+
+    if (rows.length === 0) { _cloudPushBusy = false; return; }
+
+    const { error } = await _supabase.from('cloud_sync_log').insert(rows);
+    if (error) throw error;
+
+    // Marquer comme poussé vers le cloud
+    const ids = pending.map(e => e.id);
+    const upd = db.prepare('UPDATE sync_log SET synced_to=? WHERE id=?');
+    for (const e of pending) {
+      const arr = JSON.parse(e.synced_to || '[]');
+      if (!arr.includes('cloud')) { arr.push('cloud'); upd.run(JSON.stringify(arr), e.id); }
+    }
+
+    _cloudStatus.lastSync = new Date().toISOString();
+    sendCloudStatus({ status: 'synced', error: null, lastSync: _cloudStatus.lastSync });
+    console.log('[CLOUD] Push: ' + rows.length + ' entrees envoyees');
+  } catch(e) {
+    console.error('[CLOUD] pushToCloud:', e.message);
+    sendCloudStatus({ status: 'error', error: e.message });
+  }
+  _cloudPushBusy = false;
+}
+
+// ── Appliquer une ligne reçue du cloud ─────────────────────
+function applyCloudRow(entry) {
+  try {
+    if (!SYNC_TABLES.has(entry.table_name)) return;
+    db.prepare("UPDATE settings SET value='1' WHERE key='sync_applying'").run();
+    try {
+      if (entry.operation === 'DELETE') {
+        db.prepare('DELETE FROM "' + entry.table_name + '" WHERE id=?').run(entry.record_id);
+      } else if (entry.row_data && typeof entry.row_data === 'object') {
+        const cols = Object.keys(entry.row_data).map(c => '"' + c + '"').join(',');
+        const phs  = Object.keys(entry.row_data).map(() => '?').join(',');
+        db.prepare('INSERT OR REPLACE INTO "' + entry.table_name + '" (' + cols + ') VALUES (' + phs + ')').run(...Object.values(entry.row_data));
+      }
+    } finally {
+      db.prepare("UPDATE settings SET value='0' WHERE key='sync_applying'").run();
+    }
+  } catch(e) { console.error('[CLOUD] applyCloudRow:', e.message); }
+}
+
+// ── Abonnement Realtime Supabase ───────────────────────────
+function subscribeRealtime() {
+  if (!_supabase || _supaChannel) return;
+  try {
+    _supaChannel = _supabase
+      .channel('cloud_sync_log_changes')
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'cloud_sync_log' },
+        (payload) => {
+          const entry = payload.new;
+          if (!entry || entry.source_machine_id === MACHINE_ID) return; // ignorer nos propres entrées
+          console.log('[CLOUD] Realtime: ' + entry.operation + ' sur ' + entry.table_name + ' #' + entry.record_id);
+          applyCloudRow(entry);
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            try { mainWindow.webContents.send('cloud-data-changed', { table: entry.table_name }); } catch(_e) {}
+          }
+        }
+      )
+      .subscribe((s) => {
+        if (s === 'SUBSCRIBED') {
+          console.log('[CLOUD] Realtime souscription active');
+          sendCloudStatus({ status: 'connected' });
+        } else if (s === 'CLOSED' || s === 'CHANNEL_ERROR') {
+          console.warn('[CLOUD] Realtime: ' + s);
+          _supaChannel = null;
+          sendCloudStatus({ status: 'error', error: 'Realtime ' + s });
+        }
+      });
+  } catch(e) {
+    console.error('[CLOUD] subscribeRealtime:', e.message);
+  }
+}
+
+// ── Pull initial : récupérer les changements manqués ──────
+async function pullFromCloud() {
+  if (!_supabase) return;
+  try {
+    // Récupérer le dernier seq cloud qu'on a traité
+    const seqRow = db.prepare("SELECT value FROM settings WHERE key='cloud_last_seq'").get();
+    const lastSeq = parseInt(seqRow?.value || '0', 10);
+
+    const { data, error } = await _supabase
+      .from('cloud_sync_log')
+      .select('*')
+      .neq('source_machine_id', MACHINE_ID) // ignorer nos propres entrées
+      .gt('id', lastSeq)
+      .order('id', { ascending: true })
+      .limit(200);
+
+    if (error) throw error;
+    if (!data || data.length === 0) return;
+
+    let applied = 0;
+    for (const entry of data) { applyCloudRow(entry); applied++; }
+
+    // Sauvegarder le dernier seq traité
+    const newSeq = data[data.length - 1].id;
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('cloud_last_seq',?)").run(String(newSeq));
+
+    console.log('[CLOUD] Pull: ' + applied + ' entrees appliquees (dernier seq: ' + newSeq + ')');
+    _cloudStatus.lastSync = new Date().toISOString();
+    sendCloudStatus({ status: 'synced', lastSync: _cloudStatus.lastSync });
+  } catch(e) {
+    console.error('[CLOUD] pullFromCloud:', e.message);
+  }
+}
+
+// ── Démarrage complet du bridge cloud ─────────────────────
+async function startCloudBridge() {
+  if (!initSupabase()) return;
+  const ok = await testSupabaseConnection();
+  if (!ok) return;
+  await pullFromCloud();   // récupérer d'abord ce qu'on a manqué
+  subscribeRealtime();     // puis souscrire aux nouveaux changements
+  await pushToCloud();     // puis pousser nos changements locaux
+}
+
+// ── IPC Handlers cloud ─────────────────────────────────────
+ipcMain.handle('cloud-connect', async () => {
+  try { await startCloudBridge(); return { success: true, status: _cloudStatus }; }
+  catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('cloud-status', () => ({ success: true, ..._cloudStatus }));
+
+ipcMain.handle('cloud-push', async () => {
+  try { await pushToCloud(); return { success: true }; }
+  catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('cloud-pull', async () => {
+  try { await pullFromCloud(); return { success: true }; }
+  catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('cloud-disconnect', () => {
+  try {
+    if (_supaChannel) { _supabase?.removeChannel(_supaChannel); _supaChannel = null; }
+    _supabase = null;
+    sendCloudStatus({ status: 'disconnected', error: null });
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ── Démarrage auto si credentials déjà configurés ─────────
+app.whenReady().then(() => {
+  setTimeout(async () => {
+    const urlRow = db.prepare("SELECT value FROM settings WHERE key='supabase_url'").get();
+    if (urlRow?.value?.trim()) {
+      console.log('[CLOUD] Démarrage auto Supabase bridge');
+      await startCloudBridge();
+    }
+    // Push cloud toutes les 60s si connecté
+    setInterval(async () => {
+      if (_supabase) await pushToCloud();
+    }, 60000);
+  }, 3000); // délai après démarrage LAN
+});
+
+// Nettoyage Supabase à la fermeture
+app.on('before-quit', () => {
+  if (_supaChannel) { try { _supabase?.removeChannel(_supaChannel); } catch(_e) {} }
+});
