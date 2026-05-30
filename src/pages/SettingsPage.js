@@ -1,16 +1,52 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useTheme } from '../App';
 import { useLang } from '../utils/useLang';
 import { useAuth } from '../App';
-import { Settings, Cloud, CloudOff, Save, ExternalLink, KeyRound, Download, Trash2, AlertTriangle, MapPin, Phone, Hash, Printer, Plus, Minus } from 'lucide-react';
-import { useAlert, useConfirm } from '../components/AlertModal'; // ✅ AJOUT
+import { Settings, Cloud, CloudOff, Save, ExternalLink, KeyRound, Download, Trash2, AlertTriangle, MapPin, Phone, Hash, Printer, Plus, Minus, ChevronDown, ChevronRight, Ticket } from 'lucide-react';
+import { useAlert, useConfirm } from '../components/AlertModal';
+
+// â”€â”€ Composant accordéon réutilisable â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function Accordion({ id, icon, title, color, openSections, toggleSection, children, defaultOpen=false }) {
+  const isOpen = openSections.has(id);
+  return (
+    <div style={{
+      marginBottom: 10,
+      borderRadius: 12,
+      border: `1px solid ${isOpen ? (color || 'var(--accent)') + '40' : 'var(--border)'}`,
+      background: 'var(--bg-card)',
+      overflow: 'hidden',
+      transition: 'border-color 0.2s',
+    }}>
+      <button
+        onClick={() => toggleSection(id)}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '14px 18px', background: 'none', border: 'none', cursor: 'pointer',
+          color: 'var(--text-primary)', fontFamily: 'inherit',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontWeight: 700, fontSize: 15 }}>
+          <span style={{ color: color || 'var(--accent)' }}>{icon}</span>
+          {title}
+        </div>
+        <span style={{ color: 'var(--text-muted)', transition: 'transform 0.2s', transform: isOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}>
+          <ChevronDown size={16}/>
+        </span>
+      </button>
+      {isOpen && (
+        <div style={{ padding: '0 18px 18px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ paddingTop: 16 }}>{children}</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const { theme, toggleTheme } = useTheme();
   const { t, lang, currency, changeLang, changeCurrency } = useLang();
   const { user } = useAuth();
 
-  // ✅ Hook modal React (remplace alert() natif)
   const { showAlert, AlertModalComponent } = useAlert();
   const { showConfirm, ConfirmModalComponent } = useConfirm();
 
@@ -45,20 +81,127 @@ export default function SettingsPage() {
   const [machineLabel, setMachineLabel] = useState('');
   const [savingLabel, setSavingLabel]   = useState(false);
 
-  // Impressora v1.0.9
-  const [printers, setPrinters]               = useState([]);
-  const [printerName, setPrinterName]         = useState('');
-  const [copiesTicket, setCopiesTicket]       = useState(2);
-  const [copiesShift, setCopiesShift]         = useState(1);
-  const [printerSaved, setPrinterSaved]       = useState(false);
+  // Impressora
+  const [printers, setPrinters]         = useState([]);
+  const [printerName, setPrinterName]   = useState('');
+  const [copiesTicket, setCopiesTicket] = useState(2);
+  const [copiesShift, setCopiesShift]   = useState(1);
+  const [ticketSizeMm, setTicketSizeMm] = useState(72);
+  const [printerSaved, setPrinterSaved] = useState(false);
+
+  // ✅ Accordéons — sections ouvertes par défaut : Loja + Impressora
+  // ── Caderno de Caixa v1.2.7 ─────────────────────────────
+  const [cMotivos, setCMotivos]     = useState([]);
+  const [cTrabalhadores, setCTrab]  = useState([]);
+  const [cProdutos, setCProdutos]   = useState([]);
+  const [newMIcon, setNewMIcon]     = useState('');
+  const [newMLabel, setNewMLabel]   = useState('');
+  const [newMDir, setNewMDir]       = useState('sortie');
+  const [newMDette, setNewMDette]   = useState(false);
+  const [newMRole, setNewMRole]     = useState('Geral');
+  const [newTrabNom, setNewTrabNom] = useState('');
+  const [newProdNom, setNewProdNom] = useState('');
+  const [newProdPrix, setNewProdPrix] = useState('');
+
+  const [openSections, setOpenSections] = useState(new Set());
+  const toggleSection = (id) => {
+    setOpenSections(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  // ✅ Personnalisation ticket
+  const [ticketFlags, setTicketFlags] = useState({
+    showQr:        true,
+    showAddress:   true,
+    showPhone:     true,
+    showNif:       true,
+    showFactureNum: true,
+    showClientNom: true,
+    showClientNif: true,
+    showSeller:    true,
+    showObrigado:  true,
+    showVersion:   true,
+    showSecondaVia: true,
+    showMentionLegal: true, // ✅ Mention légale Angola — séparée de l'adresse
+  });
+  const [ticketFlagsSaved, setTicketFlagsSaved] = useState(false);
 
   useEffect(() => {
-    loadSettings(); checkDrive(); loadSecurity(); loadPrinters(); loadMachineId();
-    // ✅ Charger la version depuis main.js (package.json)
+    loadSettings(); checkDrive(); loadSecurity(); loadPrinters(); loadMachineId(); loadTicketFlags(); loadCaderno();
     window.electron?.appVersion?.().then(v => {
       if (v) window.__CKBPOS_VERSION__ = v;
     }).catch(() => {});
   }, []);
+
+  const loadTicketFlags = async () => {
+    const res = await window.electron.dbGet("SELECT value FROM settings WHERE key='ticket_flags'");
+    if (res.data?.value) {
+      try { setTicketFlags(JSON.parse(res.data.value)); } catch(e) {}
+    }
+  };
+
+  const saveTicketFlags = async () => {
+    await window.electron.dbQuery(
+      "INSERT OR REPLACE INTO settings (key,value) VALUES ('ticket_flags',?)",
+      [JSON.stringify(ticketFlags)]
+    );
+    setTicketFlagsSaved(true);
+    setTimeout(() => setTicketFlagsSaved(false), 2000);
+  };
+
+  const loadCaderno = async () => {
+    const [rm, rt, rp] = await Promise.all([
+      window.electron.cadernoMotivosList(),
+      window.electron.cadernoTrabalhList(),
+      window.electron.cadernoProdutosList(),
+    ]);
+    if (rm.success) setCMotivos(rm.data || []);
+    if (rt.success) setCTrab(rt.data || []);
+    if (rp.success) setCProdutos(rp.data || []);
+  };
+
+  const handleAddMotivo = async () => {
+    if (!newMLabel.trim()) return;
+    const r = await window.electron.cadernoMotivosAdd({
+      icone: newMIcon.trim() || '\u{1F4CC}',
+      label: newMLabel.trim(),
+      direction: newMDir,
+      est_dette: newMDette ? 1 : 0,
+      role: newMRole,
+    });
+    if (r.success) {
+      setNewMIcon(''); setNewMLabel('');
+      setNewMDir('sortie'); setNewMDette(false); setNewMRole('Geral');
+      loadCaderno();
+    }
+  };
+
+  const handleDeleteMotivo = async (id) => {
+    const ok = await showConfirm('', 'Remover este motivo?', 'warning');
+    if (!ok) return;
+    await window.electron.cadernoMotivosDelete(id);
+    loadCaderno();
+  };
+
+  const handleAddTrab = async () => {
+    if (!newTrabNom.trim()) return;
+    await window.electron.cadernoTrabalhAdd(newTrabNom.trim());
+    setNewTrabNom(''); loadCaderno();
+  };
+  const handleDeleteTrab = async (id) => {
+    await window.electron.cadernoTrabalhDelete(id); loadCaderno();
+  };
+  const handleAddProd = async () => {
+    if (!newProdNom.trim()) return;
+    await window.electron.cadernoProdutosAdd(newProdNom.trim(), parseFloat(newProdPrix) || 0);
+    setNewProdNom(''); setNewProdPrix(''); loadCaderno();
+  };
+  const handleDeleteProd = async (id) => {
+    await window.electron.cadernoProdutosDelete(id); loadCaderno();
+  };
 
   const loadPrinters = async () => {
     const res = await window.electron.getPrinters();
@@ -66,22 +209,24 @@ export default function SettingsPage() {
     const pName = await window.electron.dbGet("SELECT value FROM settings WHERE key='printer_name'");
     const pCopT = await window.electron.dbGet("SELECT value FROM settings WHERE key='printer_copies_ticket'");
     const pCopS = await window.electron.dbGet("SELECT value FROM settings WHERE key='printer_copies_shift'");
+    const pSize = await window.electron.dbGet("SELECT value FROM settings WHERE key='ticket_size_mm'");
     if (pName.data?.value !== undefined) setPrinterName(pName.data.value);
     if (pCopT.data?.value !== undefined) setCopiesTicket(parseInt(pCopT.data.value) || 2);
     if (pCopS.data?.value !== undefined) setCopiesShift(parseInt(pCopS.data.value) || 1);
+    if (pSize.data?.value !== undefined) setTicketSizeMm(parseInt(pSize.data.value) || 72);
   };
 
   const savePrinterSettings = async () => {
     await window.electron.dbQuery("UPDATE settings SET value=? WHERE key='printer_name'", [printerName]);
     await window.electron.dbQuery("UPDATE settings SET value=? WHERE key='printer_copies_ticket'", [String(copiesTicket)]);
     await window.electron.dbQuery("UPDATE settings SET value=? WHERE key='printer_copies_shift'", [String(copiesShift)]);
+    await window.electron.dbQuery("INSERT OR REPLACE INTO settings (key,value) VALUES ('ticket_size_mm',?)", [String(ticketSizeMm)]);
     setPrinterSaved(true);
     setTimeout(() => setPrinterSaved(false), 2000);
   };
 
   const loadSettings = async () => {
-    const keys = ['shop_name','shop_address','shop_phone','shop_nif'];
-    for (const key of keys) {
+    for (const key of ['shop_name','shop_address','shop_phone','shop_nif']) {
       const res = await window.electron.dbGet(`SELECT value FROM settings WHERE key='${key}'`);
       if (res.data?.value !== undefined) {
         if (key === 'shop_name')    setShopName(res.data.value);
@@ -106,17 +251,8 @@ export default function SettingsPage() {
 
   const saveSettings = async () => {
     setSaving(true);
-    const fields = [
-      ['shop_name',    shopName],
-      ['shop_address', shopAddress],
-      ['shop_phone',   shopPhone],
-      ['shop_nif',     shopNif],
-    ];
-    for (const [key, value] of fields) {
-      await window.electron.dbQuery(
-        "INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)",
-        [key, value]
-      );
+    for (const [key, value] of [['shop_name',shopName],['shop_address',shopAddress],['shop_phone',shopPhone],['shop_nif',shopNif]]) {
+      await window.electron.dbQuery("INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)", [key, value]);
     }
     setMsg(t('settings','saved2'));
     setTimeout(() => setMsg(''), 3000);
@@ -124,7 +260,7 @@ export default function SettingsPage() {
   };
 
   const saveSecurity = async () => {
-    if (!question || !resposta) { setSecMsg('? Preencha a pergunta e a resposta'); return; }
+    if (!question || !resposta) { setSecMsg('❌ Preencha a pergunta e a resposta'); return; }
     await window.electron.dbQuery(
       "UPDATE users SET question_secreta=?, resposta_secreta=? WHERE id=?",
       [question, resposta.toLowerCase().trim(), user.id]
@@ -136,10 +272,7 @@ export default function SettingsPage() {
 
   const loadMachineId = async () => {
     const res = await window.electron.getMachineId();
-    if (res.success) {
-      setMachineInfo(res);
-      setMachineLabel(res.machine_label || 'Caixa Principal');
-    }
+    if (res.success) { setMachineInfo(res); setMachineLabel(res.machine_label || 'Caixa Principal'); }
   };
 
   const handleSaveMachineLabel = async () => {
@@ -151,43 +284,26 @@ export default function SettingsPage() {
   };
 
   const handleForceMigration = async () => {
-    setMigrating(true);
-    setMigrateMsg('');
+    setMigrating(true); setMigrateMsg('');
     try {
       const res = await window.electron.forceMigration();
-      if (res.success) {
-        setMigrateMsg('✅ ' + res.message);
-      } else {
-        setMigrateMsg('? Erro: ' + res.error);
-      }
-    } catch(e) {
-      setMigrateMsg('? Erro: ' + e.message);
-    } finally {
-      setMigrating(false);
-    }
+      setMigrateMsg(res.success ? '✅ ' + res.message : '❌ Erro: ' + res.error);
+    } catch(e) { setMigrateMsg('❌ Erro: ' + e.message); }
+    finally { setMigrating(false); }
   };
 
   const handleBackupLocal = async () => {
     const res = await window.electron.backupLocal();
-    if (res.success) setMsg(`✅ Backup salvo em: ${res.path}`);
-    else setMsg('? Erro no backup: ' + res.error);
+    setMsg(res.success ? `✅ Backup salvo em: ${res.path}` : '❌ Erro no backup: ' + res.error);
     setTimeout(() => setMsg(''), 5000);
   };
 
   const handleRestoreBackup = async () => {
-    const ok = await showConfirm(
-      '⚠️ Restaurar Backup',
-      'Isso substituirá TODOS os dados atuais pelo backup selecionado.\nUm backup de segurança será criado automaticamente antes.\n\nDeseja continuar?',
-      'warning'
-    );
+    const ok = await showConfirm('⚠️ Restaurar Backup', 'Isso substituirá TODOS os dados atuais pelo backup selecionado.\nUm backup de segurança será criado automaticamente antes.\n\nDeseja continuar?', 'warning');
     if (!ok) return;
     const res = await window.electron.backupRestore();
     if (res.canceled) return;
-    if (!res.success) {
-      showAlert('Erro ao restaurar', res.error, 'error');
-      return;
-    }
-    // success + restarting: app vai reiniciar automaticamente
+    if (!res.success) { showAlert('Erro ao restaurar', res.error, 'error'); return; }
     showAlert('✅ Backup restaurado!', 'O aplicativo será reiniciado agora...', 'success');
   };
 
@@ -198,31 +314,22 @@ export default function SettingsPage() {
       setMsg('✅ Backup enviado ao Google Drive!');
       const syncRes = await window.electron.storeGet('last_sync');
       if (syncRes) setLastSync(syncRes);
-    } else {
-      setMsg('? Erro: ' + res.error);
-    }
+    } else { setMsg('❌ Erro: ' + res.error); }
     setTimeout(() => setMsg(''), 4000);
     setConnecting(false);
   };
 
   const handleReset = async () => {
-    // ✅ Guard inutile ici car le bouton est déjà disabled si resetConfirm !== 'RESETAR'
-    // mais on garde la sécurité sans alert() natif
     if (resetConfirm !== 'RESETAR') return;
     const res = await window.electron.resetApp();
-    // ✅ Remplacé alert() natif → showAlert React
     if (!res.success) showAlert('Erro ao resetar', res.error, 'error');
   };
 
   const startDriveAuth = async () => {
     setConnecting(true);
     const res = await window.electron.driveAuth();
-    if (res.success) {
-      setAuthUrl(res.url);
-    } else {
-      setMsg('? Erreur: ' + res.error);
-      setTimeout(() => setMsg(''), 4000);
-    }
+    if (res.success) { setAuthUrl(res.url); }
+    else { setMsg('❌ Erreur: ' + res.error); setTimeout(() => setMsg(''), 4000); }
     setConnecting(false);
   };
 
@@ -230,13 +337,8 @@ export default function SettingsPage() {
     if (!authCode.trim()) return;
     setConnecting(true);
     const res = await window.electron.driveToken(authCode.trim());
-    if (res.success) {
-      setDriveConnected(true);
-      setAuthUrl(''); setAuthCode('');
-      setMsg('✅ Google Drive conectado!');
-    } else {
-      setMsg('? Código inválido: ' + res.error);
-    }
+    if (res.success) { setDriveConnected(true); setAuthUrl(''); setAuthCode(''); setMsg('✅ Google Drive conectado!'); }
+    else { setMsg('❌ Código inválido: ' + res.error); }
     setTimeout(() => setMsg(''), 4000);
     setConnecting(false);
   };
@@ -244,8 +346,7 @@ export default function SettingsPage() {
   const handleDisconnect = async () => {
     await window.electron.storeDelete('google_token');
     await window.electron.storeDelete('drive_connected');
-    setDriveConnected(false);
-    setAuthUrl(''); setAuthCode('');
+    setDriveConnected(false); setAuthUrl(''); setAuthCode('');
     setMsg('✅ Google Drive déconnecté.');
     setTimeout(() => setMsg(''), 3000);
   };
@@ -253,7 +354,6 @@ export default function SettingsPage() {
   const currencies = ['AOA','CDF','XAF','XOF','MZN','NGN','GHS','KES','ZAR','TZS','UGX','RWF','ETB','USD','EUR','GBP'];
   const languages  = ['pt-BR','fr','en'];
   const langLabels = { 'pt-BR':'🇧🇷 Português', 'fr':'🇫🇷 Français', 'en':'🇬🇧 English' };
-
   const predefinedQuestions = [
     'Qual é o nome do seu primeiro animal de estimação?',
     'Qual é o nome da cidade onde você nasceu?',
@@ -263,11 +363,34 @@ export default function SettingsPage() {
     'Qual era o modelo do seu primeiro carro?',
   ];
 
+  // â”€â”€ Composant toggle ticket â”€â”€
+  const TicketToggle = ({ flag, label, icon }) => (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid var(--border)' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:13 }}>
+        <span>{icon}</span> {label}
+      </div>
+      <button
+        onClick={() => setTicketFlags(p => ({ ...p, [flag]: !p[flag] }))}
+        style={{
+          width:44, height:24, borderRadius:12, border:'none', cursor:'pointer',
+          background: ticketFlags[flag] ? 'var(--accent)' : 'var(--border)',
+          position:'relative', transition:'background 0.2s',
+        }}
+      >
+        <span style={{
+          position:'absolute', top:2, width:20, height:20, borderRadius:'50%',
+          background:'#fff', transition:'left 0.2s',
+          left: ticketFlags[flag] ? 22 : 2,
+        }}/>
+      </button>
+    </div>
+  );
+
   return (
     <div style={{ padding:24, height:'100%', overflowY:'auto', maxWidth:700 }}>
-      <div style={{ marginBottom:24 }}>
+      <div style={{ marginBottom:20 }}>
         <h1 style={{ fontSize:22, fontWeight:700, display:'flex', alignItems:'center', gap:10 }}>
-          <Settings size={22} color="var(--accent)"/> Configurações
+          <Settings size={22} color="var(--accent)"/> {t('settings','pageTitle')}
         </h1>
       </div>
 
@@ -281,272 +404,235 @@ export default function SettingsPage() {
       )}
 
       {/* ===== APPARENCE ===== */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
-          {t('settings','appearance')}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <Accordion id="aparencia" icon={<span>🎨</span>} title={t('settings','accAppearance')} openSections={openSections} toggleSection={toggleSection}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
           <div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>Tema da interface</div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+            <div style={{ fontWeight:600, fontSize:14 }}>{t('settings','themeLabel')}</div>
+            <div style={{ fontSize:12, color:'var(--text-secondary)', marginTop:2 }}>
               {theme === 'dark' ? t('settings','darkModeActive') : t('settings','lightModeActive')}
             </div>
           </div>
-          <button onClick={toggleTheme} className="theme-toggle-btn" style={{ minWidth: 120 }}>
+          <button onClick={toggleTheme} className="theme-toggle-btn" style={{ minWidth:120 }}>
             {theme === 'dark' ? t('settings','switchToLight') : t('settings','switchToDark')}
           </button>
         </div>
-      </div>
-
-      {/* ===== LOJA ===== */}
-      <div className="card" style={{ marginBottom:16 }}>
-        <h2 style={{ fontSize:16, fontWeight:700, marginBottom:16 }}>🏪 Informações da Loja</h2>
-        <p style={{ fontSize:12, color:'var(--text-muted)', marginBottom:14 }}>
-          Ces informations apparaissent sur chaque ticket imprimé.
-        </p>
-        <div style={{ display:'flex', flexDirection:'column', gap:14, marginBottom:16 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
           <div className="form-group">
-            <label className="form-label">Nome da loja *</label>
-            <input type="text" className="form-input" value={shopName}
-              onChange={e=>setShopName(e.target.value)} placeholder="Ex: KUZULU NLANDU"/>
-          </div>
-          <div className="form-group">
-            <label className="form-label"><MapPin size={12} style={{ display:'inline', marginRight:4 }}/>Endereço</label>
-            <input type="text" className="form-input" value={shopAddress}
-              onChange={e=>setShopAddress(e.target.value)}
-              placeholder="Ex: Rua Kilamba Kiaxi, Bairro Golf1, Luanda"/>
-          </div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
-            <div className="form-group">
-              <label className="form-label"><Phone size={12} style={{ display:'inline', marginRight:4 }}/>Telefone</label>
-              <input type="text" className="form-input" value={shopPhone}
-                onChange={e=>setShopPhone(e.target.value)} placeholder="Ex: 934450120"/>
-            </div>
-            <div className="form-group">
-              <label className="form-label"><Hash size={12} style={{ display:'inline', marginRight:4 }}/>NIF / Contribuinte</label>
-              <input type="text" className="form-input" value={shopNif}
-                onChange={e=>setShopNif(e.target.value)} placeholder="Ex: 5000184200"/>
-            </div>
-          </div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
-            <div className="form-group">
-              <label className="form-label">Idioma</label>
-              <select className="form-input" value={lang} onChange={e=>changeLang(e.target.value)}>
-                {languages.map(l=><option key={l} value={l}>{langLabels[l]||l}</option>)}
-              </select>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Moeda</label>
-              <select className="form-input" value={currency} onChange={e=>changeCurrency(e.target.value)}>
-                {currencies.map(c=><option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-          </div>
-        </div>
-        <button onClick={saveSettings} className="btn btn-primary" disabled={saving}>
-          <Save size={16}/> {saving ? t('settings','saving2') : t('settings','save')}
-        </button>
-      </div>
-
-      {/* ===== SECURITE ===== */}
-      <div className="card" style={{ marginBottom:16 }}>
-        <h2 style={{ fontSize:16, fontWeight:700, marginBottom:16 }}>
-          <KeyRound size={16} style={{ display:'inline', marginRight:8 }}/>Segurança — Pergunta Secreta
-        </h2>
-        <p style={{ fontSize:13, color:'var(--text-secondary)', marginBottom:14 }}>
-          Configure uma pergunta secreta para recuperar sua senha caso esqueça.
-        </p>
-        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
-          <div className="form-group">
-            <label className="form-label">Pergunta de segurança</label>
-            <select className="form-input" value={question} onChange={e=>setQuestion(e.target.value)}>
-              <option value="">Selecione uma pergunta...</option>
-              {predefinedQuestions.map(q=><option key={q} value={q}>{q}</option>)}
+            <label className="form-label">{t('settings','language')}</label>
+            <select className="form-input" value={lang} onChange={e => changeLang(e.target.value)}>
+              {languages.map(l => <option key={l} value={l}>{langLabels[l]}</option>)}
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Sua resposta</label>
-            <input type="text" className="form-input" value={resposta}
-              onChange={e=>setResposta(e.target.value)} placeholder="Sua resposta..."/>
+            <label className="form-label">{t('settings','currency')}</label>
+            <select className="form-input" value={currency} onChange={e => changeCurrency(e.target.value)}>
+              {currencies.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
           </div>
-          {secMsg && <div style={{ fontSize:13, color:secMsg.includes('✅')?'var(--success)':'var(--danger)' }}>{secMsg}</div>}
-          <button onClick={saveSecurity} className="btn btn-primary" style={{ alignSelf:'flex-start' }}>
-            <Save size={16}/> Salvar Pergunta
+        </div>
+      </Accordion>
+
+      {/* ===== LOJA ===== */}
+      <Accordion id="loja" icon={<span>🏪</span>} title={t('settings','accShop')} openSections={openSections} toggleSection={toggleSection}>
+        <p style={{ fontSize:12, color:'var(--text-muted)', marginBottom:14 }}>
+          {t('settings','ticketSubtitle')}
+        </p>
+        <div style={{ display:'flex', flexDirection:'column', gap:14, marginBottom:16 }}>
+          <div className="form-group">
+            <label className="form-label">{t('settings','shopNameLabel')}</label>
+            <input type="text" className="form-input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Ex: Kuzulu Nlandu - Comercio Geral"/>
+          </div>
+          <div className="form-group">
+            <label className="form-label"><MapPin size={12} style={{display:'inline',marginRight:4}}/>{t('settings','addressLabel')}</label>
+            <input type="text" className="form-input" value={shopAddress} onChange={e=>setShopAddress(e.target.value)} placeholder="Rua, Bairro, Cidade"/>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div className="form-group">
+              <label className="form-label"><Phone size={12} style={{display:'inline',marginRight:4}}/>{t('settings','phoneLabel')}</label>
+              <input type="text" className="form-input" value={shopPhone} onChange={e=>setShopPhone(e.target.value)} placeholder="934 450 120"/>
+            </div>
+            <div className="form-group">
+              <label className="form-label"><Hash size={12} style={{display:'inline',marginRight:4}}/>NIF / Contribuinte</label>
+              <input type="text" className="form-input" value={shopNif} onChange={e=>setShopNif(e.target.value)} placeholder="5000181420"/>
+            </div>
+          </div>
+        </div>
+        <button onClick={saveSettings} disabled={saving} className="btn btn-primary">
+          <Save size={14}/> {saving ? t('settings','saving') : t('settings','saveConfig')}
+        </button>
+      </Accordion>
+
+      {/* ===== TICKET ===== */}
+      <Accordion id="ticket" icon={<Ticket size={16}/>} title={t('settings','accTicket')} openSections={openSections} toggleSection={toggleSection}>
+        <p style={{ fontSize:12, color:'var(--text-muted)', marginBottom:14 }}>
+          Choisissez ce qui s'affiche sur chaque ticket imprimé.
+        </p>
+        <TicketToggle flag="showQr"           {...{label: t('settings','ticketQr')}}                     icon="QR"/>
+        <TicketToggle flag="showAddress"      {...{label: t('settings','ticketAddress')}}           icon="📍"/>
+        <TicketToggle flag="showPhone"        {...{label: t('settings','ticketPhone')}}         icon="📞"/>
+        <TicketToggle flag="showNif"          {...{label: t('settings','ticketNif')}}           icon="NIF"/>
+        <TicketToggle flag="showFactureNum"   {...{label: t('settings','ticketFacture')}}            icon="🔢"/>
+        <TicketToggle flag="showClientNom"    {...{label: t('settings','ticketClientNom')}}                icon="👤"/>
+        <TicketToggle flag="showClientNif"    {...{label: t('settings','ticketClientNif')}}                icon="ID"/>
+        <TicketToggle flag="showSeller"       {...{label: t('settings','ticketSeller')}}               icon="👤"/>
+        <TicketToggle flag="showMentionLegal" {...{label: t('settings','ticketLegal')}} icon="📋"/>
+        <TicketToggle flag="showObrigado"     label={t('settings','ticketObrigado')}   icon="🙌"/>
+        <TicketToggle flag="showVersion"      {...{label: t('settings','ticketVersion')}}               icon="v"/>
+        <TicketToggle flag="showSecondaVia"   {...{label: t('settings','ticketSecondVia')}}      icon="📄"/>
+        <div style={{ marginTop:16 }}>
+          <button onClick={saveTicketFlags} className="btn btn-primary">
+            <Save size={14}/> {ticketFlagsSaved ? '✅ ' + t('settings','saved2') : t('settings','saveConfig')}
           </button>
         </div>
-      </div>
+      </Accordion>
+
+      {/* ===== SEGURANÇA ===== */}
+      <Accordion id="seguranca" icon={<KeyRound size={16}/>} title={t('settings','accSecurity')} openSections={openSections} toggleSection={toggleSection}>
+        <p style={{ fontSize:12, color:'var(--text-muted)', marginBottom:14 }}>
+          Configure uma pergunta secreta para recuperar sua senha caso esqueça.
+        </p>
+        <div className="form-group" style={{ marginBottom:12 }}>
+          <label className="form-label">Pergunta de Segurança</label>
+          <select className="form-input" value={question} onChange={e=>setQuestion(e.target.value)}>
+            <option value="">{t('settings','secSelect')}</option>
+            {predefinedQuestions.map((q,i) => <option key={i} value={q}>{q}</option>)}
+          </select>
+        </div>
+        <div className="form-group" style={{ marginBottom:12 }}>
+          <label className="form-label">Resposta</label>
+          <input type="password" className="form-input" value={resposta} onChange={e=>setResposta(e.target.value)} {...{placeholder: t('settings','secAnswerPh')}}/>
+        </div>
+        {secMsg && <div style={{ fontSize:12, color:secMsg.includes('✅')?'var(--success)':'var(--danger)', marginBottom:8 }}>{secMsg}</div>}
+        <button onClick={saveSecurity} className="btn btn-primary"><Save size={14}/> {t('settings','secSaveBtn')}</button>
+      </Accordion>
 
       {/* ===== BACKUP ===== */}
-      <div className="card" style={{ marginBottom:16 }}>
-        <h2 style={{ fontSize:16, fontWeight:700, marginBottom:16 }}>
-          <Download size={16} style={{ display:'inline', marginRight:8 }}/>Backup de Dados
-        </h2>
+      <Accordion id="backup" icon={<Download size={16}/>} title={t('settings','accBackup')} openSections={openSections} toggleSection={toggleSection}>
         <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-          <button onClick={handleBackupLocal} className="btn btn-secondary" style={{ justifyContent:'flex-start', gap:10 }}>
-            <Download size={16}/> 💾 Salvar backup local (escolher pasta)
+          <button onClick={handleBackupLocal} className="btn btn-secondary" style={{ justifyContent:'flex-start', gap:8 }}>
+            <Save size={14}/> {t('settings','backupLocal')}
           </button>
-          <button onClick={handleBackupDrive} disabled={connecting||!driveConnected} className="btn btn-secondary" style={{ justifyContent:'flex-start', gap:10 }}>
-            <Cloud size={16}/> ?? Enviar backup para Google Drive
+          <button onClick={handleRestoreBackup} className="btn" style={{ justifyContent:'flex-start', gap:8, background:'rgba(245,200,66,0.1)', border:'1px solid var(--accent)', color:'var(--accent)' }}>
+            <Download size={14}/> 📥 {t('settings','backupRestore')}
           </button>
-          <button onClick={handleRestoreBackup} className="btn btn-secondary" style={{ justifyContent:'flex-start', gap:10, borderColor:'var(--warning)', color:'var(--warning)' }}>
-            <Download size={16}/> 📥 Restaurar backup (.db)
-          </button>
-          {!driveConnected && <p style={{ fontSize:12, color:'var(--text-muted)' }}>⚠️ Conecte o Google Drive primeiro</p>}
-          {lastSync && driveConnected && <p style={{ fontSize:11, color:'var(--text-muted)' }}>? Último sync: {new Date(lastSync).toLocaleString('fr-FR')}</p>}
         </div>
-      </div>
+      </Accordion>
 
       {/* ===== GOOGLE DRIVE ===== */}
-      <div className="card" style={{ marginBottom:16 }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
-          <h2 style={{ fontSize:16, fontWeight:700, display:'flex', alignItems:'center', gap:8 }}>
-            {driveConnected ? <Cloud size={18} color="var(--success)"/> : <CloudOff size={18} color="var(--text-muted)"/>}
-            Google Drive
-          </h2>
-          <span className={`badge ${driveConnected?'badge-success':'badge-danger'}`}>
-            {driveConnected ? t('settings','connected') : t('settings','notConnected2')}
+      <Accordion id="drive" icon={driveConnected ? <Cloud size={16}/> : <CloudOff size={16}/>} title={t('settings','accDrive')} openSections={openSections} toggleSection={toggleSection}>
+        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
+          <span style={{ width:8, height:8, borderRadius:'50%', background:driveConnected?'var(--success)':'var(--text-muted)', display:'inline-block'}}/>
+          <span style={{ fontSize:13, fontWeight:600, color:driveConnected?'var(--success)':'var(--text-muted)' }}>
+            {driveConnected ? t('settings','connected') : t('settings','notConnected')}
           </span>
+          {lastSync && <span style={{ fontSize:11, color:'var(--text-muted)' }}>· {t('settings','lastSync')} {lastSync}</span>}
         </div>
         {driveConnected ? (
           <div style={{ display:'flex', gap:10 }}>
-            <button onClick={handleBackupDrive} className="btn btn-primary" disabled={connecting}>
-              <Cloud size={16}/> {connecting ? t('settings','syncingNow') : t('settings','syncNow2')}
+            <button onClick={handleBackupDrive} className="btn btn-primary" disabled={connecting} style={{ flex:1, justifyContent:'center' }}>
+              <Cloud size={14}/> {connecting ? 'Enviando...' : 'Enviar backup agora'}
             </button>
-            <button onClick={handleDisconnect} className="btn btn-danger">Desconectar</button>
+            <button onClick={handleDisconnect} className="btn btn-secondary">
+              <CloudOff size={14}/> {t('settings','driveDisconnect')}
+            </button>
           </div>
         ) : (
-          <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
             {!authUrl ? (
-              <button onClick={startDriveAuth} className="btn btn-primary" disabled={connecting}>
-                <Cloud size={16}/> {connecting ? '...' : t('settings','connectDrive')}
+              <button onClick={startDriveAuth} className="btn btn-primary" disabled={connecting} style={{ justifyContent:'center' }}>
+                <Cloud size={14}/> {connecting ? 'Conectando...' : 'Conectar Google Drive'}
               </button>
             ) : (
               <>
-                <div style={{ padding:'10px 14px', borderRadius:8, background:'rgba(34,197,94,0.08)', border:'1px solid rgba(34,197,94,0.3)', fontSize:13, color:'var(--success)' }}>
+                <div style={{ fontSize:12, color:'var(--success)', padding:'8px 12px', background:'rgba(34,197,94,0.1)', borderRadius:8 }}>
                   ✅ Page Google ouverte. Autorisez puis copiez le code ici.
                 </div>
-                <button onClick={()=>window.open(authUrl,'_blank')} className="btn btn-secondary" style={{ fontSize:12 }}>
-                  <ExternalLink size={14}/> Rouvrir la page Google
+                <button onClick={() => window.open(authUrl,'_blank')} className="btn btn-secondary" style={{ gap:8 }}>
+                  <ExternalLink size={14}/> {t('settings','driveReopen')}
                 </button>
-                <div className="form-group">
-                  <label className="form-label">Code d'autorisation</label>
-                  <input type="text" className="form-input" value={authCode}
-                    onChange={e=>setAuthCode(e.target.value)}
-                    placeholder="Collez le code ici..." autoFocus/>
-                </div>
-                <div style={{ display:'flex', gap:10 }}>
-                  <button onClick={()=>{setAuthUrl('');setAuthCode('');}} className="btn btn-secondary" style={{ flex:1, justifyContent:'center' }}>Annuler</button>
-                  <button onClick={submitCode} className="btn btn-primary" style={{ flex:1, justifyContent:'center' }} disabled={!authCode||connecting}>
-                    {connecting ? t('settings','validating2') : t('settings','validateCode')}
+                <div style={{ display:'flex', gap:8 }}>
+                  <input type="text" className="form-input" value={authCode} onChange={e=>setAuthCode(e.target.value)} placeholder="Cole o código aqui..."/>
+                  <button onClick={submitCode} className="btn btn-primary" disabled={connecting || !authCode.trim()}>
+                    {connecting ? '...' : 'OK'}
                   </button>
                 </div>
               </>
             )}
           </div>
         )}
-      </div>
+      </Accordion>
 
-      {/* ===== IMPRESSORA v1.0.9 ===== */}
-      <div className="card" style={{ marginBottom:16 }}>
-        <h2 style={{ fontSize:16, fontWeight:700, marginBottom:16, display:'flex', alignItems:'center', gap:8 }}>
-          <Printer size={16} color="var(--accent)"/> Impressora
-        </h2>
-        <div className="form-group" style={{ marginBottom:14 }}>
-          <label className="form-label">Impressora padrão</label>
-          <select className="form-input" value={printerName} onChange={e=>setPrinterName(e.target.value)}
-            style={{ borderColor: printerName ? 'var(--accent)' : 'var(--border)' }}>
-            <option value="">— Selecionar impressora —</option>
+      {/* ===== IMPRESSORA ===== */}
+      <Accordion id="impressora" icon={<Printer size={16}/>} title={t('settings','accPrinter')} openSections={openSections} toggleSection={toggleSection}>
+        <div style={{ marginBottom:14 }}>
+          <label className="form-label">{t('settings','printerLabel')}</label>
+          <select className="form-input" value={printerName} onChange={e=>setPrinterName(e.target.value)}>
+            <option value="">{t('settings','printerSelect')}</option>
             {printers.map(p => (
               <option key={p.name} value={p.name}>
-                {p.isDefault ? '🖥️ ' : '🖨️ '}{p.name}
+                {p.isDefault ? '\uD83D\uDDA5\uFE0F ' : '\uD83D\uDDA8\uFE0F '}{p.name}
               </option>
             ))}
           </select>
-          {printerName && <div style={{ fontSize:11, color:'var(--success)', marginTop:4 }}>✅ Impressão silenciosa ativada — sem diálogo Windows</div>}
-          {!printerName && <div style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>⚠️ Sem impressora selecionada — diálogo Windows será exibido</div>}
+          <p style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>
+            {t('settings','printerSilent')}
+          </p>
         </div>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:14 }}>
+        <div style={{ marginBottom:14 }}>
+          <label className="form-label">Largeur ticket thermique</label>
+          <select className="form-input" value={ticketSizeMm} onChange={e=>setTicketSizeMm(parseInt(e.target.value))}>
+            <option value={52}>52mm</option>
+            <option value={60}>60mm</option>
+            <option value={72}>72mm \u2014 POS-80C (actuel)</option>
+            <option value={80}>80mm</option>
+          </select>
+          <p style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>
+            Adapte la largeur du ticket \u00e0 votre imprimante thermique. Actuel\u00a0: {ticketSizeMm}mm.
+          </p>
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
           <div>
-            <label className="form-label" style={{ display:'block', marginBottom:6 }}>🎫 Cópias — Ticket venda</label>
-            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-              <button onClick={()=>setCopiesTicket(Math.max(1,copiesTicket-1))} style={{ width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-primary)', fontSize:16 }}>−</button>
-              <span style={{ fontSize:22, fontWeight:900, color:'var(--accent)', fontFamily:'monospace', minWidth:32, textAlign:'center' }}>{copiesTicket}</span>
-              <button onClick={()=>setCopiesTicket(Math.min(5,copiesTicket+1))} style={{ width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-primary)', fontSize:16 }}>+</button>
+            <label className="form-label" style={{ fontSize:12 }}>{t('settings','copiesTicket')}</label>
+            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <button onClick={()=>setCopiesTicket(Math.max(1,copiesTicket-1))} className="btn btn-icon btn-secondary"><Minus size={12}/></button>
+              <span style={{ minWidth:24, textAlign:'center', fontWeight:700 }}>{copiesTicket}</span>
+              <button onClick={()=>setCopiesTicket(Math.min(5,copiesTicket+1))} className="btn btn-icon btn-secondary"><Plus size={12}/></button>
+              <span style={{ fontSize:11, color:'var(--text-muted)' }}>{t('settings','defaultVal2')}</span>
             </div>
-            <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:4 }}>Par défaut : 2</div>
           </div>
           <div>
-            <label className="form-label" style={{ display:'block', marginBottom:6 }}>📊 Cópias — Relatório do dia</label>
-            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-              <button onClick={()=>setCopiesShift(Math.max(1,copiesShift-1))} style={{ width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-primary)', fontSize:16 }}>−</button>
-              <span style={{ fontSize:22, fontWeight:900, color:'var(--accent)', fontFamily:'monospace', minWidth:32, textAlign:'center' }}>{copiesShift}</span>
-              <button onClick={()=>setCopiesShift(Math.min(5,copiesShift+1))} style={{ width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-primary)', fontSize:16 }}>+</button>
+            <label className="form-label" style={{ fontSize:12 }}>{t('settings','copiesShift')}</label>
+            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <button onClick={()=>setCopiesShift(Math.max(1,copiesShift-1))} className="btn btn-icon btn-secondary"><Minus size={12}/></button>
+              <span style={{ minWidth:24, textAlign:'center', fontWeight:700 }}>{copiesShift}</span>
+              <button onClick={()=>setCopiesShift(Math.min(5,copiesShift+1))} className="btn btn-icon btn-secondary"><Plus size={12}/></button>
+              <span style={{ fontSize:11, color:'var(--text-muted)' }}>{t('settings','defaultVal1')}</span>
             </div>
-            <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:4 }}>Par défaut : 1</div>
           </div>
         </div>
-        <button onClick={savePrinterSettings} className="btn btn-primary" style={{ alignSelf:'flex-start' }}>
-          <Save size={16}/> {printerSaved ? t('settings','printerSaved') : t('settings','savePrinter')}
+        <button onClick={savePrinterSettings} className="btn btn-primary">
+          <Save size={14}/> {printerSaved ? '✅ ' + t('settings','saved2') : t('settings','printerSave')}
         </button>
-      </div>
+      </Accordion>
 
-      {/* ===== MIGRATION DB ===== */}
-      <div className="card" style={{ border:'1px solid rgba(59,130,246,0.3)' }}>
-        <h2 style={{ fontSize:16, fontWeight:700, marginBottom:8, color:'#60a5fa', display:'flex', alignItems:'center', gap:8 }}>
-          🔧 Manutenção do Banco de Dados
-        </h2>
-        <p style={{ fontSize:13, color:'var(--text-secondary)', marginBottom:14 }}>
-          Se o aplicativo apresentar erros como <strong>"no such table"</strong> ou <strong>"no column named"</strong>,
-          clique aqui para aplicar todas as atualizações do banco de dados sem perder dados existentes.
+      {/* ===== MANUTENÇÃO ===== */}
+      <Accordion id="manutencao" icon={<span>🔧</span>} title={t('settings','accMaint')} color="#60a5fa" openSections={openSections} toggleSection={toggleSection}>
+        <p style={{ fontSize:13, color:'var(--text-muted)', marginBottom:14 }}>
+          Se o aplicativo apresentar erros como <strong>"no such table"</strong> ou <strong>"no column named"</strong>, clique aqui para aplicar todas as atualizações do banco de dados sem perder dados existentes.
         </p>
-        <button onClick={handleForceMigration} disabled={migrating} className="btn btn-secondary" style={{ justifyContent:'flex-start', gap:10, borderColor:'#3b82f6' }}>
-          {migrating ? t('settings','migrating') : t('settings','forceMigration')}
+        <button onClick={handleForceMigration} disabled={migrating} className="btn btn-secondary" style={{ gap:8 }}>
+          🔧 {migrating ? t('settings','saving') : t('settings','migrateBtn')}
         </button>
         {migrateMsg && (
-          <div style={{ marginTop:10, padding:'8px 12px', borderRadius:8, background: migrateMsg.includes('✅') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', color: migrateMsg.includes('✅') ? 'var(--success)' : 'var(--danger)', fontSize:13, fontWeight:600 }}>
+          <div style={{ marginTop:10, fontSize:12, color:migrateMsg.includes('✅')?'var(--success)':'var(--danger)' }}>
             {migrateMsg}
           </div>
         )}
-      </div>
-
-      {/* ===== RESET ===== */}
-      <div className="card" style={{ border:'1px solid rgba(239,68,68,0.3)', marginTop:16 }}>
-        <h2 style={{ fontSize:16, fontWeight:700, marginBottom:8, color:'var(--danger)', display:'flex', alignItems:'center', gap:8 }}>
-          <AlertTriangle size={16}/> Zona de Perigo
-        </h2>
-        <p style={{ fontSize:13, color:'var(--text-secondary)', marginBottom:14 }}>
-          {t('settings','dangerZoneWarning')}
-        </p>
-        {!showReset ? (
-          <button onClick={()=>setShowReset(true)} className="btn btn-danger">
-            <Trash2 size={16}/> Resetar Aplicativo
-          </button>
-        ) : (
-          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-            <p style={{ fontSize:13, color:'var(--danger)', fontWeight:600 }}>⚠️ Digite "RESETAR" para confirmar:</p>
-            <input type="text" className="form-input" value={resetConfirm}
-              onChange={e=>setResetConfirm(e.target.value)}
-              placeholder="RESETAR" style={{ borderColor:'var(--danger)' }}/>
-            <div style={{ display:'flex', gap:10 }}>
-              <button onClick={()=>{setShowReset(false);setResetConfirm('');}} className="btn btn-secondary" style={{ flex:1, justifyContent:'center' }}>Cancelar</button>
-              <button onClick={handleReset} className="btn btn-danger" style={{ flex:1, justifyContent:'center' }} disabled={resetConfirm!=='RESETAR'}>
-                <Trash2 size={16}/> Confirmar Reset
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div style={{ marginTop:16, padding:14, borderRadius:10, background:'var(--bg-card)', border:'1px solid var(--border)', fontSize:12, color:'var(--text-muted)' }}>
-        <div style={{ fontWeight:600, marginBottom:8, color:'var(--text-secondary)', fontSize:13 }}>ℹ🏪 Informações do sistema</div>
-        <div style={{ marginBottom:4 }}>Versão: <strong style={{color:'var(--accent)'}}>CKBPOS v{window.__CKBPOS_VERSION__ || '1.1.6'}</strong></div>
-        <div style={{ marginBottom:4 }}>Banco de dados: SQLite (local)</div>
-        <div style={{ marginBottom:10 }}>Língua: {lang} · Moeda: {currency}</div>
         {machineInfo && (
-          <div style={{ borderTop:'1px solid var(--border)', paddingTop:10, marginTop:4 }}>
-            <div style={{ fontWeight:600, marginBottom:6, color:'var(--text-secondary)', fontSize:12 }}>
-              🖥️ Identificação desta Máquina
-              <span style={{ marginLeft:8, padding:'2px 8px', borderRadius:10, background:'rgba(240,192,64,0.15)', color:'var(--accent)', fontSize:10, fontWeight:700 }}>
+          <div style={{ marginTop:16, borderTop:'1px solid var(--border)', paddingTop:14 }}>
+            <div style={{ fontWeight:600, fontSize:13, marginBottom:8, color:'var(--text-secondary)', display:'flex', alignItems:'center', gap:8 }}>
+              🖥️ {t('settings','machineLabel2')}
+              <span style={{ padding:'2px 8px', borderRadius:10, background:'rgba(240,192,64,0.15)', color:'var(--accent)', fontSize:10, fontWeight:700 }}>
                 ID: {machineInfo.short_id}
               </span>
             </div>
@@ -554,8 +640,8 @@ export default function SettingsPage() {
               UUID: {machineInfo.machine_id}
             </div>
             <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-              <input type="text" value={machineLabel} onChange={e => setMachineLabel(e.target.value)}
-                placeholder="Nome desta máquina (ex: Caixa 1)"
+              <input type="text" value={machineLabel} onChange={e=>setMachineLabel(e.target.value)}
+                {...{placeholder: t('settings','machinePh')}}
                 style={{ flex:1, padding:'6px 10px', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', color:'var(--text-primary)', fontSize:12, fontFamily:'inherit', outline:'none' }}/>
               <button onClick={handleSaveMachineLabel} disabled={savingLabel}
                 style={{ padding:'6px 14px', borderRadius:8, border:'1px solid var(--accent)', background:'rgba(240,192,64,0.1)', color:'var(--accent)', fontWeight:700, fontSize:12, cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap' }}>
@@ -563,13 +649,189 @@ export default function SettingsPage() {
               </button>
             </div>
             <div style={{ marginTop:6, fontSize:11, color:'var(--text-muted)' }}>
-              ℹ? Este ID é único e permanente. Será usado para sincronização LAN na v2.0.0.
+              ℹ️ {t('settings','machineIDNote')}
             </div>
           </div>
         )}
-      </div>
+      </Accordion>
 
-      {/* ✅ Modals React purs — zéro focus trap */}
+      {/* ===== CADERNO DE CAIXA ===== */}
+      <Accordion id="caderno" icon={<span>📓</span>} title={t('settings','accCaderno')} color="#e8c547" openSections={openSections} toggleSection={toggleSection}>
+
+        {/* ── Motivos ── */}
+        <div style={{ marginBottom:20 }}>
+          <div style={{ fontWeight:700, fontSize:13, marginBottom:12, color:'var(--accent)', display:'flex', alignItems:'center', gap:6 }}>
+            🏷 Motivos
+          </div>
+
+          {/* Lista de motivos */}
+          <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:12 }}>
+            {cMotivos.map(m => (
+              <div key={m.id} style={{ display:'flex', alignItems:'center', gap:10, background:'var(--bg)', border:'1px solid var(--border)', borderRadius:8, padding:'9px 12px' }}>
+                <span style={{ fontSize:16, width:24, textAlign:'center' }}>{m.icone}</span>
+                <span style={{ flex:1, fontSize:13, fontWeight:500 }}>{m.label}</span>
+                <span style={{ fontSize:11, padding:'2px 8px', borderRadius:4,
+                  background: m.direction==='entree'?'rgba(76,175,125,0.12)':m.direction==='perte'?'rgba(245,158,11,0.12)':'rgba(224,82,82,0.12)',
+                  color: m.direction==='entree'?'var(--success)':m.direction==='perte'?'var(--warning)':'var(--danger)' }}>
+                  {m.direction==='entree'?'▲ Entra':m.direction==='perte'?'⚠ Perde':'▼ Sai'}
+                </span>
+                {m.est_dette ? <span style={{ fontSize:10, padding:'2px 7px', borderRadius:4, background:'rgba(224,82,82,0.1)', color:'var(--danger)', border:'1px solid rgba(224,82,82,0.2)' }}>Dívida</span> : null}
+                <span style={{ fontSize:10, color:'var(--text-muted)', background:'var(--bg-hover)', border:'1px solid var(--border)', borderRadius:4, padding:'2px 7px' }}>{m.role}</span>
+                <button onClick={() => handleDeleteMotivo(m.id)}
+                  style={{ background:'rgba(224,82,82,0.08)', color:'var(--danger)', border:'1px solid transparent', padding:'4px 8px', borderRadius:6, cursor:'pointer', fontSize:12 }}>🗑</button>
+              </div>
+            ))}
+          </div>
+
+          {/* Ajouter un motivo */}
+          <div style={{ background:'var(--bg)', border:'1px solid var(--border)', borderRadius:8, padding:12 }}>
+            <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:8, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px' }}>Adicionar motivo</div>
+            <div style={{ display:'grid', gridTemplateColumns:'52px 1fr 110px 110px 80px auto', gap:6, alignItems:'end' }}>
+              <div>
+                <div style={{ fontSize:10, color:'var(--text-muted)', marginBottom:3 }}>{t('settings','cadernoIcon')}</div>
+                <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(10, 32px)', gap:3, background:'var(--bg)', border:'1px solid var(--border)', borderRadius:8, padding:'6px 8px' }}>
+                    {['📌','💸','🍽','🥤','🍺','🎁','📦','🔻','⚠️','💰','🏠','🚗','🎮','📱','💊','🛒','🎵','🧴','🧹','🔧','🔑','📝','💡','🎯','🚀','⭐','🏆','🎪','🎨','🌟'].map(em => (
+                      <button key={em} type="button" onClick={() => setNewMIcon(em)}
+                        style={{ fontSize:17, background:newMIcon===em?'var(--accent-dim)':'transparent', border:newMIcon===em?'1px solid var(--accent)':'1px solid transparent', borderRadius:6, width:32, height:32, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                        {em}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                    <span style={{ fontSize:20, width:32, textAlign:'center' }}>{newMIcon || '📌'}</span>
+                    <input className="form-input" value={newMIcon} onChange={e=>setNewMIcon(e.target.value)}
+                      placeholder="ou tape un emoji…" style={{ fontSize:13, flex:1, padding:'5px 8px' }}/>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize:10, color:'var(--text-muted)', marginBottom:3 }}>Nome</div>
+                <input className="form-input" value={newMLabel} onChange={e=>setNewMLabel(e.target.value)} placeholder="Nome do motivo"
+                  onKeyDown={e=>e.key==='Enter'&&handleAddMotivo()} style={{ fontSize:12, padding:'7px 10px' }}/>
+              </div>
+              <div>
+                <div style={{ fontSize:10, color:'var(--text-muted)', marginBottom:3 }}>{t('settings','cadernoDirection')}</div>
+                <select className="form-input" value={newMDir} onChange={e=>setNewMDir(e.target.value)} style={{ fontSize:12, padding:'7px 10px' }}>
+                  <option value="sortie">▼ Sai</option>
+                  <option value="entree">▲ Entra</option>
+                  <option value="perte">⚠ Perde</option>
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize:10, color:'var(--text-muted)', marginBottom:3 }}>{t('settings','cadernoAccess')}</div>
+                <select className="form-input" value={newMRole} onChange={e=>setNewMRole(e.target.value)} style={{ fontSize:12, padding:'7px 10px' }}>
+                  <option value="Geral">{t('settings','cadernoGeneral')}</option>
+                  <option value="Admin">{t('settings','cadernoAdminOnly')}</option>
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize:10, color:'var(--text-muted)', marginBottom:3 }}>{t('settings','cadernoMotivoDead')}</div>
+                <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', paddingTop:6 }}>
+                  <input type="checkbox" checked={newMDette} onChange={e=>setNewMDette(e.target.checked)}
+                    style={{ accentColor:'var(--danger)', width:14, height:14 }}/>
+                  <span style={{ fontSize:11, color:'var(--text-secondary)' }}>{t('settings','cadernoMotiveSim')}</span>
+                </label>
+              </div>
+              <div>
+                <div style={{ fontSize:10, marginBottom:3 }}>&nbsp;</div>
+                <button onClick={handleAddMotivo} className="btn btn-primary" style={{ padding:'7px 12px', fontSize:13 }}>+</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Trabalhadores ── */}
+        <div style={{ marginBottom:20, borderTop:'1px solid var(--border)', paddingTop:16 }}>
+          <div style={{ fontWeight:700, fontSize:13, marginBottom:12, color:'var(--info)', display:'flex', alignItems:'center', gap:6 }}>
+            👷 Trabalhadores
+          </div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:10 }}>
+            {cTrabalhadores.map(t => (
+              <div key={t.id} style={{ display:'flex', alignItems:'center', gap:6, background:'var(--bg)', border:'1px solid var(--border)', borderRadius:20, padding:'4px 10px 4px 12px', fontSize:12 }}>
+                <span>{t.nom}</span>
+                <button onClick={() => handleDeleteTrab(t.id)}
+                  style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', fontSize:13, padding:'0 2px', lineHeight:1 }}>✕</button>
+              </div>
+            ))}
+            {cTrabalhadores.length === 0 && <span style={{ fontSize:12, color:'var(--text-muted)' }}>{t('settings','cadernoTrabNone')}</span>}
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <input className="form-input" value={newTrabNom} onChange={e=>setNewTrabNom(e.target.value)}
+              {...{placeholder: t('settings','cadernoTrabPh')}} style={{ fontSize:12, padding:'7px 10px' }}
+              onKeyDown={e=>e.key==='Enter'&&handleAddTrab()}/>
+            <button onClick={handleAddTrab} className="btn btn-primary" style={{ padding:'7px 14px', whiteSpace:'nowrap' }}>+ Adicionar</button>
+          </div>
+        </div>
+
+        {/* ── Produtos não registrados ── */}
+        <div style={{ borderTop:'1px solid var(--border)', paddingTop:16 }}>
+          <div style={{ fontWeight:700, fontSize:13, marginBottom:12, color:'var(--success)', display:'flex', alignItems:'center', gap:6 }}>
+            📦 Produtos não registrados
+          </div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:10 }}>
+            {cProdutos.map(p => (
+              <div key={p.id} style={{ display:'flex', alignItems:'center', gap:6, background:'var(--bg)', border:'1px solid var(--border)', borderRadius:20, padding:'4px 10px 4px 12px', fontSize:12 }}>
+                <span>{p.nom}</span>
+                {p.prix > 0 && <span style={{ color:'var(--accent)', fontFamily:'monospace', fontSize:10, marginLeft:4 }}>{Number(p.prix).toLocaleString('fr-FR')} Kz</span>}
+                <button onClick={() => handleDeleteProd(p.id)}
+                  style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', fontSize:13, padding:'0 2px', lineHeight:1 }}>✕</button>
+              </div>
+            ))}
+            {cProdutos.length === 0 && <span style={{ fontSize:12, color:'var(--text-muted)' }}>{t('settings','cadernoProdNone')}</span>}
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <input className="form-input" value={newProdNom} onChange={e=>setNewProdNom(e.target.value)}
+              {...{placeholder: t('settings','cadernoProdPh')}} style={{ fontSize:12, padding:'7px 10px', flex:2 }}
+              onKeyDown={e=>e.key==='Enter'&&handleAddProd()}/>
+            <div style={{ position:'relative', flex:1 }}>
+              <input className="form-input" value={newProdPrix} onChange={e=>setNewProdPrix(e.target.value)}
+                placeholder="Prix Kz" style={{ fontSize:12, padding:'7px 30px 7px 10px', width:'100%' }}
+                onKeyDown={e=>e.key==='Enter'&&handleAddProd()}/>
+              <span style={{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)', color:'var(--text-muted)', fontSize:10, pointerEvents:'none' }}>Kz</span>
+            </div>
+            <button onClick={handleAddProd} className="btn btn-primary" style={{ padding:'7px 14px', whiteSpace:'nowrap' }}>+ Adicionar</button>
+          </div>
+        </div>
+
+      </Accordion>
+
+      {/* ===== ZONA DE PERIGO ===== */}
+      <Accordion id="perigo" icon={<AlertTriangle size={16}/>} title={t('settings','accDanger')} color="var(--danger)" openSections={openSections} toggleSection={toggleSection}>
+        <p style={{ fontSize:13, color:'var(--text-muted)', marginBottom:14 }}>
+          Resetar o aplicativo apagará TODOS os dados (produtos, vendas, usuários). Esta ação não pode ser desfeita!
+        </p>
+        {!showReset ? (
+          <button onClick={()=>setShowReset(true)} className="btn btn-danger" style={{ gap:8 }}>
+            <Trash2 size={14}/> {t('settings','dangerReset')}
+          </button>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            <p style={{ fontSize:13, color:'var(--danger)', fontWeight:600 }}>
+              Digite <strong>RESETAR</strong> para confirmar:
+            </p>
+            <input type="text" className="form-input" value={resetConfirm} onChange={e=>setResetConfirm(e.target.value)} placeholder="RESETAR"/>
+            <div style={{ display:'flex', gap:8 }}>
+              <button onClick={handleReset} disabled={resetConfirm!=='RESETAR'} className="btn btn-danger" style={{ gap:8 }}>
+                <Trash2 size={14}/> {t('settings','dangerConfirmBtn')}
+              </button>
+              <button onClick={()=>{setShowReset(false);setResetConfirm('');}} className="btn btn-secondary">
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
+      </Accordion>
+
+      {/* ===== INFORMAÇÕES DO SISTEMA ===== */}
+      <Accordion id="sistema" icon={<span>ℹ️</span>} title={t('settings','accSystem')} openSections={openSections} toggleSection={toggleSection}>
+        <div style={{ fontSize:13, color:'var(--text-secondary)', lineHeight:1.8 }}>
+          <div>Versão: <strong style={{color:'var(--accent)'}}>CKBPOS v{window.__CKBPOS_VERSION__ || '1.2.3'}</strong></div>
+          <div>{t('settings','sysDb')}</div>
+          <div>{t('settings','sysLang')}: {lang} · {t('settings','sysCurrency')}: {currency}</div>
+        </div>
+      </Accordion>
+
       {AlertModalComponent}
       {ConfirmModalComponent}
     </div>

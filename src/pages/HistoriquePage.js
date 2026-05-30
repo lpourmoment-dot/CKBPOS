@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../App';
 import { useLang } from '../utils/useLang';
 import { Search, ChevronDown, ChevronUp, Printer, Edit2, X, RotateCcw, Calendar, User, Filter, Clock, Trash2, CheckSquare, Square } from 'lucide-react';
@@ -37,8 +37,39 @@ export default function HistoriquePage() {
   const [produtoStats, setProdutoStats] = useState([]);
   const [produtoSort, setProdutoSort] = useState('total');
 
-  useEffect(() => { loadVentes(); loadSettings(); loadModifications(); loadProdutos(); if(isAdmin) loadUsers(); }, []);
-  useEffect(() => { if(tab === 'produtos') loadProdutos(); }, [tab, filterDateFrom, filterDateTo, filterUser]);
+
+  // ✅ v1.2.7 — Infinite scroll par jour
+  const todayStr = () => new Date().toISOString().slice(0, 10);
+  const [currentDay, setCurrentDay] = useState(() => todayStr());
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [filterActive, setFilterActive] = useState(false);
+  const loaderRef = useRef(null);
+  const currentDayRef = useRef(todayStr());
+  const hasMoreRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+
+  useEffect(() => { loadVentesDay(todayStr(), true); loadSettings(); loadModifications(); loadProdutos(); if(isAdmin) loadUsers(); }, []);
+
+  // ✅ v1.2.7 — Quand filtres changent : mode filtre ou retour mode jour
+  useEffect(() => {
+    if (tab === 'produtos')      { loadProdutos(); return; }
+    if (tab === 'modifications') { loadModifications(); return; }
+    const hasFilter = filterDateFrom || filterDateTo || (filterUser !== 'all');
+    if (hasFilter) {
+      setFilterActive(true);
+      loadVentesFiltered();
+    } else {
+      // Retour mode jour : reset depuis aujourd'hui
+      setFilterActive(false);
+      const today = new Date().toISOString().slice(0, 10);
+      currentDayRef.current = today;
+      hasMoreRef.current = true;
+      setCurrentDay(today);
+      setHasMore(true);
+      loadVentesDay(today, true);
+    }
+  }, [tab, filterDateFrom, filterDateTo, filterUser]); // eslint-disable-line
 
   const loadSettings = async () => {
     const res = await window.electron.dbGet("SELECT value FROM settings WHERE key='shop_name'");
@@ -56,15 +87,75 @@ export default function HistoriquePage() {
     setUsers(res.data || []);
   };
 
-  const loadVentes = async () => {
+  // ✅ v1.2.7 — Charge les ventes d'un jour précis
+  const loadVentesDay = async (day, reset = false) => {
+    if (loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    try {
+      const where = !isAdmin ? `AND v.user_id=${user.id}` : '';
+      const res = await window.electron.dbQuery(
+        `SELECT v.*, u.nom as vendeur FROM ventes v JOIN users u ON v.user_id=u.id
+         WHERE date(v.date_vente) = ? ${where}
+         ORDER BY v.date_vente DESC`, [day]
+      );
+      const rows = res.data || [];
+      if (reset) {
+        setVentes(rows);
+        setSelected(new Set());
+      } else {
+        setVentes(prev => [...prev, ...rows]);
+      }
+      // Chercher le jour précédent qui a des ventes
+      const prevRes = await window.electron.dbGet(
+        `SELECT date(date_vente) as d FROM ventes
+         WHERE date(date_vente) < '?' ${!isAdmin ? `AND user_id=${user.id}` : ''}
+         ORDER BY date_vente DESC LIMIT 1`.replace("'?'", "?"), [day]
+      );
+      const prevDay = prevRes.data?.d || null;
+      hasMoreRef.current = !!prevDay;
+      setHasMore(!!prevDay);
+      if (prevDay) {
+        currentDayRef.current = prevDay;
+        setCurrentDay(prevDay);
+      }
+    } catch(e) { console.error(e); }
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
+  };
+
+  // ✅ v1.2.7 — Charge toute une période (mode filtre actif)
+  const loadVentesFiltered = async () => {
+    const where = !isAdmin ? `AND v.user_id=${user.id}` : '';
+    const params = [];
+    let dateFilter = '';
+    if (filterDateFrom) { dateFilter += ' AND v.date_vente >= ?'; params.push(filterDateFrom); }
+    if (filterDateTo)   { dateFilter += ' AND v.date_vente <= ?'; params.push(filterDateTo + 'T23:59:59'); }
+    if (filterUser !== 'all') { dateFilter += ' AND v.user_id = ?'; params.push(Number(filterUser)); }
     const res = await window.electron.dbQuery(
       `SELECT v.*, u.nom as vendeur FROM ventes v JOIN users u ON v.user_id=u.id
-       ${!isAdmin ? `WHERE v.user_id=${user.id}` : ''}
-       ORDER BY v.date_vente DESC LIMIT 500`, []
+       WHERE 1=1 ${where} ${dateFilter}
+       ORDER BY v.date_vente DESC LIMIT 1000`, params
     );
     setVentes(res.data || []);
     setSelected(new Set());
+    setHasMore(false);
+    hasMoreRef.current = false;
   };
+
+  // ✅ v1.2.7 — IntersectionObserver : détecte quand on arrive en bas
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMoreRef.current && !loadingMoreRef.current && !filterActive) {
+          loadVentesDay(currentDayRef.current, false);
+        }
+      },
+      { threshold: 0.1 }
+    );
+    if (loaderRef.current) observer.observe(loaderRef.current);
+    return () => observer.disconnect();
+  }, [filterActive]); // eslint-disable-line
 
   const loadProdutos = async () => {
     let sql = `
@@ -92,12 +183,29 @@ export default function HistoriquePage() {
     setProdutoStats(Object.values(map));
   };
 
+  // ✅ v1.3.0 — Helper reload adaptatif (filtre actif ou par jour)
+  const loadVentes = () => {
+    const hasFilter = filterDateFrom || filterDateTo || filterUser !== 'all';
+    if (hasFilter) {
+      loadVentesFiltered();
+    } else {
+      const today = todayStr();
+      currentDayRef.current = today;
+      hasMoreRef.current = true;
+      setCurrentDay(today);
+      setHasMore(true);
+      loadVentesDay(today, true);
+    }
+  };
+
   const loadModifications = async () => {
-    const res = await window.electron.dbQuery(
-      `SELECT hm.*, u.nom as user_nom FROM historique_modifications hm
-       LEFT JOIN users u ON hm.user_id=u.id
-       ORDER BY hm.date_action DESC LIMIT 300`, []
-    );
+    let sql = `SELECT hm.*, u.nom as user_nom FROM historique_modifications hm LEFT JOIN users u ON hm.user_id=u.id WHERE 1=1`;
+    const params = [];
+    if (filterDateFrom) { sql += ' AND hm.date_action >= ?'; params.push(filterDateFrom); }
+    if (filterDateTo)   { sql += ' AND hm.date_action <= ?'; params.push(filterDateTo + 'T23:59:59'); }
+    if (filterUser !== 'all') { sql += ' AND hm.user_id = ?'; params.push(Number(filterUser)); }
+    sql += ' ORDER BY hm.date_action DESC LIMIT 300';
+    const res = await window.electron.dbQuery(sql, params);
     setModifications(res.data || []);
   };
 
@@ -189,6 +297,7 @@ export default function HistoriquePage() {
     const matchTo   = !filterDateTo   || v.date_vente <= filterDateTo + 'T23:59:59';
     return matchSearch && matchUser && matchFrom && matchTo;
   });
+  // ✅ Mise à jour refs après déclaration
 
   const totalFiltered = filtered.filter(v => v.statut !== 'annule').reduce((s,v) => s+v.total, 0);
 
@@ -353,7 +462,8 @@ export default function HistoriquePage() {
   const modifColor    = { CREATE:'var(--success)', UPDATE:'var(--info)', DELETE:'var(--danger)', ENTRADA:'var(--success)', 'SAÍDA':'var(--danger)', RETORNO:'var(--warning)', CANCELAMENTO:'var(--danger)' };
 
   return (
-    <div style={{ padding:24, height:'100%', overflowY:'auto' }}>
+    <div className="historique-scroll" style={{ padding:24, height:'100%', overflowY:'auto' }}>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
         <div>
           <h1 style={{ fontSize:22, fontWeight:700 }}>{t('history','title')}</h1>
@@ -397,9 +507,9 @@ export default function HistoriquePage() {
                 <Printer size={14}/> A4
               </button>
               <button onClick={() => tab==='produtos' ? handlePrintProdutos('ticket') : handlePrintAll('ticket')}
-                className="btn btn-secondary" title="Imprimir em 80mm (impressora térmica)"
+                className="btn btn-secondary" title="Imprimir em 72mm (impressora t\u00e9rmica)"
                 style={{ borderRadius:'0 8px 8px 0', fontSize:12, paddingLeft:8, paddingRight:10 }}>
-                🧾 80mm
+                🧾 72mm
               </button>
             </div>
           )}
@@ -424,7 +534,7 @@ export default function HistoriquePage() {
       </div>
 
       {/* Filters */}
-      {showFilters && tab === 'ventes' && (
+      {showFilters && tab !== 'modifications' && (
         <div className="card" style={{ marginBottom:16, display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
           <div className="form-group">
             <label className="form-label"><Calendar size={12} style={{ display:'inline', marginRight:4 }}/>{t('history','dateFrom')}</label>
@@ -458,9 +568,11 @@ export default function HistoriquePage() {
 
       {/* Ventes tab */}
       {tab === 'ventes' && (
-        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-          {filtered.map(v => (
-            <div key={v.id} className="card" style={{ padding:0, overflow:'hidden', opacity:v.statut==='annule'?0.6:1, border: selected.has(v.id) ? '1px solid var(--accent)' : undefined }}>
+        <div className="historique-scroll" style={{ display:'flex', flexDirection:'column', gap:8 }}>
+          {filtered.map((v, rIdx) => (
+            <div key={v.id} className="card historique-row" style={{ padding:0, overflow:'hidden', opacity:v.statut==='annule'?0.6:1,
+              border: selected.has(v.id) ? '1px solid var(--accent)' : '1px solid var(--border)',
+              transition:'border 0.1s, box-shadow 0.1s' }}>
               <div onClick={() => selectMode ? toggleSelect(null, v.id) : toggleExpand(v.id)}
                 style={{ padding:'14px 16px', display:'flex', alignItems:'center', gap:12, cursor:'pointer' }}>
                 {selectMode && isAdmin && (
@@ -511,7 +623,22 @@ export default function HistoriquePage() {
               )}
             </div>
           ))}
-          {filtered.length === 0 && <div style={{ textAlign:'center', padding:'60px 0', color:'var(--text-muted)' }}>{t('history','noSales')}</div>}
+          {filtered.length === 0 && !loadingMore && <div style={{ textAlign:'center', padding:'60px 0', color:'var(--text-muted)' }}>{t('history','noSales')}</div>}
+
+          {/* ✅ v1.2.7 — Sentinelle scroll infini */}
+          {!filterActive && (
+            <div ref={loaderRef} style={{ padding:'16px 0', textAlign:'center' }}>
+              {loadingMore && (
+                <div style={{ color:'var(--text-muted)', fontSize:13, display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+                  <span style={{ display:'inline-block', width:14, height:14, border:'2px solid var(--accent)', borderTopColor:'transparent', borderRadius:'50%', animation:'spin 0.7s linear infinite' }}/>
+                  Carregando...
+                </div>
+              )}
+              {!hasMore && ventes.length > 0 && (
+                <div style={{ color:'var(--text-muted)', fontSize:12 }}>— Fim do histórico —</div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -531,8 +658,8 @@ export default function HistoriquePage() {
               <button onClick={() => handlePrintProdutos('a4')} className='btn btn-secondary' title='Imprimir A4' style={{ borderRadius:'8px 0 0 8px', borderRight:'1px solid var(--border)', fontSize:12 }}>
                 <Printer size={13}/> A4
               </button>
-              <button onClick={() => handlePrintProdutos('ticket')} className='btn btn-secondary' title='Imprimir 80mm' style={{ borderRadius:'0 8px 8px 0', fontSize:12 }}>
-                🧾 80mm
+              <button onClick={() => handlePrintProdutos('ticket')} className='btn btn-secondary' title='Imprimir 72mm' style={{ borderRadius:'0 8px 8px 0', fontSize:12 }}>
+                🧾 72mm
               </button>
             </div>
           </div>
