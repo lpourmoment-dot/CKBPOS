@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../App';
 import { useLang } from '../utils/useLang';
-import { TrendingUp, BarChart2, Clock, Monitor } from 'lucide-react';
+import { TrendingUp, BarChart2, Clock, Monitor, Activity } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function DashboardPage() {
@@ -14,16 +14,27 @@ export default function DashboardPage() {
   const [recentSales, setRecentSales] = useState([]);
   const [networkPeers, setNetworkPeers] = useState([]);
   const [machineLabel, setMachineLabel] = useState('Esta m\u00e1quina');
+  const [machinesData, setMachinesData] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     loadData();
     loadNetworkPeers();
-    // Écouter les mises à jour de pairs en temps réel
-    const removeListener = window.electron.onNetworkPeersUpdate((peers) => {
+    loadMachinesData();
+    const removePeers = window.electron.onNetworkPeersUpdate((peers) => {
       setNetworkPeers(peers || []);
+      // Refresh machines stats quand un pair se connecte/déconnecte
+      loadMachinesData();
     });
-    return () => { if (typeof removeListener === 'function') removeListener(); };
+    const removeSync = window.electron.onSyncUpdate(() => {
+      // Refresh quand un delta est appliqué (nouvelles ventes d'une autre machine)
+      loadMachinesData();
+      loadData();
+    });
+    return () => {
+      if (typeof removePeers === 'function') removePeers();
+      if (typeof removeSync  === 'function') removeSync();
+    };
   }, []);
 
   const loadNetworkPeers = async () => {
@@ -34,6 +45,13 @@ export default function DashboardPage() {
       ]);
       if (peersRes?.success) setNetworkPeers(peersRes.data || []);
       if (labelRes?.data?.value) setMachineLabel(labelRes.data.value);
+    } catch(_e) {}
+  };
+
+  const loadMachinesData = async () => {
+    try {
+      const res = await window.electron.machinesStats();
+      if (res?.success) setMachinesData(res.data || []);
     } catch(_e) {}
   };
 
@@ -262,47 +280,77 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Rede Local LAN — admin only */}
-      {isAdmin && (
+      {/* ── v1.6.0 Dashboard Multi-Machines — admin only ── */}
+      {isAdmin && machinesData.length > 0 && (
         <div style={{ marginBottom:24 }}>
-          <div style={{ fontSize:12, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:10, display:'flex', alignItems:'center', gap:6 }}>
-            <Monitor size={13} color="var(--text-muted)"/>
-            Rede Local LAN
+          <div style={{ fontSize:12, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:12, display:'flex', alignItems:'center', gap:8 }}>
+            <Activity size={13} color="var(--text-muted)"/>
+            Painel Multi-M\u00e1quinas
+            <span style={{ fontSize:10, color:'var(--text-muted)', fontWeight:400, letterSpacing:0, background:'var(--bg-hover)', padding:'1px 7px', borderRadius:10 }}>
+              {machinesData.filter(m => m.status==='online').length}/{machinesData.length} online
+            </span>
           </div>
-          <div style={{ display:'flex', gap:12, flexWrap:'wrap' }}>
 
-            {/* Cette machine — toujours online */}
-            <div className="stat-card" style={{ borderLeft:'3px solid var(--accent)', minWidth:170, flex:'0 0 auto' }}>
-              <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5 }}>
-                <span style={{ width:7, height:7, borderRadius:'50%', background:'var(--success)', flexShrink:0 }}/>
-                <span style={{ fontSize:10, color:'var(--success)', fontWeight:700, letterSpacing:'0.6px' }}>ONLINE</span>
-              </div>
-              <div className="stat-label" style={{ marginBottom:2 }}>Esta m\u00e1quina</div>
-              <div style={{ fontSize:13, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                {machineLabel}
-              </div>
-            </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px, 1fr))', gap:14 }}>
+            {machinesData.map(m => {
+              const isOnline = m.status === 'online';
+              const borderC  = m.isLocal ? 'var(--accent)' : isOnline ? 'var(--success)' : 'var(--border)';
+              const dotC     = m.isLocal ? '#e8c547' : isOnline ? '#22c55e' : '#555';
+              // Barre de progression relative au max
+              const maxToday = Math.max(...machinesData.map(x => x.today_total), 1);
+              const pct = Math.round((m.today_total / maxToday) * 100);
 
-            {/* Pairs */}
-            {networkPeers.length === 0 ? (
-              <div className="stat-card" style={{ minWidth:170, flex:'0 0 auto', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-muted)', fontSize:12, fontStyle:'italic' }}>
-                Aguardando outras m\u00e1quinas\u2026
-              </div>
-            ) : (
-              networkPeers.map(p => (
-                <div key={p.machine_id} className="stat-card" style={{ borderLeft:`3px solid ${p.status==='online'?'var(--success)':'var(--border)'}`, minWidth:170, flex:'0 0 auto' }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5 }}>
-                    <span style={{ width:7, height:7, borderRadius:'50%', background:p.status==='online'?'var(--success)':'var(--text-muted)', flexShrink:0 }}/>
-                    <span style={{ fontSize:10, fontWeight:700, letterSpacing:'0.6px', color:p.status==='online'?'var(--success)':'var(--text-muted)' }}>
-                      {p.status==='online'?'ONLINE':'OFFLINE'}
+              return (
+                <div key={m.machine_id} className="card" style={{ borderLeft:`3px solid ${borderC}`, padding:16, position:'relative' }}>
+                  {/* Header machine */}
+                  <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:10 }}>
+                    <span style={{ width:7, height:7, borderRadius:'50%', background:dotC, flexShrink:0, animation:isOnline?'pulse 2s infinite':'none' }}/>
+                    <span style={{ fontSize:10, fontWeight:700, letterSpacing:'0.6px', color:dotC }}>
+                      {m.isLocal ? 'LOCAL' : isOnline ? 'ONLINE' : 'OFFLINE'}
                     </span>
+                    {m.isLocal && (
+                      <span style={{ fontSize:9, background:'var(--accent)22', color:'var(--accent)', border:'1px solid var(--accent)44', borderRadius:3, padding:'1px 5px', fontWeight:700 }}>
+                        ESTA
+                      </span>
+                    )}
                   </div>
-                  <div className="stat-label" style={{ marginBottom:2 }}>{p.machine_label || 'CKBPOS'}</div>
-                  <div style={{ fontSize:11, color:'var(--text-muted)', fontFamily:'monospace' }}>{p.ip || '\u2014'}</div>
-                </div>
-              ))
-            )}
 
+                  {/* Nom + IP */}
+                  <div style={{ fontSize:14, fontWeight:700, marginBottom:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                    {m.machine_label || 'CKBPOS'}
+                  </div>
+                  <div style={{ fontSize:10, fontFamily:'monospace', color:'var(--text-muted)', marginBottom:12 }}>
+                    {m.isLocal ? 'Esta m\u00e1quina' : m.ip || '\u2014'}
+                  </div>
+
+                  {/* Stats hoje */}
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10 }}>
+                    <div>
+                      <div style={{ fontSize:9, color:'var(--text-muted)', marginBottom:2 }}>HOJE</div>
+                      <div style={{ fontSize:16, fontWeight:700, color:'var(--accent)', fontFamily:'monospace' }}>{fmt(m.today_total)}</div>
+                      <div style={{ fontSize:10, color:'var(--text-secondary)' }}>{m.today_count} venda{m.today_count!==1?'s':''}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize:9, color:'var(--text-muted)', marginBottom:2 }}>7 DIAS</div>
+                      <div style={{ fontSize:13, fontWeight:600, fontFamily:'monospace' }}>{fmt(m.week_total)}</div>
+                      <div style={{ fontSize:9, color:'var(--text-muted)' }}>este m\u00eas: {fmt(m.month_total)}</div>
+                    </div>
+                  </div>
+
+                  {/* Barra de progresso relativa */}
+                  <div style={{ height:3, background:'var(--bg-hover)', borderRadius:2, marginBottom:6, overflow:'hidden' }}>
+                    <div style={{ height:'100%', width:`${pct}%`, background: m.isLocal ? 'var(--accent)' : isOnline ? 'var(--success)' : 'var(--text-muted)', borderRadius:2, transition:'width 0.6s ease' }}/>
+                  </div>
+
+                  {/* Top produto do dia */}
+                  {m.top_product && (
+                    <div style={{ fontSize:10, color:'var(--text-muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      \uD83D\uDCC8 {m.top_product}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

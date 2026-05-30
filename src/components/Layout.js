@@ -72,6 +72,8 @@ export default function Layout() {
   const consoleEndRef = useRef(null);
   // ── v1.5.0 Sync status ──
   const [syncSt, setSyncSt] = useState({ status: 'idle', pending: 0, online: 0 });
+  // ── v1.7.0 Cloud status ──
+  const [cloudSt, setCloudSt] = useState({ status: 'disconnected' });
 
   // Horloge temps réel
   useEffect(() => {
@@ -120,6 +122,13 @@ export default function Layout() {
   useEffect(() => {
     window.electron.syncStatus().then(res => { if (res?.success) setSyncSt(res); }).catch(() => {});
     const cleanup = window.electron.onSyncUpdate((data) => setSyncSt(data));
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
+  // ── v1.7.0 Cloud status ──
+  useEffect(() => {
+    window.electron.cloudStatus().then(res => { if (res?.success) setCloudSt(res); }).catch(() => {});
+    const cleanup = window.electron.onCloudStatus((data) => setCloudSt(data));
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
@@ -202,6 +211,30 @@ export default function Layout() {
             >
               <span style={{ width:6, height:6, borderRadius:'50%', background:c.dot, flexShrink:0, animation: syncSt.status==='syncing' ? 'pulse 1s infinite' : 'none' }} />
               <span style={{ fontSize:10, color:c.color, fontFamily:'monospace', fontWeight:600, whiteSpace:'nowrap' }}>{c.label}</span>
+            </div>
+          );
+        })()}
+
+        {/* ── v1.7.0 Indicateur cloud Supabase ── */}
+        {(() => {
+          const CCFG = {
+            connected:      { color:'#22c55e', dot:'#22c55e', label:'\u2601\uFE0F Synced'      },
+            syncing:        { color:'#e8c547', dot:'#e8c547', label:'\u2601\uFE0F Syncing\u2026' },
+            error:          { color:'#ef4444', dot:'#ef4444', label:'\u2601\uFE0F Error'        },
+            disconnected:   { color:'#555',    dot:'#444',    label:null                        },
+            not_configured: { color:'#555',    dot:'#444',    label:null                        },
+            connecting:     { color:'#60a5fa', dot:'#60a5fa', label:'\u2601\uFE0F Connecting\u2026' },
+          };
+          const cc = CCFG[cloudSt.status] || CCFG.disconnected;
+          if (!cc.label) return null;
+          return (
+            <div
+              title={'Cloud: ' + cloudSt.status + (cloudSt.error ? ' — ' + cloudSt.error : '') + (cloudSt.lastSync ? ' — ' + cloudSt.lastSync : '')}
+              onClick={() => cloudSt.status === 'connected' ? window.electron.cloudPush() : null}
+              style={{ display:'flex', alignItems:'center', gap:5, marginRight:8, cursor: cloudSt.status==='connected'?'pointer':'default', padding:'2px 8px', borderRadius:4, background:cc.dot+'14', border:`1px solid ${cc.dot}33` }}
+            >
+              <span style={{ width:6, height:6, borderRadius:'50%', background:cc.dot, flexShrink:0, animation:cloudSt.status==='syncing'||cloudSt.status==='connecting'?'pulse 1s infinite':'none' }}/>
+              <span style={{ fontSize:10, color:cc.color, fontFamily:'monospace', fontWeight:600, whiteSpace:'nowrap' }}>{cc.label}</span>
             </div>
           );
         })()}
