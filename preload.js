@@ -88,6 +88,7 @@ contextBridge.exposeInMainWorld('electron', {
   // ── v1.4.0 Réseau P2P LAN ────────────────────────────────
   networkPeersList: () => ipcRenderer.invoke('network-peers-list'),
   networkStatus:    () => ipcRenderer.invoke('network-status'),
+  machinesStats:    () => ipcRenderer.invoke('machines-stats'),
 
   // Écouter les mises à jour de pairs en temps réel
   // Retourne une fonction de cleanup à appeler dans useEffect return
@@ -112,5 +113,22 @@ contextBridge.exposeInMainWorld('electron', {
     const handler = (_, data) => cb(data);
     ipcRenderer.on('sync-status-changed', handler);
     return () => ipcRenderer.removeListener('sync-status-changed', handler);
+  },
+
+  // ── v1.7.0 Supabase Cloud Bridge ─────────────────────────
+  cloudConnect:    ()      => ipcRenderer.invoke('cloud-connect'),
+  cloudDisconnect: ()      => ipcRenderer.invoke('cloud-disconnect'),
+  cloudStatus:     ()      => ipcRenderer.invoke('cloud-status'),
+  cloudPush:       ()      => ipcRenderer.invoke('cloud-push'),
+  cloudPull:       ()      => ipcRenderer.invoke('cloud-pull'),
+  onCloudStatus: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('cloud-sync-status', handler);
+    return () => ipcRenderer.removeListener('cloud-sync-status', handler);
+  },
+  onCloudDataChanged: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('cloud-data-changed', handler);
+    return () => ipcRenderer.removeListener('cloud-data-changed', handler);
   },
 });
