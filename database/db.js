@@ -335,6 +335,116 @@ if (!machineIdRow || !machineIdRow.value || machineIdRow.value.trim() === '') {
   console.log('[CKBPOS] Nouveau machine_id généré:', newId);
 }
 
+// ── Tables réseau v1.4.0 ─────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS network_peers (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    machine_id    TEXT UNIQUE NOT NULL,
+    machine_label TEXT,
+    ip            TEXT,
+    port          INTEGER DEFAULT 41234,
+    last_seen     TEXT,
+    actif         INTEGER DEFAULT 1
+  );
+  CREATE TABLE IF NOT EXISTS sync_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    table_name TEXT NOT NULL,
+    record_id  INTEGER,
+    operation  TEXT NOT NULL,
+    payload    TEXT,
+    machine_id TEXT,
+    synced_to  TEXT DEFAULT '[]',
+    created_at TEXT DEFAULT (datetime('now','utc'))
+  );
+  CREATE TABLE IF NOT EXISTS sync_state (
+    machine_id   TEXT PRIMARY KEY,
+    last_sync_at TEXT,
+    last_seq     INTEGER DEFAULT 0
+  );
+`);
+
+// ── Settings sync v1.5.0 ─────────────────────────────────
+// sync_applying = '1' désactive les triggers pendant l'apply d'un delta reçu
+db.prepare("INSERT OR IGNORE INTO settings (key,value) VALUES ('sync_applying','0')").run();
+// Reset au démarrage (protection si crash pendant un sync précédent)
+db.prepare("UPDATE settings SET value='0' WHERE key='sync_applying'").run();
+
+// ── Triggers SQLite — sync delta v1.5.0 ─────────────────
+// Tables trackées : ventes · vente_items · products · stock_mouvements · caderno_entries
+// WHEN clause : skip si sync_applying='1' pour éviter l'écho lors de l'apply d'un delta reçu
+[
+  // ventes
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_ins_ventes AFTER INSERT ON ventes
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('ventes',NEW.id,'INSERT',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_upd_ventes AFTER UPDATE ON ventes
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('ventes',NEW.id,'UPDATE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_del_ventes AFTER DELETE ON ventes
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('ventes',OLD.id,'DELETE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  // vente_items
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_ins_vente_items AFTER INSERT ON vente_items
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('vente_items',NEW.id,'INSERT',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_upd_vente_items AFTER UPDATE ON vente_items
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('vente_items',NEW.id,'UPDATE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_del_vente_items AFTER DELETE ON vente_items
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('vente_items',OLD.id,'DELETE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  // products
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_ins_products AFTER INSERT ON products
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('products',NEW.id,'INSERT',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_upd_products AFTER UPDATE ON products
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('products',NEW.id,'UPDATE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_del_products AFTER DELETE ON products
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('products',OLD.id,'DELETE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  // stock_mouvements (INSERT uniquement — jamais modifiés/supprimés)
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_ins_stock_mouvements AFTER INSERT ON stock_mouvements
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('stock_mouvements',NEW.id,'INSERT',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  // caderno_entries
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_ins_caderno_entries AFTER INSERT ON caderno_entries
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('caderno_entries',NEW.id,'INSERT',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_upd_caderno_entries AFTER UPDATE ON caderno_entries
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('caderno_entries',NEW.id,'UPDATE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_del_caderno_entries AFTER DELETE ON caderno_entries
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('caderno_entries',OLD.id,'DELETE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+].forEach(sql => { try { db.exec(sql); } catch(e) { console.error('[DB] trigger:', e.message); } });
+
 // ── Export ───────────────────────────────────────────────
 const MACHINE_ID_FINAL = db.prepare("SELECT value FROM settings WHERE key='machine_id'").get()?.value || 'UNKNOWN';
 module.exports = db;

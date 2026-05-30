@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../App';
 import { useLang } from '../utils/useLang';
-import { TrendingUp, BarChart2, Clock } from 'lucide-react';
+import { TrendingUp, BarChart2, Clock, Monitor } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function DashboardPage() {
@@ -12,9 +12,30 @@ export default function DashboardPage() {
   const [topProducts, setTopProducts] = useState([]);
   const [weekData, setWeekData] = useState([]);
   const [recentSales, setRecentSales] = useState([]);
+  const [networkPeers, setNetworkPeers] = useState([]);
+  const [machineLabel, setMachineLabel] = useState('Esta m\u00e1quina');
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => {
+    loadData();
+    loadNetworkPeers();
+    // Écouter les mises à jour de pairs en temps réel
+    const removeListener = window.electron.onNetworkPeersUpdate((peers) => {
+      setNetworkPeers(peers || []);
+    });
+    return () => { if (typeof removeListener === 'function') removeListener(); };
+  }, []);
+
+  const loadNetworkPeers = async () => {
+    try {
+      const [peersRes, labelRes] = await Promise.all([
+        window.electron.networkPeersList(),
+        window.electron.dbGet("SELECT value FROM settings WHERE key='machine_label'"),
+      ]);
+      if (peersRes?.success) setNetworkPeers(peersRes.data || []);
+      if (labelRes?.data?.value) setMachineLabel(labelRes.data.value);
+    } catch(_e) {}
+  };
 
   const loadData = async () => {
     setLoading(true);
@@ -237,6 +258,51 @@ export default function DashboardPage() {
               </div>
               <div className="stat-sub">Balan\u00e7o do dia</div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rede Local LAN — admin only */}
+      {isAdmin && (
+        <div style={{ marginBottom:24 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:10, display:'flex', alignItems:'center', gap:6 }}>
+            <Monitor size={13} color="var(--text-muted)"/>
+            Rede Local LAN
+          </div>
+          <div style={{ display:'flex', gap:12, flexWrap:'wrap' }}>
+
+            {/* Cette machine — toujours online */}
+            <div className="stat-card" style={{ borderLeft:'3px solid var(--accent)', minWidth:170, flex:'0 0 auto' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5 }}>
+                <span style={{ width:7, height:7, borderRadius:'50%', background:'var(--success)', flexShrink:0 }}/>
+                <span style={{ fontSize:10, color:'var(--success)', fontWeight:700, letterSpacing:'0.6px' }}>ONLINE</span>
+              </div>
+              <div className="stat-label" style={{ marginBottom:2 }}>Esta m\u00e1quina</div>
+              <div style={{ fontSize:13, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                {machineLabel}
+              </div>
+            </div>
+
+            {/* Pairs */}
+            {networkPeers.length === 0 ? (
+              <div className="stat-card" style={{ minWidth:170, flex:'0 0 auto', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-muted)', fontSize:12, fontStyle:'italic' }}>
+                Aguardando outras m\u00e1quinas\u2026
+              </div>
+            ) : (
+              networkPeers.map(p => (
+                <div key={p.machine_id} className="stat-card" style={{ borderLeft:`3px solid ${p.status==='online'?'var(--success)':'var(--border)'}`, minWidth:170, flex:'0 0 auto' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5 }}>
+                    <span style={{ width:7, height:7, borderRadius:'50%', background:p.status==='online'?'var(--success)':'var(--text-muted)', flexShrink:0 }}/>
+                    <span style={{ fontSize:10, fontWeight:700, letterSpacing:'0.6px', color:p.status==='online'?'var(--success)':'var(--text-muted)' }}>
+                      {p.status==='online'?'ONLINE':'OFFLINE'}
+                    </span>
+                  </div>
+                  <div className="stat-label" style={{ marginBottom:2 }}>{p.machine_label || 'CKBPOS'}</div>
+                  <div style={{ fontSize:11, color:'var(--text-muted)', fontFamily:'monospace' }}>{p.ip || '\u2014'}</div>
+                </div>
+              ))
+            )}
+
           </div>
         </div>
       )}

@@ -60,11 +60,14 @@ function createWindow() {
     `).catch(()=>{});
   });
 
-  // ✅ F12 → DevTools (debug sur app compilée)
-  app.whenReady().then(() => {
-    globalShortcut.register('F12', () => {
-      if (mainWindow) mainWindow.webContents.toggleDevTools();
-    });
+  // ✅ F12 / Ctrl+Shift+I → DevTools (before-input-event — fiable sur tous les claviers)
+  mainWindow.webContents.on('before-input-event', (_, input) => {
+    if (input.type === 'keyDown' && (
+      input.key === 'F12' ||
+      (input.control && input.shift && input.key === 'I')
+    )) {
+      mainWindow.webContents.toggleDevTools();
+    }
   });
 
   if (isDev) mainWindow.loadURL('http://localhost:3000');
@@ -77,6 +80,8 @@ app.whenReady().then(() => {
   setTimeout(() => {
     try { require('./database/driveSync'); } catch(e) {}
   }, 2000);
+  // v1.4.0 — Services réseau LAN (WS + UDP) — délai pour laisser la BDD s'initialiser
+  setTimeout(startNetworkServices, 1500);
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
@@ -1672,3 +1677,573 @@ function generateCadernoTicketHTML(data) {
   <div class="footer">CKBPOS \u2014 ${printedAt || '-'}</div>
   </body></html>`;
 }
+
+
+// ============================================================
+// CONSOLE IN-APP — v1.4.1
+// Intercepte console.log/error/warn → envoie au renderer
+// Capture automatique des tags [LAN] [SYNC] [BEAT] [DB] etc.
+// ============================================================
+
+const MAX_LOG_BUFFER = 250;
+const _logBuffer     = [];
+
+const _origLog   = console.log.bind(console);
+const _origError = console.error.bind(console);
+const _origWarn  = console.warn.bind(console);
+
+function _pushLog(level, args) {
+  try {
+    const raw = args.map(a => {
+      if (a instanceof Error) return a.message;
+      if (typeof a === 'object') { try { return JSON.stringify(a); } catch(_e2) { return String(a); } }
+      return String(a);
+    }).join(' ');
+
+    // Extraire le tag [XXX] en début de message
+    const tagMatch = raw.match(/^(\[[A-Z0-9_]+\])\s*/);
+    const tag  = tagMatch ? tagMatch[1] : '[LOG]';
+    const msg  = tagMatch ? raw.slice(tagMatch[0].length) : raw;
+
+    const entry = {
+      time:  new Date().toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit', second:'2-digit' }),
+      tag, msg, level,
+    };
+    _logBuffer.push(entry);
+    if (_logBuffer.length > MAX_LOG_BUFFER) _logBuffer.shift();
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('debug-log', entry); } catch(_e2) {}
+    }
+  } catch(_e2) {}
+}
+
+console.log   = (...a) => { _origLog(...a);   _pushLog('info',    a); };
+console.error = (...a) => { _origError(...a); _pushLog('error',   a); };
+console.warn  = (...a) => { _origWarn(...a);  _pushLog('warn',    a); };
+
+ipcMain.handle('debug-logs-get', () => ({ success: true, data: [..._logBuffer] }));
+
+// ============================================================
+// RÉSEAU P2P LAN — v1.4.0
+// WebSocket server (port 41234) + UDP broadcast discovery (port 41235)
+// ============================================================
+
+const WebSocket = require('ws');
+const dgram     = require('dgram');
+const os        = require('os');
+
+const WS_PORT  = 41234;
+const UDP_PORT = 41235;
+
+// Peers actifs en mémoire : machine_id → { ws, machine_label, ip, lastSeen }
+const peersMap = new Map();
+
+let wssServer          = null;
+let udpSocket          = null;
+let heartbeatInterval  = null;
+let rebroadcastInterval = null;
+
+// ── Utilitaires ─────────────────────────────────────────────
+function getLocalIPs() {
+  const ips = [];
+  for (const iface of Object.values(os.networkInterfaces())) {
+    for (const addr of iface) {
+      if (addr.family === 'IPv4' && !addr.internal) ips.push(addr.address);
+    }
+  }
+  return ips;
+}
+
+function getMachineInfo() {
+  try {
+    const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
+    return {
+      type:          'CKBPOS_INFO',
+      machine_id:    MACHINE_ID,
+      machine_label: labelRow?.value || 'CKBPOS',
+      port:          WS_PORT,
+    };
+  } catch(_e) {
+    return { type: 'CKBPOS_INFO', machine_id: MACHINE_ID, machine_label: 'CKBPOS', port: WS_PORT };
+  }
+}
+
+function upsertPeer(machine_id, machine_label, ip, port) {
+  try {
+    db.prepare(`
+      INSERT INTO network_peers (machine_id, machine_label, ip, port, last_seen, actif)
+      VALUES (?, ?, ?, ?, datetime('now','utc'), 1)
+      ON CONFLICT(machine_id) DO UPDATE SET
+        machine_label = excluded.machine_label,
+        ip            = excluded.ip,
+        port          = excluded.port,
+        last_seen     = datetime('now','utc'),
+        actif         = 1
+    `).run(machine_id, machine_label || 'CKBPOS', ip || '', port || WS_PORT);
+  } catch(e) { console.error('[LAN] upsertPeer:', e.message); }
+}
+
+function getPeersForRenderer() {
+  try {
+    const dbPeers = db.prepare('SELECT * FROM network_peers ORDER BY last_seen DESC').all();
+    return dbPeers.map(p => ({
+      ...p,
+      status: peersMap.has(p.machine_id) ? 'online' : 'offline',
+    }));
+  } catch(_e) { return []; }
+}
+
+function broadcastPeersUpdate() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('network-peers-changed', getPeersForRenderer()); } catch(_e) {}
+  }
+}
+
+// ── Serveur WebSocket — écoute les connexions entrantes ────
+function startWsServer() {
+  try {
+    wssServer = new WebSocket.Server({ port: WS_PORT });
+    console.log('[LAN] WebSocket server port ' + WS_PORT);
+
+    wssServer.on('connection', (ws, req) => {
+      const peerIp = (req.socket.remoteAddress || '').replace('::ffff:', '');
+      let peerMachineId = null;
+
+      // Envoyer immédiatement nos informations
+      try { ws.send(JSON.stringify(getMachineInfo())); } catch(_e) {}
+
+      ws.on('message', (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString());
+
+          if (msg.type === 'CKBPOS_INFO') {
+            if (msg.machine_id === MACHINE_ID) { ws.close(); return; }
+            peerMachineId = msg.machine_id;
+            // Fermer l'ancienne connexion si elle existe
+            if (peersMap.has(peerMachineId)) {
+              try { peersMap.get(peerMachineId).ws?.close(); } catch(_e) {}
+            }
+            upsertPeer(peerMachineId, msg.machine_label, peerIp, msg.port);
+            peersMap.set(peerMachineId, { ws, machine_label: msg.machine_label, ip: peerIp, lastSeen: Date.now() });
+            broadcastPeersUpdate();
+            console.log('[LAN] Pair connecte: ' + (msg.machine_label || peerMachineId) + ' @ ' + peerIp);
+            // v1.5.0 — déclencher sync après connexion
+            if (global._ckbSyncHandlers) global._ckbSyncHandlers.onPeerRegistered(peerMachineId);
+
+          } else if (msg.type === 'PING') {
+            ws.send(JSON.stringify({ type: 'PONG', machine_id: MACHINE_ID }));
+            if (peerMachineId) {
+              const p = peersMap.get(peerMachineId);
+              if (p) p.lastSeen = Date.now();
+              upsertPeer(peerMachineId, p?.machine_label, peerIp, WS_PORT);
+            }
+
+          } else if (msg.type === 'PONG') {
+            if (peerMachineId) {
+              const p = peersMap.get(peerMachineId);
+              if (p) p.lastSeen = Date.now();
+            }
+          } else if (global._ckbSyncHandlers) {
+            global._ckbSyncHandlers.handleSyncMessage(ws, msg, peerMachineId);
+          }
+        } catch(_e) {}
+      });
+
+      ws.on('close', () => {
+        if (peerMachineId && peersMap.has(peerMachineId)) {
+          peersMap.delete(peerMachineId);
+          broadcastPeersUpdate();
+          console.log('[LAN] Pair deconnecte: ' + peerMachineId);
+        }
+      });
+
+      ws.on('error', (_e) => {
+        if (peerMachineId) peersMap.delete(peerMachineId);
+      });
+    });
+
+    wssServer.on('error', (e) => {
+      console.error('[LAN] WS server error:', e.message);
+      if (e.code === 'EADDRINUSE') console.error('[LAN] Port ' + WS_PORT + ' deja utilise — services reseau desactives.');
+    });
+  } catch(e) {
+    console.error('[LAN] Impossible de demarrer WS server:', e.message);
+  }
+}
+
+// ── Connexion sortante vers un pair ────────────────────────
+function connectToPeer(ip, port) {
+  if (!ip) return;
+  // Ne pas se connecter à soi-même
+  if (getLocalIPs().includes(ip)) return;
+  // Ne pas dupliquer une connexion existante
+  for (const peer of peersMap.values()) {
+    if (peer.ip === ip) return;
+  }
+
+  const url = 'ws://' + ip + ':' + (port || WS_PORT);
+  try {
+    const ws = new WebSocket(url, { handshakeTimeout: 3000 });
+    let peerMachineId = null;
+
+    ws.on('open', () => {
+      try { ws.send(JSON.stringify(getMachineInfo())); } catch(_e) {}
+    });
+
+    ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === 'CKBPOS_INFO') {
+          if (msg.machine_id === MACHINE_ID) { ws.close(); return; }
+          // Eviter les doublons (connexion entrante peut deja exister)
+          if (peersMap.has(msg.machine_id)) { ws.close(); return; }
+          peerMachineId = msg.machine_id;
+          upsertPeer(peerMachineId, msg.machine_label, ip, msg.port);
+          peersMap.set(peerMachineId, { ws, machine_label: msg.machine_label, ip, lastSeen: Date.now() });
+          broadcastPeersUpdate();
+          // v1.5.0 — déclencher sync après connexion
+          if (global._ckbSyncHandlers) global._ckbSyncHandlers.onPeerRegistered(peerMachineId);
+        } else if (msg.type === 'PING') {
+          ws.send(JSON.stringify({ type: 'PONG', machine_id: MACHINE_ID }));
+        } else if (msg.type === 'PONG') {
+          if (peerMachineId) {
+            const p = peersMap.get(peerMachineId);
+            if (p) p.lastSeen = Date.now();
+          }
+        } else if (global._ckbSyncHandlers) {
+          global._ckbSyncHandlers.handleSyncMessage(ws, msg, peerMachineId);
+        }
+      } catch(_e) {}
+    });
+
+    ws.on('close', () => {
+      if (peerMachineId) {
+        peersMap.delete(peerMachineId);
+        broadcastPeersUpdate();
+      }
+    });
+
+    ws.on('error', (_e) => { /* normal si pair indisponible */ });
+  } catch(_e) {}
+}
+
+// ── UDP Discovery ───────────────────────────────────────────
+function startUdpDiscovery() {
+  try {
+    udpSocket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+
+    udpSocket.on('message', (buf, rinfo) => {
+      try {
+        const msg = JSON.parse(buf.toString());
+        if (msg.machine_id === MACHINE_ID) return; // ignorer soi-meme
+
+        if (msg.type === 'CKBPOS_DISCOVER') {
+          console.log('[LAN] UDP discover: ' + (msg.machine_label || msg.machine_id) + ' @ ' + rinfo.address);
+          connectToPeer(rinfo.address, msg.port);
+          // Repondre en unicast
+          const reply = Buffer.from(JSON.stringify({ ...getMachineInfo(), type: 'CKBPOS_DISCOVER_REPLY' }));
+          udpSocket.send(reply, rinfo.port, rinfo.address, () => {});
+
+        } else if (msg.type === 'CKBPOS_DISCOVER_REPLY') {
+          connectToPeer(rinfo.address, msg.port);
+        }
+      } catch(_e) {}
+    });
+
+    udpSocket.on('error', (e) => {
+      console.error('[LAN] UDP error:', e.message);
+    });
+
+    udpSocket.bind(UDP_PORT, () => {
+      try {
+        udpSocket.setBroadcast(true);
+        console.log('[LAN] UDP discovery socket port ' + UDP_PORT);
+        sendDiscoveryBroadcast();
+      } catch(e) { console.error('[LAN] setBroadcast error:', e.message); }
+    });
+  } catch(e) {
+    console.error('[LAN] Impossible de demarrer UDP discovery:', e.message);
+  }
+}
+
+function sendDiscoveryBroadcast() {
+  if (!udpSocket) return;
+  try {
+    const msg = Buffer.from(JSON.stringify({ ...getMachineInfo(), type: 'CKBPOS_DISCOVER' }));
+    udpSocket.send(msg, UDP_PORT, '255.255.255.255', (e) => {
+      if (e) console.error('[LAN] Broadcast error:', e.message);
+    });
+  } catch(_e) {}
+}
+
+// ── IPC Handlers réseau ─────────────────────────────────────
+ipcMain.handle('network-peers-list', () => {
+  try { return { success: true, data: getPeersForRenderer() }; }
+  catch(e) { return { success: false, error: e.message, data: [] }; }
+});
+
+ipcMain.handle('network-status', () => {
+  try {
+    return {
+      success:    true,
+      wsPort:     WS_PORT,
+      machineId:  MACHINE_ID,
+      localIPs:   getLocalIPs(),
+      peersCount: peersMap.size,
+    };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ── Démarrage des services réseau ───────────────────────────
+function startNetworkServices() {
+  startWsServer();
+  setTimeout(startUdpDiscovery, 600); // délai léger pour que le serveur WS soit prêt
+
+  // Heartbeat — PING tous les pairs connectés toutes les 5s
+  heartbeatInterval = setInterval(() => {
+    const ping = JSON.stringify({ type: 'PING', machine_id: MACHINE_ID });
+    const now  = Date.now();
+    for (const [id, peer] of peersMap.entries()) {
+      try {
+        if (peer.ws?.readyState === WebSocket.OPEN) {
+          peer.ws.send(ping);
+          // Timeout : si pas de réponse depuis 15s → déconnecter
+          if (now - peer.lastSeen > 15000) {
+            peer.ws.terminate();
+            peersMap.delete(id);
+            broadcastPeersUpdate();
+          }
+        } else {
+          peersMap.delete(id);
+          broadcastPeersUpdate();
+        }
+      } catch(_e) { peersMap.delete(id); }
+    }
+  }, 5000);
+
+  // Re-broadcast UDP toutes les 20s pour découvrir les nouveaux arrivants
+  rebroadcastInterval = setInterval(sendDiscoveryBroadcast, 20000);
+}
+
+// ── Nettoyage à la fermeture ────────────────────────────────
+app.on('before-quit', () => {
+  clearInterval(heartbeatInterval);
+  clearInterval(rebroadcastInterval);
+  for (const peer of peersMap.values()) {
+    try { peer.ws?.close(); } catch(_e) {}
+  }
+  peersMap.clear();
+  try { wssServer?.close(); }  catch(_e) {}
+  try { udpSocket?.close(); }  catch(_e) {}
+});
+
+// ============================================================
+// SYNC SQLITE DELTA LAN — v1.5.0
+// Protocole : SYNC_REQUEST → SYNC_DELTA → SYNC_ACK
+// Résolution conflits : last-write-wins (INSERT OR REPLACE)
+// ============================================================
+
+const SYNC_TABLES = new Set(['ventes','vente_items','products','stock_mouvements','caderno_entries']);
+const SYNC_LIMIT  = 200; // entrées max par delta
+
+// ── Statut sync courant ─────────────────────────────────────
+function updateSyncStatus() {
+  try {
+    const pending = db.prepare(
+      "SELECT COUNT(*) as c FROM sync_log WHERE machine_id=? AND synced_to='[]'"
+    ).get(MACHINE_ID)?.c || 0;
+
+    const online = peersMap.size;
+    let status;
+    if      (online === 0 && pending > 0) status = 'offline';
+    else if (online > 0  && pending > 0) status = 'pending';
+    else if (online > 0  && pending === 0) status = 'synced';
+    else                                   status = 'idle';
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('sync-status-changed', { status, pending, online }); } catch(_e) {}
+    }
+  } catch(_e) {}
+}
+
+// ── Construire et envoyer SYNC_REQUEST ─────────────────────
+function sendSyncRequest(peerMachineId, ws) {
+  try {
+    if (ws?.readyState !== WebSocket.OPEN) return;
+    const state    = db.prepare('SELECT last_seq FROM sync_state WHERE machine_id=?').get(peerMachineId);
+    const last_seq = state?.last_seq || 0;
+    ws.send(JSON.stringify({ type: 'SYNC_REQUEST', machine_id: MACHINE_ID, last_seq }));
+    console.log('[SYNC] SYNC_REQUEST → ' + peerMachineId + ' (seq ' + last_seq + ')');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('sync-status-changed', { status: 'syncing', pending: -1, online: peersMap.size }); } catch(_e) {}
+    }
+  } catch(e) { console.error('[SYNC] sendSyncRequest:', e.message); }
+}
+
+// ── Répondre à SYNC_REQUEST → envoyer SYNC_DELTA ───────────
+function handleSyncRequest(ws, msg) {
+  try {
+    const { machine_id, last_seq } = msg;
+    const entries = db.prepare(
+      'SELECT * FROM sync_log WHERE machine_id=? AND id>? ORDER BY id LIMIT ?'
+    ).all(MACHINE_ID, last_seq || 0, SYNC_LIMIT);
+
+    if (entries.length === 0) {
+      ws.send(JSON.stringify({ type: 'SYNC_DELTA', machine_id: MACHINE_ID, last_id: last_seq || 0, entries: [] }));
+      return;
+    }
+
+    // Dédupliquer : garder la dernière opération par (table, record_id)
+    const deduped = new Map();
+    for (const e of entries) deduped.set(e.table_name + ':' + e.record_id, e);
+
+    // Enrichir avec les données actuelles de la ligne
+    const enriched = [];
+    for (const e of deduped.values()) {
+      if (!SYNC_TABLES.has(e.table_name)) continue;
+      if (e.operation !== 'DELETE') {
+        try {
+          const row = db.prepare('SELECT * FROM "' + e.table_name + '" WHERE id=?').get(e.record_id);
+          // Si la ligne n'existe plus (supprimée après le log) → on envoie un DELETE
+          enriched.push({ id: e.id, table_name: e.table_name, record_id: e.record_id, operation: row ? e.operation : 'DELETE', row: row || null });
+        } catch(_e) {}
+      } else {
+        enriched.push({ id: e.id, table_name: e.table_name, record_id: e.record_id, operation: 'DELETE', row: null });
+      }
+    }
+
+    const lastId = entries[entries.length - 1].id;
+    ws.send(JSON.stringify({ type: 'SYNC_DELTA', machine_id: MACHINE_ID, last_id: lastId, entries: enriched }));
+    console.log('[SYNC] SYNC_DELTA → ' + machine_id + ' : ' + enriched.length + ' entrees (seq ' + lastId + ')');
+  } catch(e) { console.error('[SYNC] handleSyncRequest:', e.message); }
+}
+
+// ── Appliquer un SYNC_DELTA reçu ───────────────────────────
+function handleSyncDelta(ws, msg) {
+  try {
+    const { machine_id, entries, last_id } = msg;
+    const ackSeq = last_id || 0;
+
+    if (!entries || entries.length === 0) {
+      ws.send(JSON.stringify({ type: 'SYNC_ACK', machine_id: MACHINE_ID, last_seq: ackSeq }));
+      return;
+    }
+
+    console.log('[SYNC] SYNC_DELTA recu de ' + machine_id + ' : ' + entries.length + ' entrees');
+
+    // Désactiver les triggers pendant l'apply (éviter l'écho)
+    db.prepare("UPDATE settings SET value='1' WHERE key='sync_applying'").run();
+
+    let applied = 0, skipped = 0;
+    try {
+      db.transaction(() => {
+        for (const e of entries) {
+          if (!SYNC_TABLES.has(e.table_name)) { skipped++; continue; }
+          try {
+            if (e.operation === 'DELETE') {
+              db.prepare('DELETE FROM "' + e.table_name + '" WHERE id=?').run(e.record_id);
+            } else if (e.row && typeof e.row === 'object') {
+              const cols = Object.keys(e.row).map(c => '"' + c + '"').join(',');
+              const phs  = Object.keys(e.row).map(() => '?').join(',');
+              db.prepare('INSERT OR REPLACE INTO "' + e.table_name + '" (' + cols + ') VALUES (' + phs + ')').run(...Object.values(e.row));
+            }
+            applied++;
+          } catch(_e2) { skipped++; }
+        }
+      })();
+    } finally {
+      db.prepare("UPDATE settings SET value='0' WHERE key='sync_applying'").run();
+    }
+
+    console.log('[SYNC] Applique: ' + applied + ' ok, ' + skipped + ' skip');
+
+    // Mémoriser le dernier seq de ce pair
+    db.prepare("INSERT OR REPLACE INTO sync_state (machine_id,last_sync_at,last_seq) VALUES (?,datetime('now','utc'),?)")
+      .run(machine_id, ackSeq);
+
+    // Envoyer ACK
+    ws.send(JSON.stringify({ type: 'SYNC_ACK', machine_id: MACHINE_ID, last_seq: ackSeq }));
+
+    // Notifier le renderer
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('sync-status-changed', { status: applied > 0 ? 'synced' : 'idle', pending: 0, online: peersMap.size, applied }); } catch(_e) {}
+    }
+    updateSyncStatus();
+  } catch(e) {
+    console.error('[SYNC] handleSyncDelta:', e.message);
+    try { db.prepare("UPDATE settings SET value='0' WHERE key='sync_applying'").run(); } catch(_e2) {}
+  }
+}
+
+// ── Traiter un SYNC_ACK reçu ───────────────────────────────
+function handleSyncAck(msg) {
+  try {
+    const { machine_id, last_seq } = msg;
+    if (!machine_id) return;
+
+    // Marquer nos entrées comme reçues par ce pair
+    const rows = db.prepare('SELECT id, synced_to FROM sync_log WHERE machine_id=? AND id<=?').all(MACHINE_ID, last_seq || 0);
+    const upd  = db.prepare('UPDATE sync_log SET synced_to=? WHERE id=?');
+    for (const r of rows) {
+      const arr = JSON.parse(r.synced_to || '[]');
+      if (!arr.includes(machine_id)) { arr.push(machine_id); upd.run(JSON.stringify(arr), r.id); }
+    }
+    console.log('[SYNC] ACK de ' + machine_id + ' — seq ' + last_seq);
+    updateSyncStatus();
+  } catch(e) { console.error('[SYNC] handleSyncAck:', e.message); }
+}
+
+// ── IPC Handlers sync ───────────────────────────────────────
+ipcMain.handle('sync-status', () => {
+  try {
+    const pending = db.prepare("SELECT COUNT(*) as c FROM sync_log WHERE machine_id=? AND synced_to='[]'").get(MACHINE_ID)?.c || 0;
+    return { success: true, status: peersMap.size > 0 ? (pending > 0 ? 'pending' : 'synced') : (pending > 0 ? 'offline' : 'idle'), pending, online: peersMap.size };
+  } catch(e) { return { success: false, status: 'idle', pending: 0 }; }
+});
+
+ipcMain.handle('sync-force', () => {
+  try {
+    for (const [id, peer] of peersMap.entries()) {
+      if (peer.ws?.readyState === WebSocket.OPEN) sendSyncRequest(id, peer.ws);
+    }
+    return { success: true };
+  } catch(e) { return { success: false }; }
+});
+
+// ── Intégration dans les handlers WS existants ─────────────
+// Patch appliqué aux deux handlers (serveur + client) via une fonction centrale
+function handleSyncMessage(ws, msg, peerMachineId) {
+  if      (msg.type === 'SYNC_REQUEST') handleSyncRequest(ws, msg);
+  else if (msg.type === 'SYNC_DELTA')   handleSyncDelta(ws, msg);
+  else if (msg.type === 'SYNC_ACK')     handleSyncAck(msg);
+}
+// Note : sendSyncRequest() est appelé dans les handlers WS existants
+// après l'échange CKBPOS_INFO, via le listener 'peer-registered' ci-dessous.
+// Electron émet cet événement interne depuis broadcastPeersUpdate — voir patch ci-dessous.
+
+// ── Patch broadcastPeersUpdate pour déclencher sync au connect ─
+const _origBroadcast = broadcastPeersUpdate;
+// Quand un pair se connecte, envoyer SYNC_REQUEST automatiquement
+// On surveille les nouveaux pairs via peersMap — implémenté via peerRegistered()
+function onPeerRegistered(peerMachineId) {
+  setTimeout(() => {
+    const peer = peersMap.get(peerMachineId);
+    if (peer?.ws?.readyState === WebSocket.OPEN) {
+      sendSyncRequest(peerMachineId, peer.ws);
+    }
+  }, 300); // légère pause pour laisser CKBPOS_INFO s'établir
+}
+
+// ── Périodique : sync toutes les 30s + status check ────────
+setInterval(() => {
+  for (const [id, peer] of peersMap.entries()) {
+    if (peer.ws?.readyState === WebSocket.OPEN) sendSyncRequest(id, peer.ws);
+  }
+  updateSyncStatus();
+}, 30000);
+
+// ── Exposer handleSyncMessage aux handlers WS du bloc LAN ──
+// Les blocs WS existants appellent handleSyncMessage() dans leur clause else
+// Ceci est fait en monkey-patching le prototype via un registre global simple
+global._ckbSyncHandlers = { handleSyncMessage, onPeerRegistered };
