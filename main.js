@@ -2346,9 +2346,23 @@ function initSupabase() {
       return null;
     }
 
+    // Node.js < 22 n'a pas de WebSocket natif — passer le package ws explicitement
+    const wsLib = require('ws');
+    // Electron v29+ : utiliser net.fetch (stack Chromium) au lieu du fetch Node.js
+    // Le fetch natif Node.js échoue souvent (proxy, SSL, réseau différent du renderer)
+    const { net } = require('electron');
+    const electronFetch = net.fetch.bind(net);
+
     _supabase = createClient(url, key, {
-      auth:     { persistSession: false },
-      realtime: { params: { eventsPerSecond: 2 } },
+      auth:     { persistSession: false, autoRefreshToken: false },
+      realtime: {
+        params:    { eventsPerSecond: 2 },
+        transport: wsLib,
+      },
+      global: {
+        WebSocket: wsLib,
+        fetch:     electronFetch, // Stack Chromium — proxy + SSL corrects
+      },
     });
 
     console.log('[CLOUD] Client Supabase initialisé');
@@ -2475,9 +2489,12 @@ function subscribeRealtime() {
           console.log('[CLOUD] Realtime souscription active');
           sendCloudStatus({ status: 'connected' });
         } else if (s === 'CLOSED' || s === 'CHANNEL_ERROR') {
-          console.warn('[CLOUD] Realtime: ' + s);
+          // CHANNEL_ERROR = table pas dans la publication Realtime
+          // Le REST API + polling 60s fonctionnent toujours → statut 'connected' maintenu
+          console.warn('[CLOUD] Realtime ' + s + ' — sync via polling uniquement (60s)');
           _supaChannel = null;
-          sendCloudStatus({ status: 'error', error: 'Realtime ' + s });
+          // Ne pas passer en 'error' — le push/pull REST fonctionne
+          sendCloudStatus({ status: 'connected', realtimeOk: false });
         }
       });
   } catch(e) {
