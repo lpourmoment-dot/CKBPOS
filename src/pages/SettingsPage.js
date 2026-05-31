@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTheme } from '../App';
 import { useLang } from '../utils/useLang';
 import { useAuth } from '../App';
@@ -62,6 +62,13 @@ export default function SettingsPage() {
   const [authCode, setAuthCode] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [lastSync, setLastSync] = useState('');
+
+  // ── v1.7.0 Supabase Cloud ──────────────────────────────
+  const [supaUrl, setSupaUrl]           = useState('');
+  const [supaKey, setSupaKey]           = useState('');
+  const [supaStatus, setSupaStatus]     = useState({ status: 'disconnected' });
+  const [supaConnecting, setSupaConnecting] = useState(false);
+  const [supaMsg, setSupaMsg]           = useState('');
 
   // UI
   const [saving, setSaving] = useState(false);
@@ -130,10 +137,13 @@ export default function SettingsPage() {
   const [ticketFlagsSaved, setTicketFlagsSaved] = useState(false);
 
   useEffect(() => {
-    loadSettings(); checkDrive(); loadSecurity(); loadPrinters(); loadMachineId(); loadTicketFlags(); loadCaderno();
+    loadSettings(); checkDrive(); loadSecurity(); loadPrinters(); loadMachineId(); loadTicketFlags(); loadCaderno(); loadSupabase();
     window.electron?.appVersion?.().then(v => {
       if (v) window.__CKBPOS_VERSION__ = v;
     }).catch(() => {});
+    // Abonnement statut cloud en temps réel
+    const cleanup = window.electron.onCloudStatus?.((data) => setSupaStatus(data));
+    return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
   const loadTicketFlags = async () => {
@@ -150,6 +160,71 @@ export default function SettingsPage() {
     );
     setTicketFlagsSaved(true);
     setTimeout(() => setTicketFlagsSaved(false), 2000);
+  };
+
+  // ── v1.7.0 Supabase ─────────────────────────────────────
+  const loadSupabase = async () => {
+    try {
+      const [urlRes, keyRes, statusRes] = await Promise.all([
+        window.electron.dbGet("SELECT value FROM settings WHERE key='supabase_url'"),
+        window.electron.dbGet("SELECT value FROM settings WHERE key='supabase_key'"),
+        window.electron.cloudStatus?.() || Promise.resolve(null),
+      ]);
+      setSupaUrl(urlRes?.data?.value || '');
+      // Masquer la cl\u00e9 partiellement si elle existe
+      setSupaKey(keyRes?.data?.value || '');
+      if (statusRes?.success) setSupaStatus(statusRes);
+    } catch(_e) {}
+  };
+
+  const handleSupabaseConnect = async () => {
+    if (!supaUrl.trim() || !supaKey.trim()) {
+      setSupaMsg('\u274c Preencha o Project URL e a Anon Key.'); return;
+    }
+    setSupaConnecting(true); setSupaMsg('');
+    try {
+      await window.electron.dbQuery("INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)", ['supabase_url', supaUrl.trim()]);
+      await window.electron.dbQuery("INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)", ['supabase_key', supaKey.trim()]);
+      const res = await window.electron.cloudConnect?.();
+      if (res?.success) {
+        const realStatus = res.status || { status: 'connected' };
+        setSupaStatus(realStatus);
+        if (realStatus.status === 'connected' || realStatus.status === 'synced') {
+          setSupaMsg('✅ Supabase conectado com sucesso!');
+        } else if (realStatus.status === 'error') {
+          setSupaMsg('❌ Erro: ' + (realStatus.error || 'Falha na conexão — verifica a Anon Key (formato eyJhbGci...)'));
+        } else {
+          setSupaMsg('⏳ Conectando em segundo plano...');
+        }
+      } else {
+        setSupaMsg('❌ ' + (res?.error || 'Falha na conexão'));
+      }
+    } catch(e) { setSupaMsg('❌ Erro: ' + e.message); }
+    setSupaConnecting(false);
+  };
+
+  const handleSupabaseDisconnect = async () => {
+    try {
+      await window.electron.cloudDisconnect?.();
+      setSupaStatus({ status: 'disconnected' });
+      setSupaMsg('\u2705 Supabase desconectado.');
+    } catch(_e) {}
+  };
+
+  const handleSupaPush = async () => {
+    try {
+      setSupaMsg('\u23f3 Enviando dados...');
+      const res = await window.electron.cloudPush?.();
+      setSupaMsg(res?.success ? '\u2705 Dados enviados para a nuvem!' : '\u274c Falha no push');
+    } catch(_e) { setSupaMsg('\u274c Erro no push'); }
+  };
+
+  const handleSupaPull = async () => {
+    try {
+      setSupaMsg('\u23f3 Recebendo dados...');
+      const res = await window.electron.cloudPull?.();
+      setSupaMsg(res?.success ? '\u2705 Dados recebidos da nuvem!' : '\u274c Falha no pull');
+    } catch(_e) { setSupaMsg('\u274c Erro no pull'); }
   };
 
   const loadCaderno = async () => {
@@ -562,6 +637,111 @@ export default function SettingsPage() {
         )}
       </Accordion>
 
+      {/* ===== SUPABASE CLOUD SYNC ===== */}
+      <Accordion id="supabase" icon={<Cloud size={16}/>} title="Supabase Cloud Sync" color="#3ecf8e" openSections={openSections} toggleSection={toggleSection}>
+
+        {/* Statut connexion */}
+        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
+          <span style={{ width:8, height:8, borderRadius:'50%', flexShrink:0, background:
+            supaStatus.status==='connected'    ? '#3ecf8e' :
+            supaStatus.status==='syncing'      ? '#e8c547' :
+            supaStatus.status==='connecting'   ? '#60a5fa' :
+            supaStatus.status==='error'        ? 'var(--danger)' : '#555'
+          }}/>
+          <span style={{ fontSize:13, fontWeight:600, color:
+            supaStatus.status==='connected'    ? '#3ecf8e' :
+            supaStatus.status==='syncing'      ? '#e8c547' :
+            supaStatus.status==='connecting'   ? '#60a5fa' :
+            supaStatus.status==='error'        ? 'var(--danger)' : 'var(--text-muted)'
+          }}>
+          {supaStatus.status==='connected'  ? '✅ Conectado' :
+             supaStatus.status==='syncing'    ? '⏳ Sincronizando...' :
+             supaStatus.status==='connecting' ? '⏳ Conectando...' :
+             supaStatus.status==='error'      ? ('❌ Erro: ' + (supaStatus.error||'')) :
+             'Não configurado'}
+          </span>
+          {supaStatus.lastSync && (
+            <span style={{ fontSize:11, color:'var(--text-muted)' }}>
+              · último sync: {new Date(supaStatus.lastSync).toLocaleTimeString('fr-FR')}
+            </span>
+          )}
+        </div>
+
+        {/* Project URL */}
+        <div style={{ marginBottom:10 }}>
+          <label className="form-label">Project URL</label>
+          <input type="text" className="form-input" value={supaUrl}
+            onChange={e => setSupaUrl(e.target.value)}
+            placeholder="https://xxxxxxxxxx.supabase.co"
+            style={{ fontFamily:'monospace', fontSize:12 }}
+          />
+        </div>
+
+        {/* Anon Key */}
+        <div style={{ marginBottom:14 }}>
+          <label className="form-label">Anon Key (public)</label>
+          <input type="password" className="form-input" value={supaKey}
+            onChange={e => setSupaKey(e.target.value)}
+            placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            style={{ fontFamily:'monospace', fontSize:11 }}
+          />
+        </div>
+
+        {/* Boutons d'action */}
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:10 }}>
+          {supaStatus.status !== 'connected' ? (
+            <button onClick={handleSupabaseConnect} className="btn btn-primary"
+              disabled={supaConnecting || !supaUrl.trim() || !supaKey.trim()}
+              style={{ flex:1, justifyContent:'center' }}>
+              <Cloud size={14}/>
+              {supaConnecting ? 'Conectando...' : 'Conectar Supabase'}
+            </button>
+          ) : (
+            <>
+              <button onClick={handleSupaPush} className="btn btn-primary" style={{ flex:1, justifyContent:'center' }}>
+                {'⬆'} Push agora
+              </button>
+              <button onClick={handleSupaPull} className="btn btn-secondary" style={{ justifyContent:'center' }}>
+                {'⬇'} Pull
+              </button>
+              <button onClick={handleSupabaseDisconnect} className="btn btn-secondary">
+                <CloudOff size={14}/> Desconectar
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Message feedback */}
+        {supaMsg && (
+          <div style={{ fontSize:12, marginBottom:10,
+            color: supaMsg.startsWith('\u2705') ? 'var(--success)' : supaMsg.startsWith('\u23f3') ? 'var(--accent)' : 'var(--danger)'
+          }}>
+            {supaMsg}
+          </div>
+        )}
+
+        {/* Info migration SQL */}
+        <div style={{ fontSize:11, color:'var(--text-muted)', lineHeight:1.8, background:'var(--bg-hover)', padding:'10px 12px', borderRadius:6, marginTop:6 }}>
+          <div style={{ fontWeight:700, marginBottom:4, color:'var(--text-secondary)' }}>📝 Setup requis sur supabase.com</div>
+          <div>1. Créer un projet sur <strong>supabase.com</strong></div>
+          <div>2. Project Settings → API → copier URL + anon key</div>
+          <div>3. Onglet SQL Editor → exécuter :</div>
+          <pre style={{ fontSize:10, background:'#111', padding:'6px 8px', borderRadius:4, marginTop:6, overflowX:'auto', color:'#22c55e' }}>{`CREATE TABLE cloud_sync_log (
+  id                BIGSERIAL PRIMARY KEY,
+  source_machine_id TEXT NOT NULL,
+  source_seq        INTEGER,
+  table_name        TEXT NOT NULL,
+  record_id         INTEGER,
+  operation         TEXT NOT NULL,
+  row_data          JSONB,
+  created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX ON cloud_sync_log(source_machine_id,id);
+ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
+        </div>
+
+      </Accordion>
+
       {/* ===== IMPRESSORA ===== */}
       <Accordion id="impressora" icon={<Printer size={16}/>} title={t('settings','accPrinter')} openSections={openSections} toggleSection={toggleSection}>
         <div style={{ marginBottom:14 }}>
@@ -583,11 +763,11 @@ export default function SettingsPage() {
           <select className="form-input" value={ticketSizeMm} onChange={e=>setTicketSizeMm(parseInt(e.target.value))}>
             <option value={52}>52mm</option>
             <option value={60}>60mm</option>
-            <option value={72}>72mm \u2014 POS-80C (actuel)</option>
+            <option value={72}>72mm — POS-80C (actuel)</option>
             <option value={80}>80mm</option>
           </select>
           <p style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>
-            Adapte la largeur du ticket \u00e0 votre imprimante thermique. Actuel\u00a0: {ticketSizeMm}mm.
+            Adapte la largeur du ticket à votre imprimante thermique. Actuel : {ticketSizeMm}mm.
           </p>
         </div>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
