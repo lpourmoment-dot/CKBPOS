@@ -89,6 +89,9 @@ contextBridge.exposeInMainWorld('electron', {
   networkPeersList: () => ipcRenderer.invoke('network-peers-list'),
   networkStatus:    () => ipcRenderer.invoke('network-status'),
   machinesStats:    () => ipcRenderer.invoke('machines-stats'),
+  // ── v1.8.0 Clé réseau LAN ──────────────────────────────
+  getNetworkKey: ()      => ipcRenderer.invoke('get-network-key'),
+  setNetworkKey: (key)   => ipcRenderer.invoke('set-network-key', key),
 
   // Écouter les mises à jour de pairs en temps réel
   // Retourne une fonction de cleanup à appeler dans useEffect return

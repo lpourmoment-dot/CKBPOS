@@ -321,18 +321,32 @@ if (!adminExists) {
   ['printer_copies_ticket',  '2'],
   ['printer_copies_shift',   '1'],
   // ── v1.1.2 ──────────────────────────────────────────────
-  ['machine_id',     ''],   // UUID unique par installation — généré ci-dessous
-  ['machine_label',  'Caixa Principal'], // Nom affiché pour cette machine
+  ['machine_id',     ''],
+  ['machine_label',  'Caixa Principal'],
+  ['network_key',    ''],              // Clé réseau LAN par entreprise — v1.8.0
 ].forEach(([k,v]) => db.prepare('INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)').run(k,v));
 
 // ── Générer machine_id si absent ou vide ──────────────────
-// Chaque installation reçoit un UUID unique et permanent.
-// Utilisé pour : préfixe facture, identification LAN v2.0.0
 const machineIdRow = db.prepare("SELECT value FROM settings WHERE key='machine_id'").get();
 if (!machineIdRow || !machineIdRow.value || machineIdRow.value.trim() === '') {
   const newId = generateUUID();
   db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('machine_id',?)").run(newId);
   console.log('[CKBPOS] Nouveau machine_id généré:', newId);
+}
+
+// ── Générer network_key si absente (CKB-XXXX-XXXX) ───────
+// Clé partagée entre toutes les machines d'un même commerce.
+// Machines avec des clés différentes s'ignorent mutuellement sur le LAN.
+const nkRow = db.prepare("SELECT value FROM settings WHERE key='network_key'").get();
+if (!nkRow || !nkRow.value || nkRow.value.trim() === '') {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // pas de 0/O ni 1/I
+  const bytes = crypto.randomBytes(8);
+  let nk = 'CKB-';
+  for (let i = 0; i < 4; i++) nk += chars[bytes[i] % chars.length];
+  nk += '-';
+  for (let i = 4; i < 8; i++) nk += chars[bytes[i] % chars.length];
+  db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('network_key',?)").run(nk);
+  console.log('[CKBPOS] Nouvelle network_key générée:', nk);
 }
 
 // ── Tables réseau v1.4.0 ─────────────────────────────────────

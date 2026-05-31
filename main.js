@@ -1744,6 +1744,19 @@ let udpSocket          = null;
 let heartbeatInterval  = null;
 let rebroadcastInterval = null;
 
+// ── Clé réseau — isolation par entreprise (v1.8.0) ─────────
+function getNetworkKey() {
+  try { return db.prepare("SELECT value FROM settings WHERE key='network_key'").get()?.value || ''; }
+  catch(_e) { return ''; }
+}
+
+function networkKeyMatches(receivedKey) {
+  const myKey = getNetworkKey();
+  if (!myKey) return true;      // Pas de clé configurée → mode ouvert (legacy)
+  if (!receivedKey) return false; // Moi j'ai une clé, l'autre non → refus
+  return receivedKey === myKey;
+}
+
 // ── Utilitaires ─────────────────────────────────────────────
 function getLocalIPs() {
   const ips = [];
@@ -1763,9 +1776,10 @@ function getMachineInfo() {
       machine_id:    MACHINE_ID,
       machine_label: labelRow?.value || 'CKBPOS',
       port:          WS_PORT,
+      network_key:   getNetworkKey(),
     };
   } catch(_e) {
-    return { type: 'CKBPOS_INFO', machine_id: MACHINE_ID, machine_label: 'CKBPOS', port: WS_PORT };
+    return { type: 'CKBPOS_INFO', machine_id: MACHINE_ID, machine_label: 'CKBPOS', port: WS_PORT, network_key: '' };
   }
 }
 
@@ -1819,6 +1833,11 @@ function startWsServer() {
 
           if (msg.type === 'CKBPOS_INFO') {
             if (msg.machine_id === MACHINE_ID) { ws.close(); return; }
+            // ── v1.8.0 Clé réseau — isoler les entreprises sur le même LAN ──
+            if (!networkKeyMatches(msg.network_key)) {
+              console.warn('[LAN] Refusé (clé réseau différente): ' + (msg.machine_label || msg.machine_id) + ' @ ' + peerIp);
+              ws.close(); return;
+            }
             peerMachineId = msg.machine_id;
             // Fermer l'ancienne connexion si elle existe
             if (peersMap.has(peerMachineId)) {
@@ -1898,6 +1917,11 @@ function connectToPeer(ip, port) {
           if (msg.machine_id === MACHINE_ID) { ws.close(); return; }
           // Eviter les doublons (connexion entrante peut deja exister)
           if (peersMap.has(msg.machine_id)) { ws.close(); return; }
+          // ── v1.8.0 Clé réseau ──
+          if (!networkKeyMatches(msg.network_key)) {
+            console.warn('[LAN] Refusé (clé réseau différente): ' + msg.machine_id);
+            ws.close(); return;
+          }
           peerMachineId = msg.machine_id;
           upsertPeer(peerMachineId, msg.machine_label, ip, msg.port);
           peersMap.set(peerMachineId, { ws, machine_label: msg.machine_label, ip, lastSeen: Date.now() });
@@ -1937,6 +1961,12 @@ function startUdpDiscovery() {
       try {
         const msg = JSON.parse(buf.toString());
         if (msg.machine_id === MACHINE_ID) return; // ignorer soi-meme
+
+        // ── v1.8.0 Clé réseau — ignorer les broadcasts d'autres entreprises ──
+        if (!networkKeyMatches(msg.network_key)) {
+          console.log('[LAN] UDP ignoré (clé réseau différente) @ ' + rinfo.address);
+          return;
+        }
 
         if (msg.type === 'CKBPOS_DISCOVER') {
           console.log('[LAN] UDP discover: ' + (msg.machine_label || msg.machine_id) + ' @ ' + rinfo.address);
@@ -1981,6 +2011,21 @@ function sendDiscoveryBroadcast() {
 ipcMain.handle('network-peers-list', () => {
   try { return { success: true, data: getPeersForRenderer() }; }
   catch(e) { return { success: false, error: e.message, data: [] }; }
+});
+
+// ── v1.8.0 — Clé réseau LAN ────────────────────────────────
+ipcMain.handle('get-network-key', () => {
+  try { return { success: true, key: getNetworkKey() }; }
+  catch(e) { return { success: false, key: '' }; }
+});
+
+ipcMain.handle('set-network-key', (_, newKey) => {
+  try {
+    const key = (newKey || '').trim().toUpperCase();
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('network_key',?)").run(key);
+    console.log('[LAN] network_key mise à jour: ' + key);
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
 });
 
 // ── v1.6.0 — Stats multi-machines ──────────────────────────
