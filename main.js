@@ -105,7 +105,7 @@ ipcMain.handle('get-printers', async () => {
 const db = require('./database/db');
 const { MACHINE_ID } = require('./database/db');
 // Version auto depuis package.json
-const APP_VERSION = (() => { try { return require('./package.json').version; } catch(e) { return '2.0.0'; } })();
+const APP_VERSION = (() => { try { return require('./package.json').version; } catch(e) { return '3.2.0'; } })();
 // ✅ Version auto depuis package.json — utilisé dans SettingsPage.js
 ipcMain.handle('app-version', () => APP_VERSION);
 
@@ -2470,9 +2470,497 @@ setInterval(() => {
 global._ckbSyncHandlers = { handleSyncMessage, onPeerRegistered };
 
 // ============================================================
-// IMPRESSION PARTAGÉE — v1.9.1
-// Machine B route le job d'impression vers Machine A via WS
+// COORDINATEUR — v3.0
+// Élection : machine_label='Caixa Principal' en priorité,
+// fallback : machine_id alphanumérique le plus petit.
+// Source de vérité pour : Stock reservations + Print queue
 // ============================================================
+
+let _isCoordinator      = false;
+let _coordinatorId      = '';
+let _coordinatorLabel   = '';
+let _coordCheckTimer    = null;
+let _coordAnnounceTimer = null;
+const COORD_TTL_MS      = 12000;
+let _lastCoordSeen      = 0;
+
+function shouldBeCoordinator() {
+  const label = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get()?.value || '';
+  if (label === 'Caixa Principal') return true;
+  const allIds = [MACHINE_ID, ...peersMap.keys()].sort();
+  return allIds[0] === MACHINE_ID;
+}
+
+function becomeCoordinator() {
+  if (_isCoordinator) return;
+  _isCoordinator  = true;
+  _coordinatorId  = MACHINE_ID;
+  const label = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get()?.value || 'CKBPOS';
+  _coordinatorLabel = label;
+  db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('coordinator_id',?)").run(MACHINE_ID);
+  db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('coordinator_label',?)").run(label);
+  try { db.prepare("INSERT INTO coordinator_log (machine_id,event) VALUES (?,'ELECTED')").run(MACHINE_ID); } catch(_e) {}
+  console.log('[COORD] Coordinateur élu: ' + label);
+  broadcastCoordAnnounce();
+  startPrintQueueWorker();
+  notifyCoordStatus();
+}
+
+function resignCoordinator() {
+  if (!_isCoordinator) return;
+  _isCoordinator = false;
+  console.log('[COORD] Abandon rôle coordinateur');
+  stopPrintQueueWorker();
+  notifyCoordStatus();
+}
+
+function broadcastCoordAnnounce() {
+  if (!_isCoordinator) return;
+  const msg = JSON.stringify({ type: 'COORD_ANNOUNCE', machine_id: MACHINE_ID, machine_label: _coordinatorLabel, ts: Date.now() });
+  for (const peer of peersMap.values()) {
+    if (peer.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(msg); } catch(_e) {}
+  }
+}
+
+function handleCoordAnnounce(msg) {
+  _lastCoordSeen    = Date.now();
+  _coordinatorId    = msg.machine_id;
+  _coordinatorLabel = msg.machine_label || '';
+  try {
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('coordinator_id',?)").run(msg.machine_id);
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('coordinator_label',?)").run(_coordinatorLabel);
+  } catch(_e) {}
+  if (_isCoordinator && msg.machine_id !== MACHINE_ID) {
+    const theirLabel = msg.machine_label || '';
+    const myLabel    = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get()?.value || '';
+    const theyWin = (theirLabel === 'Caixa Principal' && myLabel !== 'Caixa Principal') ||
+                    (myLabel !== 'Caixa Principal' && msg.machine_id < MACHINE_ID);
+    if (theyWin) { console.log('[COORD] Céder à ' + theirLabel); resignCoordinator(); }
+  }
+  notifyCoordStatus();
+}
+
+function runCoordElection() {
+  const coordAbsent = !_coordinatorId || (Date.now() - _lastCoordSeen > COORD_TTL_MS);
+  if (coordAbsent && !_isCoordinator) {
+    const delay = shouldBeCoordinator() ? 800 : 2500;
+    setTimeout(() => {
+      if (Date.now() - _lastCoordSeen > COORD_TTL_MS && shouldBeCoordinator()) becomeCoordinator();
+    }, delay);
+  } else if (_isCoordinator) {
+    broadcastCoordAnnounce();
+  }
+}
+
+function notifyCoordStatus() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('coord-status-changed', { isCoordinator: _isCoordinator, coordinatorId: _coordinatorId, coordinatorLabel: _coordinatorLabel, degraded: _degradedMode }); } catch(_e) {}
+  }
+}
+
+ipcMain.handle('coord-status', () => ({ success: true, isCoordinator: _isCoordinator, coordinatorId: _coordinatorId, coordinatorLabel: _coordinatorLabel, degraded: _degradedMode || false }));
+
+// ── Patch onPeerRegistered pour annoncer après connexion ────
+const _origOnPeerReg = onPeerRegistered;
+function onPeerRegisteredV3(peerMachineId) {
+  _origOnPeerReg(peerMachineId);
+  setTimeout(() => { if (_isCoordinator) broadcastCoordAnnounce(); else runCoordElection(); }, 600);
+}
+
+_coordCheckTimer    = setInterval(runCoordElection, 10000);
+_coordAnnounceTimer = setInterval(() => { if (_isCoordinator) broadcastCoordAnnounce(); }, 5000);
+
+setTimeout(() => { if (!_coordinatorId) { if (shouldBeCoordinator()) becomeCoordinator(); else runCoordElection(); } }, 3000);
+
+// ── Handler v3 étendu ───────────────────────────────────────
+function handleSyncMessageV3(ws, msg, peerMachineId) {
+  if      (msg.type === 'COORD_ANNOUNCE') handleCoordAnnounce(msg);
+  else if (msg.type === 'STOCK_RESERVE')  handleStockReserve(ws, msg);
+  else if (msg.type === 'STOCK_RELEASE')  handleStockRelease(msg);
+  else if (msg.type === 'STOCK_RESERVED') handleStockReserved(msg);
+  else if (msg.type === 'PRINT_ENQUEUE')  handlePrintEnqueue(ws, msg);
+  else if (msg.type === 'PRINT_QUEUED')   handlePrintQueued(msg);
+  else if (msg.type === 'PRINT_DONE')     handlePrintDoneReceived(msg);
+  else                                    handleSyncMessage(ws, msg, peerMachineId);
+}
+global._ckbSyncHandlers = { handleSyncMessage: handleSyncMessageV3, onPeerRegistered: onPeerRegisteredV3 };
+
+// ============================================================
+// STOCK LOCK — v3.0
+// ============================================================
+
+const RESERVATION_TTL_S   = 30;
+const _stockReserveCallbacks = new Map();
+
+function handleStockReserve(ws, msg) {
+  if (!_isCoordinator) {
+    try { ws.send(JSON.stringify({ type: 'STOCK_RESERVED', reservation_id: msg.reservation_id, ok: false, reason: 'not_coordinator' })); } catch(_e) {}
+    return;
+  }
+  try {
+    const { reservation_id, product_id, variant_id, qty, machine_id } = msg;
+    let stockReel = 0;
+    if (variant_id) {
+      stockReel = db.prepare('SELECT stock_cartons FROM product_variants WHERE id=?').get(variant_id)?.stock_cartons || 0;
+    } else {
+      stockReel = db.prepare('SELECT stock_cartons FROM products WHERE id=?').get(product_id)?.stock_cartons || 0;
+    }
+    const reservedQty = db.prepare(
+      "SELECT COALESCE(SUM(qty_reserved),0) as tot FROM stock_reservations WHERE product_id=? AND status='active' AND expires_at > datetime('now','utc')"
+    ).get(product_id)?.tot || 0;
+    const available = stockReel - reservedQty;
+    if (available < qty) {
+      ws.send(JSON.stringify({ type: 'STOCK_RESERVED', reservation_id, ok: false, reason: 'insufficient_stock', available }));
+      console.log('[COORD] STOCK refusé prod=' + product_id + ' dispo=' + available + ' demandé=' + qty);
+      return;
+    }
+    const expiresAt = new Date(Date.now() + RESERVATION_TTL_S * 1000).toISOString().replace('T',' ').slice(0,19);
+    db.prepare('INSERT INTO stock_reservations (reservation_id,product_id,variant_id,qty_reserved,machine_id,expires_at) VALUES (?,?,?,?,?,?)')
+      .run(reservation_id, product_id, variant_id || null, qty, machine_id, expiresAt);
+    ws.send(JSON.stringify({ type: 'STOCK_RESERVED', reservation_id, ok: true, available: available - qty }));
+    console.log('[COORD] STOCK réservé ' + reservation_id.slice(0,8) + ' prod=' + product_id + ' qty=' + qty);
+  } catch(e) {
+    console.error('[COORD] handleStockReserve:', e.message);
+    try { ws.send(JSON.stringify({ type: 'STOCK_RESERVED', reservation_id: msg.reservation_id, ok: false, reason: 'error' })); } catch(_e) {}
+  }
+}
+
+function handleStockRelease(msg) {
+  if (!_isCoordinator) return;
+  try { db.prepare('UPDATE stock_reservations SET status=? WHERE reservation_id=?').run(msg.consumed ? 'consumed' : 'released', msg.reservation_id); }
+  catch(e) { console.error('[COORD] handleStockRelease:', e.message); }
+}
+
+function handleStockReserved(msg) {
+  const cb = _stockReserveCallbacks.get(msg.reservation_id);
+  if (!cb) return;
+  clearTimeout(cb.timer);
+  _stockReserveCallbacks.delete(msg.reservation_id);
+  if (msg.ok) cb.resolve({ ok: true, reservation_id: msg.reservation_id });
+  else cb.reject(new Error(msg.reason === 'insufficient_stock' ? 'Stock insuficiente (disponível: ' + (msg.available || 0) + ')' : msg.reason || 'erro'));
+}
+
+function requestStockReservation(product_id, variant_id, qty) {
+  return new Promise((resolve, reject) => {
+    if (_isCoordinator) {
+      const reservation_id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+      const fakeWs = { send: (data) => {
+        try { const m = JSON.parse(data); if (m.ok) resolve({ ok: true, reservation_id }); else reject(new Error(m.reason || 'stock insuficiente')); }
+        catch(_e) { reject(new Error('erro interno')); }
+      }};
+      handleStockReserve(fakeWs, { reservation_id, product_id, variant_id, qty, machine_id: MACHINE_ID });
+      return;
+    }
+    const coordPeer = peersMap.get(_coordinatorId);
+    if (!coordPeer || coordPeer.ws?.readyState !== WebSocket.OPEN) {
+      console.warn('[COORD] Coordinador offline — modo degradado, venda sem lock');
+      resolve({ ok: true, reservation_id: null, degraded: true });
+      return;
+    }
+    const reservation_id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    const timer = setTimeout(() => {
+      _stockReserveCallbacks.delete(reservation_id);
+      console.warn('[COORD] Timeout reserva stock — modo degradado');
+      resolve({ ok: true, reservation_id: null, degraded: true });
+    }, 3000);
+    _stockReserveCallbacks.set(reservation_id, { resolve, reject, timer });
+    coordPeer.ws.send(JSON.stringify({ type: 'STOCK_RESERVE', reservation_id, product_id, variant_id, qty, machine_id: MACHINE_ID }));
+  });
+}
+
+function releaseStockReservation(reservation_id, consumed = true) {
+  if (!reservation_id) return;
+  if (_isCoordinator) {
+    try { db.prepare('UPDATE stock_reservations SET status=? WHERE reservation_id=?').run(consumed ? 'consumed' : 'released', reservation_id); } catch(_e) {}
+    return;
+  }
+  const coordPeer = peersMap.get(_coordinatorId);
+  if (coordPeer?.ws?.readyState === WebSocket.OPEN) {
+    try { coordPeer.ws.send(JSON.stringify({ type: 'STOCK_RELEASE', reservation_id, consumed })); } catch(_e) {}
+  }
+}
+
+setInterval(() => {
+  try { db.prepare("UPDATE stock_reservations SET status='expired' WHERE status='active' AND expires_at < datetime('now','utc')").run(); } catch(_e) {}
+}, 30000);
+
+ipcMain.handle('stock-reserve', async (_, { product_id, variant_id, qty }) => {
+  try { return { success: true, ...(await requestStockReservation(product_id, variant_id || null, qty)) }; }
+  catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('stock-release', (_, { reservation_id, consumed }) => {
+  releaseStockReservation(reservation_id, consumed !== false);
+  return { success: true };
+});
+
+// ============================================================
+// PRINT QUEUE — v3.0
+// ============================================================
+
+let _printQueueRunning  = false;
+let _printQueueInterval = null;
+const _printQueuedCallbacks = new Map();
+const _printDoneCallbacks   = new Map();
+
+function startPrintQueueWorker() {
+  if (_printQueueInterval) return;
+  _printQueueInterval = setInterval(processPrintQueue, 500);
+  console.log('[PRINT] Queue worker démarré (coordinateur)');
+}
+
+function stopPrintQueueWorker() {
+  if (_printQueueInterval) { clearInterval(_printQueueInterval); _printQueueInterval = null; }
+}
+
+async function processPrintQueue() {
+  if (_printQueueRunning) return;
+  try {
+    const job = db.prepare("SELECT * FROM print_queue WHERE status='queued' ORDER BY priority ASC, id ASC LIMIT 1").get();
+    if (!job) return;
+    _printQueueRunning = true;
+    db.prepare("UPDATE print_queue SET status='printing' WHERE id=?").run(job.id);
+    console.log('[PRINT] Job ' + job.job_id.slice(0,8) + ' type=' + job.print_type);
+    try {
+      const data = JSON.parse(job.data_json);
+      const { ticketSizeMm, copiesTicket, copiesShift } = getPrintSettings();
+      if (job.print_type === 'ticket') {
+        let qrDataUrl = '';
+        if (QRCode) try { const t = [data.numeroFacture||'N/A',`${data.total} ${data.currency}`,data.date,data.seller].join('|'); qrDataUrl = await QRCode.toDataURL(t,{width:128,margin:2,errorCorrectionLevel:'L',color:{dark:'#000000',light:'#ffffff'}}); } catch(_e) {}
+        await printHTML(generateTicketHTML({ ...data, qrDataUrl, flags: getTicketFlags(), ticketSizeMm }), data.copies || copiesTicket || 2, true);
+      } else if (job.print_type === 'shift') {
+        await printHTML(generateShiftHTML({ ...data, ticketSizeMm }), data.copies || copiesShift || 1, true);
+      } else if (job.print_type === 'caderno') {
+        await printHTML(generateCadernoTicketHTML({ ...data, ticketSizeMm }), 1, true);
+      }
+      db.prepare("UPDATE print_queue SET status='done', done_at=datetime('now','utc') WHERE id=?").run(job.id);
+      notifyPrintDone(job.job_id, job.machine_source, true, null);
+    } catch(printErr) {
+      console.error('[PRINT] Job échoué:', printErr.message);
+      db.prepare("UPDATE print_queue SET status='failed', error=? WHERE id=?").run(printErr.message, job.id);
+      notifyPrintDone(job.job_id, job.machine_source, false, printErr.message);
+    }
+  } catch(e) { console.error('[PRINT] processPrintQueue:', e.message); }
+  _printQueueRunning = false;
+}
+
+function notifyPrintDone(job_id, sourceMachineId, success, error) {
+  if (sourceMachineId === MACHINE_ID) {
+    const cb = _printDoneCallbacks.get(job_id);
+    if (cb) { clearTimeout(cb.timer); _printDoneCallbacks.delete(job_id); cb.resolve({ success, error }); }
+    return;
+  }
+  const peer = peersMap.get(sourceMachineId);
+  if (peer?.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(JSON.stringify({ type: 'PRINT_DONE', job_id, success, error: error || null })); } catch(_e) {}
+}
+
+function handlePrintEnqueue(ws, msg) {
+  if (!_isCoordinator) {
+    try { ws.send(JSON.stringify({ type: 'PRINT_QUEUED', job_id: msg.job_id, position: -1, error: 'not_coordinator' })); } catch(_e) {}
+    return;
+  }
+  try {
+    const { job_id, print_type, data, priority, machine_source } = msg;
+    db.prepare('INSERT OR IGNORE INTO print_queue (job_id,print_type,data_json,priority,machine_source) VALUES (?,?,?,?,?)')
+      .run(job_id, print_type, JSON.stringify(data), priority || 5, machine_source || MACHINE_ID);
+    const position = db.prepare("SELECT COUNT(*) as c FROM print_queue WHERE status='queued' AND id<=(SELECT id FROM print_queue WHERE job_id=?)").get(job_id)?.c || 1;
+    ws.send(JSON.stringify({ type: 'PRINT_QUEUED', job_id, position }));
+    console.log('[PRINT] Enqueued job=' + job_id.slice(0,8) + ' pos=' + position);
+  } catch(e) {
+    console.error('[PRINT] handlePrintEnqueue:', e.message);
+    try { ws.send(JSON.stringify({ type: 'PRINT_QUEUED', job_id: msg.job_id, position: -1, error: e.message })); } catch(_e) {}
+  }
+}
+
+function handlePrintQueued(msg) {
+  const cb = _printQueuedCallbacks.get(msg.job_id);
+  if (!cb) return;
+  clearTimeout(cb.timer);
+  _printQueuedCallbacks.delete(msg.job_id);
+  cb.resolve({ success: !msg.error, job_id: msg.job_id, position: msg.position, queued: true });
+}
+
+function handlePrintDoneReceived(msg) {
+  const cb = _printDoneCallbacks.get(msg.job_id);
+  if (!cb) return;
+  clearTimeout(cb.timer);
+  _printDoneCallbacks.delete(msg.job_id);
+  cb.resolve({ success: msg.success, error: msg.error });
+}
+
+function enqueuePrintJob(print_type, data, priority) {
+  return new Promise((resolve) => {
+    const job_id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    if (_isCoordinator) {
+      try {
+        db.prepare('INSERT OR IGNORE INTO print_queue (job_id,print_type,data_json,priority,machine_source) VALUES (?,?,?,?,?)')
+          .run(job_id, print_type, JSON.stringify(data), priority || 5, MACHINE_ID);
+        resolve({ success: true, job_id, position: 1, queued: true });
+      } catch(e) { resolve({ success: false, error: e.message }); }
+      return;
+    }
+    const coordPeer = peersMap.get(_coordinatorId);
+    if (!coordPeer || coordPeer.ws?.readyState !== WebSocket.OPEN) {
+      console.warn('[PRINT] Coordinador offline — modo degradado');
+      resolve({ success: false, degraded: true, job_id });
+      return;
+    }
+    const timer = setTimeout(() => {
+      _printQueuedCallbacks.delete(job_id);
+      resolve({ success: false, degraded: true, job_id, error: 'timeout' });
+    }, 3000);
+    _printQueuedCallbacks.set(job_id, { resolve, timer });
+    coordPeer.ws.send(JSON.stringify({ type: 'PRINT_ENQUEUE', job_id, print_type, data, priority: priority || 5, machine_source: MACHINE_ID }));
+  });
+}
+
+ipcMain.handle('print-queue-status', () => {
+  try {
+    const queued   = db.prepare("SELECT COUNT(*) as c FROM print_queue WHERE status='queued'").get()?.c || 0;
+    const printing = db.prepare("SELECT COUNT(*) as c FROM print_queue WHERE status='printing'").get()?.c || 0;
+    return { success: true, queued, printing, isCoordinator: _isCoordinator, coordinatorId: _coordinatorId, coordinatorLabel: _coordinatorLabel };
+  } catch(e) { return { success: false }; }
+});
+
+// ── Remplacer les IPC impression par versions v3 ────────────
+ipcMain.removeHandler('print-ticket');
+ipcMain.handle('print-ticket', async (_, data) => {
+  try {
+    const printerMode = db.prepare("SELECT value FROM settings WHERE key='printer_mode'").get()?.value || 'local';
+    const targetId    = db.prepare("SELECT value FROM settings WHERE key='printer_machine_id'").get()?.value || '';
+    if (printerMode === 'shared' && targetId) {
+      const useQueue = targetId === _coordinatorId || _isCoordinator;
+      if (useQueue) {
+        const r = await enqueuePrintJob('ticket', data, 5);
+        if (!r.degraded) return { success: true, queued: true, job_id: r.job_id };
+      } else {
+        const peer = peersMap.get(targetId);
+        if (peer?.ws?.readyState === WebSocket.OPEN) {
+          try { await sendPrintRequest(targetId, 'ticket', data); return { success: true, remote: true }; }
+          catch(e) { console.error('[PRINT] Fallback local:', e.message); }
+        }
+      }
+    }
+    let qrDataUrl = '';
+    if (QRCode) try { const t = [data.numeroFacture||'N/A',`${data.total} ${data.currency}`,data.date,data.seller].join('|'); qrDataUrl = await QRCode.toDataURL(t,{width:128,margin:2,errorCorrectionLevel:'L',color:{dark:'#000000',light:'#ffffff'}}); } catch(e) {}
+    const { copiesTicket, ticketSizeMm } = getPrintSettings();
+    const result = await printHTML(generateTicketHTML({ ...data, qrDataUrl, flags: getTicketFlags(), ticketSizeMm }), data.copies || copiesTicket || 2, true);
+    return { success: true, ...(result || {}) };
+  } catch(e) { console.error('[print-ticket]', e.message); return { success: true, error: e.message }; }
+});
+
+ipcMain.removeHandler('print-shift-report');
+ipcMain.handle('print-shift-report', async (_, data) => {
+  try {
+    const printerMode = db.prepare("SELECT value FROM settings WHERE key='printer_mode'").get()?.value || 'local';
+    const targetId    = db.prepare("SELECT value FROM settings WHERE key='printer_machine_id'").get()?.value || '';
+    if (printerMode === 'shared' && targetId) {
+      const useQueue = targetId === _coordinatorId || _isCoordinator;
+      if (useQueue) {
+        const r = await enqueuePrintJob('shift', data, 3);
+        if (!r.degraded) return { success: true, queued: true };
+      } else {
+        const peer = peersMap.get(targetId);
+        if (peer?.ws?.readyState === WebSocket.OPEN) {
+          try { await sendPrintRequest(targetId, 'shift', data); return { success: true, remote: true }; } catch(e) {}
+        }
+      }
+    }
+    const { copiesShift, ticketSizeMm } = getPrintSettings();
+    let cadernoResume = null;
+    try {
+      const today = new Date().toISOString().slice(0,10);
+      const rows = db.prepare('SELECT direction,montant,est_dette,statut_dette FROM caderno_entries WHERE date_jour=?').all(today);
+      if (rows.length) {
+        const totalPlus  = rows.filter(e=>e.direction==='entree').reduce((s,e)=>s+e.montant,0);
+        const totalMoins = rows.filter(e=>e.direction!=='entree').reduce((s,e)=>s+e.montant,0);
+        const dettes     = rows.filter(e=>e.est_dette&&e.statut_dette!=='pago').reduce((s,e)=>s+e.montant,0);
+        cadernoResume = { totalPlus, totalMoins, dettes, net: totalPlus-totalMoins };
+      }
+    } catch(err) { console.error('[shift caderno]', err.message); }
+    await printHTML(generateShiftHTML({ ...data, cadernoResume, ticketSizeMm }), data.copies || copiesShift || 1, true);
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.removeHandler('print-caderno');
+ipcMain.handle('print-caderno', async (_, data) => {
+  try {
+    const printerMode = db.prepare("SELECT value FROM settings WHERE key='printer_mode'").get()?.value || 'local';
+    const targetId    = db.prepare("SELECT value FROM settings WHERE key='printer_machine_id'").get()?.value || '';
+    if (printerMode === 'shared' && targetId) {
+      const useQueue = targetId === _coordinatorId || _isCoordinator;
+      if (useQueue) {
+        const r = await enqueuePrintJob('caderno', data, 7);
+        if (!r.degraded) return { success: true, queued: true };
+      } else {
+        const peer = peersMap.get(targetId);
+        if (peer?.ws?.readyState === WebSocket.OPEN) {
+          try { await sendPrintRequest(targetId, 'caderno', data); return { success: true, remote: true }; } catch(e) {}
+        }
+      }
+    }
+    const { ticketSizeMm } = getPrintSettings();
+    await printHTML(generateCadernoTicketHTML({ ...data, ticketSizeMm }), 1, true);
+    return { success: true };
+  } catch(e) { console.error('[print-caderno]', e.message); return { success: true, error: e.message }; }
+});
+
+// ============================================================
+// MODE DÉGRADÉ — v3.1
+// Monitoring coordinateur absent + récupération automatique
+// ============================================================
+
+let _degradedMode = false;
+
+function checkDegradedMode() {
+  const coordAbsent = !_coordinatorId || (!_isCoordinator && Date.now() - _lastCoordSeen > COORD_TTL_MS);
+  if (coordAbsent && !_degradedMode) {
+    _degradedMode = true;
+    console.warn('[COORD] MODE DÉGRADÉ activé');
+    notifyCoordStatus();
+  } else if (!coordAbsent && _degradedMode) {
+    _degradedMode = false;
+    console.log('[COORD] Mode dégradé levé');
+    if (_isCoordinator) {
+      try { db.prepare("UPDATE stock_reservations SET status='expired' WHERE status='active' AND expires_at < datetime('now','utc')").run(); } catch(_e) {}
+    }
+    notifyCoordStatus();
+  }
+}
+
+setInterval(checkDegradedMode, 5000);
+
+// ============================================================
+// DASHBOARD COORDINATEUR — v3.2
+// ============================================================
+
+ipcMain.handle('coord-dashboard', () => {
+  try {
+    const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
+    const localMachine = { machine_id: MACHINE_ID, machine_label: labelRow?.value || 'Esta máquina', isLocal: true, isCoordinator: _isCoordinator, status: 'online' };
+    const peers = db.prepare('SELECT * FROM network_peers ORDER BY last_seen DESC').all().map(p => ({
+      ...p, isLocal: false, isCoordinator: p.machine_id === _coordinatorId, status: peersMap.has(p.machine_id) ? 'online' : 'offline',
+    }));
+    const printQueue = db.prepare("SELECT job_id,print_type,status,priority,machine_source,created_at,done_at,error FROM print_queue ORDER BY id DESC LIMIT 20").all();
+    const reservations = db.prepare(
+      "SELECT r.*,p.nom as product_nom FROM stock_reservations r LEFT JOIN products p ON r.product_id=p.id WHERE r.status='active' AND r.expires_at > datetime('now','utc') ORDER BY r.created_at DESC"
+    ).all();
+    const coordLog = db.prepare("SELECT * FROM coordinator_log ORDER BY id DESC LIMIT 10").all();
+    const stockAlerte = db.prepare(`
+      SELECT p.id,p.nom,p.stock_cartons,
+        COALESCE((SELECT SUM(r.qty_reserved) FROM stock_reservations r WHERE r.product_id=p.id AND r.status='active' AND r.expires_at>datetime('now','utc')),0) as qty_reserved
+      FROM products p WHERE p.actif=1 AND p.stock_cartons<=p.stock_alerte+2 ORDER BY p.stock_cartons ASC LIMIT 10
+    `).all();
+    return { success: true, isCoordinator: _isCoordinator, coordinatorId: _coordinatorId, coordinatorLabel: _coordinatorLabel, degradedMode: _degradedMode, machines: [localMachine, ...peers], printQueue, reservations, coordLog, stockAlerte };
+  } catch(e) { console.error('[COORD] coord-dashboard:', e.message); return { success: false, error: e.message }; }
+});
+
+app.on('before-quit', () => {
+  clearInterval(_coordCheckTimer);
+  clearInterval(_coordAnnounceTimer);
+  stopPrintQueueWorker();
+});
 
 // ── Handler WS : recevoir une demande d'impression ──────────
 async function handlePrintRequest(ws, msg) {

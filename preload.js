@@ -103,6 +103,20 @@ contextBridge.exposeInMainWorld('electron', {
     return () => ipcRenderer.removeListener('printer-mode-changed', handler);
   },
 
+  // ── v3.0 Coordinateur ───────────────────────────────────
+  coordStatus:    () => ipcRenderer.invoke('coord-status'),
+  coordDashboard: () => ipcRenderer.invoke('coord-dashboard'),
+  printQueueStatus: () => ipcRenderer.invoke('print-queue-status'),
+  onCoordStatusChanged: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('coord-status-changed', handler);
+    return () => ipcRenderer.removeListener('coord-status-changed', handler);
+  },
+
+  // ── v3.0 Stock Lock ─────────────────────────────────────
+  stockReserve: (product_id, variant_id, qty) => ipcRenderer.invoke('stock-reserve', { product_id, variant_id, qty }),
+  stockRelease: (reservation_id, consumed)    => ipcRenderer.invoke('stock-release', { reservation_id, consumed }),
+
   // Écouter les mises à jour de pairs en temps réel
   // Retourne une fonction de cleanup à appeler dans useEffect return
   onNetworkPeersUpdate: (cb) => {
