@@ -487,6 +487,50 @@ db.prepare("UPDATE settings SET value='0' WHERE key='sync_applying'").run();
 
 ].forEach(sql => { try { db.exec(sql); } catch(e) { console.error('[DB] trigger:', e.message); } });
 
+// ── Tables v3.0 — Coordinateur + Stock Lock + Print Queue ──
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stock_reservations (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    reservation_id TEXT UNIQUE NOT NULL,
+    product_id     INTEGER NOT NULL,
+    variant_id     INTEGER,
+    qty_reserved   REAL NOT NULL,
+    machine_id     TEXT NOT NULL,
+    status         TEXT DEFAULT 'active' CHECK(status IN ('active','released','expired','consumed')),
+    created_at     TEXT DEFAULT (datetime('now','utc')),
+    expires_at     TEXT NOT NULL,
+    FOREIGN KEY(product_id) REFERENCES products(id)
+  );
+  CREATE TABLE IF NOT EXISTS print_queue (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id         TEXT UNIQUE NOT NULL,
+    print_type     TEXT NOT NULL,
+    data_json      TEXT NOT NULL,
+    priority       INTEGER DEFAULT 5,
+    status         TEXT DEFAULT 'queued' CHECK(status IN ('queued','printing','done','failed')),
+    machine_source TEXT NOT NULL,
+    error          TEXT,
+    created_at     TEXT DEFAULT (datetime('now','utc')),
+    done_at        TEXT
+  );
+  CREATE TABLE IF NOT EXISTS coordinator_log (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    machine_id     TEXT NOT NULL,
+    event          TEXT NOT NULL,
+    created_at     TEXT DEFAULT (datetime('now','utc'))
+  );
+`);
+
+// Nettoyer les réservations expirées et jobs anciens au démarrage
+try {
+  db.prepare("UPDATE stock_reservations SET status='expired' WHERE status='active' AND expires_at < datetime('now','utc')").run();
+  db.prepare("DELETE FROM print_queue WHERE status IN ('done','failed') AND created_at < datetime('now','-1 day')").run();
+} catch(_e) {}
+
+// Settings coordinateur
+db.prepare("INSERT OR IGNORE INTO settings (key,value) VALUES ('coordinator_id','')").run();
+db.prepare("INSERT OR IGNORE INTO settings (key,value) VALUES ('coordinator_label','')").run();
+
 // ── Export ───────────────────────────────────────────────
 const MACHINE_ID_FINAL = db.prepare("SELECT value FROM settings WHERE key='machine_id'").get()?.value || 'UNKNOWN';
 module.exports = db;

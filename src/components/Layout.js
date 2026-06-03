@@ -76,6 +76,8 @@ export default function Layout() {
   const [cloudSt, setCloudSt] = useState({ status: 'disconnected' });
   // ── v1.9.1 Printer mode ──
   const [printerMode, setPrinterMode] = useState({ mode: 'local', targetLabel: '' });
+  // ── v3.0 Coordinateur ──
+  const [coordStatus, setCoordStatus] = useState({ isCoordinator: false, coordinatorId: '', coordinatorLabel: '', degraded: false });
 
   // Horloge temps réel
   useEffect(() => {
@@ -142,6 +144,13 @@ export default function Layout() {
     const cleanup = window.electron.onPrinterModeChanged((data) => {
       setPrinterMode({ mode: data.mode, targetLabel: data.targetLabel || '' });
     });
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
+  // ── v3.0 Coordinateur ──
+  useEffect(() => {
+    window.electron.coordStatus().then(res => { if (res?.success) setCoordStatus(res); }).catch(() => {});
+    const cleanup = window.electron.onCoordStatusChanged((data) => setCoordStatus(data));
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
@@ -253,6 +262,26 @@ export default function Layout() {
         })()}
 
         <div className="titlebar-controls">
+          {/* ── v3.0 Badge coordinateur ── */}
+          {coordStatus.isCoordinator && (
+            <div
+              title="Esta máquina é o Coordenador da rede"
+              style={{ display:'flex', alignItems:'center', gap:4, marginRight:6, padding:'2px 8px', borderRadius:4, background:'rgba(99,179,237,0.12)', border:'1px solid rgba(99,179,237,0.35)' }}
+            >
+              <span style={{ fontSize:10 }}>⭐</span>
+              <span style={{ fontSize:10, color:'#63b3ed', fontFamily:'monospace', fontWeight:600 }}>COORD</span>
+            </div>
+          )}
+          {/* ── v3.1 Badge mode dégradé ── */}
+          {coordStatus.degraded && !coordStatus.isCoordinator && (
+            <div
+              title="Coordenador ausente — modo degradado ativo"
+              style={{ display:'flex', alignItems:'center', gap:4, marginRight:6, padding:'2px 8px', borderRadius:4, background:'rgba(245,101,101,0.12)', border:'1px solid rgba(245,101,101,0.35)' }}
+            >
+              <span style={{ fontSize:10 }}>⚠️</span>
+              <span style={{ fontSize:10, color:'#fc8181', fontFamily:'monospace', fontWeight:600 }}>DEGRADADO</span>
+            </div>
+          )}
           {/* ── v1.9.1 Indicateur impression partagée ── */}
           {printerMode.mode === 'shared' && printerMode.targetLabel && (
             <div
