@@ -74,6 +74,8 @@ export default function Layout() {
   const [syncSt, setSyncSt] = useState({ status: 'idle', pending: 0, online: 0 });
   // ── v1.7.0 Cloud status ──
   const [cloudSt, setCloudSt] = useState({ status: 'disconnected' });
+  // ── v1.9.1 Printer mode ──
+  const [printerMode, setPrinterMode] = useState({ mode: 'local', targetLabel: '' });
 
   // Horloge temps réel
   useEffect(() => {
@@ -129,6 +131,17 @@ export default function Layout() {
   useEffect(() => {
     window.electron.cloudStatus().then(res => { if (res?.success) setCloudSt(res); }).catch(() => {});
     const cleanup = window.electron.onCloudStatus((data) => setCloudSt(data));
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
+  // ── v1.9.1 Printer mode ──
+  useEffect(() => {
+    window.electron.getPrinterMode().then(res => {
+      if (res?.success) setPrinterMode({ mode: res.mode, targetLabel: res.targetLabel });
+    }).catch(() => {});
+    const cleanup = window.electron.onPrinterModeChanged((data) => {
+      setPrinterMode({ mode: data.mode, targetLabel: data.targetLabel || '' });
+    });
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
@@ -240,6 +253,18 @@ export default function Layout() {
         })()}
 
         <div className="titlebar-controls">
+          {/* ── v1.9.1 Indicateur impression partagée ── */}
+          {printerMode.mode === 'shared' && printerMode.targetLabel && (
+            <div
+              title={'Impressão partilhada → ' + printerMode.targetLabel}
+              style={{ display:'flex', alignItems:'center', gap:4, marginRight:10, padding:'2px 8px', borderRadius:4, background:'rgba(232,197,71,0.1)', border:'1px solid rgba(232,197,71,0.3)' }}
+            >
+              <span style={{ fontSize:11 }}>🖨️</span>
+              <span style={{ fontSize:10, color:'#e8c547', fontFamily:'monospace', fontWeight:600, whiteSpace:'nowrap' }}>
+                {'→ ' + printerMode.targetLabel}
+              </span>
+            </div>
+          )}
           <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="titlebar-btn" onClick={() => window.electron.minimize()}><Minus size={14} /></motion.button>
           <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="titlebar-btn" onClick={() => window.electron.maximize()}><Square size={12} /></motion.button>
           <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="titlebar-btn close" onClick={() => window.electron.close()}><X size={14} /></motion.button>
@@ -502,7 +527,7 @@ export default function Layout() {
                 CLEAR
               </button>
               <button onClick={() => setShowConsole(false)} style={{ background:'transparent', border:'none', color:'#555', cursor:'pointer', fontSize:16, lineHeight:1, padding:'0 4px', marginLeft:4 }}>
-                \u00d7
+                ×
               </button>
             </div>
 

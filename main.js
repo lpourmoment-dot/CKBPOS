@@ -105,7 +105,7 @@ ipcMain.handle('get-printers', async () => {
 const db = require('./database/db');
 const { MACHINE_ID } = require('./database/db');
 // Version auto depuis package.json
-const APP_VERSION = (() => { try { return require('./package.json').version; } catch(e) { return '1.1.3'; } })();
+const APP_VERSION = (() => { try { return require('./package.json').version; } catch(e) { return '2.0.0'; } })();
 // ✅ Version auto depuis package.json — utilisé dans SettingsPage.js
 ipcMain.handle('app-version', () => APP_VERSION);
 
@@ -113,7 +113,13 @@ ipcMain.handle('db-query', (_, sql, params) => {
   try {
     const stmt = db.prepare(sql);
     if (sql.trim().toUpperCase().startsWith('SELECT')) return { success:true, data:stmt.all(...(params||[])) };
-    return { success:true, data:stmt.run(...(params||[])) };
+    const result = stmt.run(...(params||[]));
+    // v1.8.1 — Push instantané si écriture sur ventes/vente_items/users
+    const sqlUp = sql.trim().toUpperCase();
+    if (!sqlUp.startsWith('SELECT') && /\b(VENTES|VENTE_ITEMS|USERS)\b/.test(sqlUp)) {
+      setImmediate(() => triggerInstantSync());
+    }
+    return { success:true, data:result };
   } catch(err) { return { success:false, error:err.message }; }
 });
 ipcMain.handle('db-get', (_, sql, params) => {
@@ -537,6 +543,8 @@ ipcMain.handle('reservation-payer', async (_, { id, userId, modeP, montantD, mon
     }
 
     db.prepare("UPDATE reservations SET statut='entregue', vente_id=? WHERE id=?").run(venteId, id);
+    // v1.8.1 — Push instantané après paiement réservation
+    setImmediate(() => triggerInstantSync());
     return { success: true, venteId, numeroFacture, change, total };
   } catch(e) { return { success: false, error: e.message }; }
 });
@@ -897,11 +905,27 @@ function printHTML(html, copies = 1, isTicket = false) {
 
 ipcMain.handle('print-ticket', async (_, data) => {
   try {
+    // ── v1.9.1 — Mode impression partagée ──
+    const printerMode = db.prepare("SELECT value FROM settings WHERE key='printer_mode'").get()?.value || 'local';
+    const targetId    = db.prepare("SELECT value FROM settings WHERE key='printer_machine_id'").get()?.value || '';
+    if (printerMode === 'shared' && targetId && targetId !== MACHINE_ID) {
+      const peer = peersMap.get(targetId);
+      if (peer?.ws?.readyState === WebSocket.OPEN) {
+        try {
+          await sendPrintRequest(targetId, 'ticket', data);
+          return { success: true, remote: true };
+        } catch(remoteErr) {
+          console.error('[PRINT] Fallback local (pair offline):', remoteErr.message);
+          // fallback local — continuer
+        }
+      } else {
+        console.warn('[PRINT] Machine cible hors ligne — fallback local');
+      }
+    }
+    // ── Mode local (défaut) ──
     let qrDataUrl = '';
     if (QRCode) {
       try {
-        // ✅ Contenu minimal → QR peu dense → lisible sur imprimante thermique 203dpi
-        // Format : FR-NUM|TOTAL AOA|DATE|VENDEUR
         const qrText = [
           data.numeroFacture || 'N/A',
           `${data.total} ${data.currency}`,
@@ -909,31 +933,36 @@ ipcMain.handle('print-ticket', async (_, data) => {
           data.seller
         ].join('|');
         qrDataUrl = await QRCode.toDataURL(qrText, {
-          width: 128,
-          margin: 2,
-          errorCorrectionLevel: 'L', // ✅ L = moins de modules = QR plus simple
+          width: 128, margin: 2, errorCorrectionLevel: 'L',
           color: { dark: '#000000', light: '#ffffff' }
         });
       } catch(e) { console.log('QR error:', e.message); }
     }
     const { copiesTicket, ticketSizeMm } = getPrintSettings();
     const copies = data.copies || copiesTicket || 2;
-    // ✅ v1.2.3 — Appliquer les flags de personnalisation du ticket
     const flags = getTicketFlags();
     const result = await printHTML(generateTicketHTML({ ...data, qrDataUrl, flags, ticketSizeMm }), copies, true);
     return { success: true, copies, ...(result || {}) };
   }
   catch(e) {
-    // ✅ Ne jamais retourner success:false ici — ça bloquerait isPrinting.current
     console.error('[print-ticket]', e.message);
     return { success: true, error: e.message };
   }
 });
 ipcMain.handle('print-shift-report', async (_, data) => {
   try {
+    // ── v1.9.1 — Mode impression partagée ──
+    const printerMode = db.prepare("SELECT value FROM settings WHERE key='printer_mode'").get()?.value || 'local';
+    const targetId    = db.prepare("SELECT value FROM settings WHERE key='printer_machine_id'").get()?.value || '';
+    if (printerMode === 'shared' && targetId && targetId !== MACHINE_ID) {
+      const peer = peersMap.get(targetId);
+      if (peer?.ws?.readyState === WebSocket.OPEN) {
+        try { await sendPrintRequest(targetId, 'shift', data); return { success: true, remote: true }; }
+        catch(remoteErr) { console.error('[PRINT] Fallback local shift:', remoteErr.message); }
+      }
+    }
     const { copiesShift, ticketSizeMm } = getPrintSettings();
     const copies = data.copies || copiesShift || 1;
-    // v1.3.0 — Résumé caderno du jour injecté automatiquement dans le ticket de fermeture
     let cadernoResume = null;
     try {
       const today = new Date().toISOString().slice(0, 10);
@@ -979,6 +1008,16 @@ ipcMain.handle('print-historique-report', async (_, data) => {
 // v1.3.0 -- Impression Caderno de Caixa (résumé du jour)
 ipcMain.handle('print-caderno', async (_, data) => {
   try {
+    // ── v1.9.1 — Mode impression partagée ──
+    const printerMode = db.prepare("SELECT value FROM settings WHERE key='printer_mode'").get()?.value || 'local';
+    const targetId    = db.prepare("SELECT value FROM settings WHERE key='printer_machine_id'").get()?.value || '';
+    if (printerMode === 'shared' && targetId && targetId !== MACHINE_ID) {
+      const peer = peersMap.get(targetId);
+      if (peer?.ws?.readyState === WebSocket.OPEN) {
+        try { await sendPrintRequest(targetId, 'caderno', data); return { success: true, remote: true }; }
+        catch(remoteErr) { console.error('[PRINT] Fallback local caderno:', remoteErr.message); }
+      }
+    }
     const { ticketSizeMm } = getPrintSettings();
     const html = generateCadernoTicketHTML({ ...data, ticketSizeMm });
     await printHTML(html, 1, true);
@@ -1839,9 +1878,12 @@ function startWsServer() {
               ws.close(); return;
             }
             peerMachineId = msg.machine_id;
-            // Fermer l'ancienne connexion si elle existe
+            // v1.8.1 — Connexion permanente : rejeter le doublon si connexion active
             if (peersMap.has(peerMachineId)) {
-              try { peersMap.get(peerMachineId).ws?.close(); } catch(_e) {}
+              const existing = peersMap.get(peerMachineId);
+              if (existing.ws?.readyState === WebSocket.OPEN) {
+                ws.close(); return; // garder la connexion existante
+              }
             }
             upsertPeer(peerMachineId, msg.machine_label, peerIp, msg.port);
             peersMap.set(peerMachineId, { ws, machine_label: msg.machine_label, ip: peerIp, lastSeen: Date.now() });
@@ -1874,6 +1916,13 @@ function startWsServer() {
           peersMap.delete(peerMachineId);
           broadcastPeersUpdate();
           console.log('[LAN] Pair deconnecte: ' + peerMachineId);
+          // v1.8.1 — Auto-reconnect après 5s
+          setTimeout(() => {
+            if (!peersMap.has(peerMachineId)) {
+              const info = db.prepare('SELECT ip, port FROM network_peers WHERE machine_id=?').get(peerMachineId);
+              if (info?.ip) connectToPeer(info.ip, info.port);
+            }
+          }, 5000);
         }
       });
 
@@ -1884,7 +1933,12 @@ function startWsServer() {
 
     wssServer.on('error', (e) => {
       console.error('[LAN] WS server error:', e.message);
-      if (e.code === 'EADDRINUSE') console.error('[LAN] Port ' + WS_PORT + ' deja utilise — services reseau desactives.');
+      if (e.code === 'EADDRINUSE') {
+        console.error('[LAN] Port ' + WS_PORT + ' deja utilise — nouvelle tentative dans 5s...');
+        try { wssServer.close(); } catch(_e) {}
+        wssServer = null;
+        setTimeout(() => startWsServer(), 5000);
+      }
     });
   } catch(e) {
     console.error('[LAN] Impossible de demarrer WS server:', e.message);
@@ -1943,8 +1997,13 @@ function connectToPeer(ip, port) {
 
     ws.on('close', () => {
       if (peerMachineId) {
+        const wasConnected = peersMap.has(peerMachineId);
         peersMap.delete(peerMachineId);
-        broadcastPeersUpdate();
+        if (wasConnected) broadcastPeersUpdate();
+        // v1.8.1 — Auto-reconnect après 5s
+        setTimeout(() => {
+          if (!peersMap.has(peerMachineId)) connectToPeer(ip, port || WS_PORT);
+        }, 5000);
       }
     });
 
@@ -2024,7 +2083,9 @@ ipcMain.handle('set-network-key', (_, newKey) => {
     const key = (newKey || '').trim().toUpperCase();
     db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('network_key',?)").run(key);
     console.log('[LAN] network_key mise à jour: ' + key);
-    return { success: true };
+    // v1.8.1 — Redémarrer les services réseau avec la nouvelle clé
+    setTimeout(() => restartNetworkServices(), 300);
+    return { success: true, restarted: true };
   } catch(e) { return { success: false, error: e.message }; }
 });
 
@@ -2096,6 +2157,29 @@ ipcMain.handle('network-status', () => {
   } catch(e) { return { success: false, error: e.message }; }
 });
 
+// ── v1.8.1 — Redémarrage services réseau (clé réseau changée) ──
+function restartNetworkServices() {
+  console.log('[LAN] Redémarrage services réseau...');
+  clearInterval(heartbeatInterval);
+  clearInterval(rebroadcastInterval);
+  for (const peer of peersMap.values()) { try { peer.ws?.close(); } catch(_e) {} }
+  peersMap.clear();
+  try { wssServer?.close(); wssServer = null; } catch(_e) {}
+  try { udpSocket?.close(); udpSocket = null; } catch(_e) {}
+  broadcastPeersUpdate();
+  setTimeout(startNetworkServices, 1200);
+}
+
+// ── v1.8.1 — Push instantané LAN + Cloud après vente ────────
+function triggerInstantSync() {
+  // LAN : envoyer SYNC_REQUEST à tous les pairs connectés
+  for (const [id, peer] of peersMap.entries()) {
+    if (peer.ws?.readyState === WebSocket.OPEN) sendSyncRequest(id, peer.ws);
+  }
+  // Cloud : push immédiat
+  if (_supabase) pushToCloud().catch(() => {});
+}
+
 // ── Démarrage des services réseau ───────────────────────────
 function startNetworkServices() {
   startWsServer();
@@ -2145,7 +2229,7 @@ app.on('before-quit', () => {
 // Résolution conflits : last-write-wins (INSERT OR REPLACE)
 // ============================================================
 
-const SYNC_TABLES = new Set(['ventes','vente_items','products','stock_mouvements','caderno_entries']);
+const SYNC_TABLES = new Set(['ventes','vente_items','products','stock_mouvements','caderno_entries','users','settings']);
 const SYNC_LIMIT  = 200; // entrées max par delta
 
 // ── Statut sync courant ─────────────────────────────────────
@@ -2182,6 +2266,23 @@ function sendSyncRequest(peerMachineId, ws) {
   } catch(e) { console.error('[SYNC] sendSyncRequest:', e.message); }
 }
 
+// ── Debounce counter-SYNC_REQUEST (sync bidirectionnel) ────
+// Quand B reçoit SYNC_REQUEST de A, B répond avec SYNC_DELTA
+// ET envoie son propre SYNC_REQUEST à A (debounce 5s par pair)
+const _counterSyncTimers = new Map();
+function scheduleCounterSync(peerMachineId) {
+  if (_counterSyncTimers.has(peerMachineId)) return; // déjà planifié
+  const timer = setTimeout(() => {
+    _counterSyncTimers.delete(peerMachineId);
+    const peer = peersMap.get(peerMachineId);
+    if (peer?.ws?.readyState === WebSocket.OPEN) {
+      sendSyncRequest(peerMachineId, peer.ws);
+      console.log('[SYNC] Counter-SYNC_REQUEST → ' + peerMachineId + ' (sync bidir)');
+    }
+  }, 5000);
+  _counterSyncTimers.set(peerMachineId, timer);
+}
+
 // ── Répondre à SYNC_REQUEST → envoyer SYNC_DELTA ───────────
 function handleSyncRequest(ws, msg) {
   try {
@@ -2192,6 +2293,8 @@ function handleSyncRequest(ws, msg) {
 
     if (entries.length === 0) {
       ws.send(JSON.stringify({ type: 'SYNC_DELTA', machine_id: MACHINE_ID, last_id: last_seq || 0, entries: [] }));
+      // v1.9.1 — sync bidir : même si delta vide, contre-sync pour envoyer NOS données
+      scheduleCounterSync(machine_id);
       return;
     }
 
@@ -2205,8 +2308,13 @@ function handleSyncRequest(ws, msg) {
       if (!SYNC_TABLES.has(e.table_name)) continue;
       if (e.operation !== 'DELETE') {
         try {
-          const row = db.prepare('SELECT * FROM "' + e.table_name + '" WHERE id=?').get(e.record_id);
-          // Si la ligne n'existe plus (supprimée après le log) → on envoie un DELETE
+          let row;
+          // settings : PK = key TEXT, record_id = rowid
+          if (e.table_name === 'settings') {
+            row = db.prepare('SELECT key, value, rowid FROM settings WHERE rowid=?').get(e.record_id);
+          } else {
+            row = db.prepare('SELECT * FROM "' + e.table_name + '" WHERE id=?').get(e.record_id);
+          }
           enriched.push({ id: e.id, table_name: e.table_name, record_id: e.record_id, operation: row ? e.operation : 'DELETE', row: row || null });
         } catch(_e) {}
       } else {
@@ -2217,6 +2325,8 @@ function handleSyncRequest(ws, msg) {
     const lastId = entries[entries.length - 1].id;
     ws.send(JSON.stringify({ type: 'SYNC_DELTA', machine_id: MACHINE_ID, last_id: lastId, entries: enriched }));
     console.log('[SYNC] SYNC_DELTA → ' + machine_id + ' : ' + enriched.length + ' entrees (seq ' + lastId + ')');
+    // v1.9.1 — sync bidir : après avoir répondu à A, demander les données de A
+    scheduleCounterSync(machine_id);
   } catch(e) { console.error('[SYNC] handleSyncRequest:', e.message); }
 }
 
@@ -2245,9 +2355,17 @@ function handleSyncDelta(ws, msg) {
             if (e.operation === 'DELETE') {
               db.prepare('DELETE FROM "' + e.table_name + '" WHERE id=?').run(e.record_id);
             } else if (e.row && typeof e.row === 'object') {
-              const cols = Object.keys(e.row).map(c => '"' + c + '"').join(',');
-              const phs  = Object.keys(e.row).map(() => '?').join(',');
-              db.prepare('INSERT OR REPLACE INTO "' + e.table_name + '" (' + cols + ') VALUES (' + phs + ')').run(...Object.values(e.row));
+              // ── Cas spécial : table settings (PK = key TEXT, pas id) ──
+              if (e.table_name === 'settings') {
+                // Filtrer les clés locales — ne jamais écraser machine_id, network_key, etc.
+                const LOCAL_KEYS = new Set(['machine_id','machine_label','network_key','supabase_url','supabase_key','cloud_last_seq','sync_applying','printer_mode','printer_machine_id']);
+                if (LOCAL_KEYS.has(e.row.key)) { skipped++; continue; }
+                db.prepare('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)').run(e.row.key, e.row.value);
+              } else {
+                const cols = Object.keys(e.row).map(c => '"' + c + '"').join(',');
+                const phs  = Object.keys(e.row).map(() => '?').join(',');
+                db.prepare('INSERT OR REPLACE INTO "' + e.table_name + '" (' + cols + ') VALUES (' + phs + ')').run(...Object.values(e.row));
+              }
             }
             applied++;
           } catch(_e2) { skipped++; }
@@ -2315,9 +2433,11 @@ ipcMain.handle('sync-force', () => {
 // ── Intégration dans les handlers WS existants ─────────────
 // Patch appliqué aux deux handlers (serveur + client) via une fonction centrale
 function handleSyncMessage(ws, msg, peerMachineId) {
-  if      (msg.type === 'SYNC_REQUEST') handleSyncRequest(ws, msg);
-  else if (msg.type === 'SYNC_DELTA')   handleSyncDelta(ws, msg);
-  else if (msg.type === 'SYNC_ACK')     handleSyncAck(msg);
+  if      (msg.type === 'SYNC_REQUEST')   handleSyncRequest(ws, msg);
+  else if (msg.type === 'SYNC_DELTA')     handleSyncDelta(ws, msg);
+  else if (msg.type === 'SYNC_ACK')       handleSyncAck(msg);
+  else if (msg.type === 'PRINT_REQUEST')  handlePrintRequest(ws, msg);
+  else if (msg.type === 'PRINT_RESPONSE') handlePrintResponse(msg);
 }
 // Note : sendSyncRequest() est appelé dans les handlers WS existants
 // après l'échange CKBPOS_INFO, via le listener 'peer-registered' ci-dessous.
@@ -2350,6 +2470,125 @@ setInterval(() => {
 global._ckbSyncHandlers = { handleSyncMessage, onPeerRegistered };
 
 // ============================================================
+// IMPRESSION PARTAGÉE — v1.9.1
+// Machine B route le job d'impression vers Machine A via WS
+// ============================================================
+
+// ── Handler WS : recevoir une demande d'impression ──────────
+async function handlePrintRequest(ws, msg) {
+  const { machine_id: sourceMachineId, print_type, data, request_id } = msg;
+  console.log('[PRINT] PRINT_REQUEST recu de ' + sourceMachineId + ' — type: ' + print_type);
+  let result = { success: false, error: 'Type inconnu' };
+  try {
+    if (print_type === 'ticket') {
+      let qrDataUrl = '';
+      if (QRCode && data) {
+        try {
+          const qrText = [data.numeroFacture||'N/A', `${data.total} ${data.currency}`, data.date, data.seller].join('|');
+          qrDataUrl = await QRCode.toDataURL(qrText, { width:128, margin:2, errorCorrectionLevel:'L', color:{dark:'#000000',light:'#ffffff'} });
+        } catch(_e) {}
+      }
+      const { copiesTicket, ticketSizeMm } = getPrintSettings();
+      const copies = data?.copies || copiesTicket || 2;
+      const flags = getTicketFlags();
+      result = await printHTML(generateTicketHTML({ ...(data||{}), qrDataUrl, flags, ticketSizeMm }), copies, true);
+    } else if (print_type === 'shift') {
+      const { copiesShift, ticketSizeMm } = getPrintSettings();
+      const copies = data?.copies || copiesShift || 1;
+      await printHTML(generateShiftHTML({ ...(data||{}), ticketSizeMm }), copies, true);
+      result = { success: true };
+    } else if (print_type === 'caderno') {
+      const { ticketSizeMm } = getPrintSettings();
+      await printHTML(generateCadernoTicketHTML({ ...(data||{}), ticketSizeMm }), 1, true);
+      result = { success: true };
+    }
+  } catch(e) {
+    result = { success: false, error: e.message };
+    console.error('[PRINT] handlePrintRequest erreur:', e.message);
+  }
+  // Répondre à la machine source
+  try {
+    ws.send(JSON.stringify({ type: 'PRINT_RESPONSE', machine_id: MACHINE_ID, request_id, success: result.success, error: result.error || null }));
+  } catch(_e) {}
+}
+
+// ── Handler WS : recevoir la réponse d'impression ───────────
+const _printResponseCallbacks = new Map(); // request_id → { resolve, reject, timer }
+function handlePrintResponse(msg) {
+  const { request_id, success, error } = msg;
+  const cb = _printResponseCallbacks.get(request_id);
+  if (!cb) return;
+  clearTimeout(cb.timer);
+  _printResponseCallbacks.delete(request_id);
+  if (success) cb.resolve({ success: true });
+  else cb.reject(new Error(error || 'Impression distante echouée'));
+}
+
+// ── Envoyer un job d'impression à une machine distante ──────
+function sendPrintRequest(targetMachineId, print_type, data) {
+  return new Promise((resolve, reject) => {
+    const peer = peersMap.get(targetMachineId);
+    if (!peer || peer.ws?.readyState !== WebSocket.OPEN) {
+      return reject(new Error('Machine cible hors ligne: ' + targetMachineId));
+    }
+    const request_id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    const timer = setTimeout(() => {
+      _printResponseCallbacks.delete(request_id);
+      reject(new Error('Timeout impression distante (10s)'));
+    }, 10000);
+    _printResponseCallbacks.set(request_id, { resolve, reject, timer });
+    peer.ws.send(JSON.stringify({ type: 'PRINT_REQUEST', machine_id: MACHINE_ID, print_type, data, request_id }));
+    console.log('[PRINT] PRINT_REQUEST → ' + targetMachineId + ' (type: ' + print_type + ', req: ' + request_id + ')');
+  });
+}
+
+// ── IPC : lister les machines avec statut imprimante ────────
+ipcMain.handle('get-printer-machines', () => {
+  try {
+    const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
+    const local = {
+      machine_id:    MACHINE_ID,
+      machine_label: labelRow?.value || 'Esta máquina',
+      ip:            'LOCAL',
+      isLocal:       true,
+      status:        'online',
+    };
+    const peers = db.prepare('SELECT * FROM network_peers ORDER BY last_seen DESC').all()
+      .map(p => ({ ...p, isLocal: false, status: peersMap.has(p.machine_id) ? 'online' : 'offline' }));
+    return { success: true, data: [local, ...peers] };
+  } catch(e) { return { success: false, error: e.message, data: [] }; }
+});
+
+// ── IPC : configurer le mode d'impression ───────────────────
+ipcMain.handle('set-printer-mode', (_, { mode, targetMachineId }) => {
+  try {
+    const m = mode === 'shared' ? 'shared' : 'local';
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('printer_mode',?)").run(m);
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('printer_machine_id',?)").run(targetMachineId || '');
+    console.log('[PRINT] Mode impression: ' + m + (targetMachineId ? ' → ' + targetMachineId : ''));
+    // Notifier le renderer pour mettre à jour le titlebar
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('printer-mode-changed', { mode: m, targetMachineId: targetMachineId || '' }); } catch(_e) {}
+    }
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ── IPC : obtenir le mode d'impression actuel ───────────────
+ipcMain.handle('get-printer-mode', () => {
+  try {
+    const mode = db.prepare("SELECT value FROM settings WHERE key='printer_mode'").get()?.value || 'local';
+    const targetId = db.prepare("SELECT value FROM settings WHERE key='printer_machine_id'").get()?.value || '';
+    let targetLabel = '';
+    if (targetId) {
+      const peer = db.prepare('SELECT machine_label FROM network_peers WHERE machine_id=?').get(targetId);
+      targetLabel = peer?.machine_label || targetId.slice(0,8);
+    }
+    return { success: true, mode, targetMachineId: targetId, targetLabel };
+  } catch(e) { return { success: false, mode: 'local', targetMachineId: '', targetLabel: '' }; }
+});
+
+// ============================================================
 // SUPABASE CLOUD BRIDGE — v1.7.0
 // Sync bidirectionnel cloud via Supabase (REST + Realtime)
 // Config : settings → supabase_url + supabase_key
@@ -2360,6 +2599,7 @@ let _supabase     = null; // client Supabase actif
 let _supaChannel  = null; // canal Realtime
 let _cloudStatus  = { status: 'disconnected', lastSync: null, error: null };
 let _cloudPushBusy = false;
+let _cloudPullBusy = false;
 
 // ── Envoi du statut cloud au renderer ──────────────────────
 function sendCloudStatus(patch) {
@@ -2456,7 +2696,13 @@ async function pushToCloud() {
       if (!SYNC_TABLES.has(e.table_name)) return null;
       let row_data = null;
       if (e.operation !== 'DELETE') {
-        try { row_data = db.prepare('SELECT * FROM "' + e.table_name + '" WHERE id=?').get(e.record_id) || null; } catch(_e) {}
+        try {
+          if (e.table_name === 'settings') {
+            row_data = db.prepare('SELECT key, value, rowid FROM settings WHERE rowid=?').get(e.record_id) || null;
+          } else {
+            row_data = db.prepare('SELECT * FROM "' + e.table_name + '" WHERE id=?').get(e.record_id) || null;
+          }
+        } catch(_e) {}
       }
       return {
         source_machine_id: MACHINE_ID,
@@ -2501,9 +2747,16 @@ function applyCloudRow(entry) {
       if (entry.operation === 'DELETE') {
         db.prepare('DELETE FROM "' + entry.table_name + '" WHERE id=?').run(entry.record_id);
       } else if (entry.row_data && typeof entry.row_data === 'object') {
-        const cols = Object.keys(entry.row_data).map(c => '"' + c + '"').join(',');
-        const phs  = Object.keys(entry.row_data).map(() => '?').join(',');
-        db.prepare('INSERT OR REPLACE INTO "' + entry.table_name + '" (' + cols + ') VALUES (' + phs + ')').run(...Object.values(entry.row_data));
+        // ── Cas spécial : table settings ──
+        if (entry.table_name === 'settings') {
+          const LOCAL_KEYS = new Set(['machine_id','machine_label','network_key','supabase_url','supabase_key','cloud_last_seq','sync_applying','printer_mode','printer_machine_id']);
+          if (LOCAL_KEYS.has(entry.row_data.key)) return;
+          db.prepare('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)').run(entry.row_data.key, entry.row_data.value);
+        } else {
+          const cols = Object.keys(entry.row_data).map(c => '"' + c + '"').join(',');
+          const phs  = Object.keys(entry.row_data).map(() => '?').join(',');
+          db.prepare('INSERT OR REPLACE INTO "' + entry.table_name + '" (' + cols + ') VALUES (' + phs + ')').run(...Object.values(entry.row_data));
+        }
       }
     } finally {
       db.prepare("UPDATE settings SET value='0' WHERE key='sync_applying'").run();
@@ -2549,7 +2802,8 @@ function subscribeRealtime() {
 
 // ── Pull initial : récupérer les changements manqués ──────
 async function pullFromCloud() {
-  if (!_supabase) return;
+  if (!_supabase || _cloudPullBusy) return;
+  _cloudPullBusy = true;
   try {
     // Récupérer le dernier seq cloud qu'on a traité
     const seqRow = db.prepare("SELECT value FROM settings WHERE key='cloud_last_seq'").get();
@@ -2578,6 +2832,8 @@ async function pullFromCloud() {
     sendCloudStatus({ status: 'synced', lastSync: _cloudStatus.lastSync });
   } catch(e) {
     console.error('[CLOUD] pullFromCloud:', e.message);
+  } finally {
+    _cloudPullBusy = false;
   }
 }
 
@@ -2626,10 +2882,13 @@ app.whenReady().then(() => {
       console.log('[CLOUD] Démarrage auto Supabase bridge');
       await startCloudBridge();
     }
-    // Push cloud toutes les 60s si connecté
+    // v1.8.1 — Push + Pull cloud toutes les 10s (au lieu de 60s)
     setInterval(async () => {
-      if (_supabase) await pushToCloud();
-    }, 60000);
+      if (_supabase) {
+        await pushToCloud();
+        await pullFromCloud();
+      }
+    }, 10000);
   }, 3000); // délai après démarrage LAN
 });
 
