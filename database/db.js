@@ -324,6 +324,8 @@ if (!adminExists) {
   ['machine_id',     ''],
   ['machine_label',  'Caixa Principal'],
   ['network_key',    ''],              // Clé réseau LAN par entreprise — v1.8.0
+  ['printer_mode',   'local'],        // 'local' | 'shared' — v1.9.1
+  ['printer_machine_id', ''],         // machine_id de la machine cible — v1.9.1
 ].forEach(([k,v]) => db.prepare('INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)').run(k,v));
 
 // ── Générer machine_id si absent ou vide ──────────────────
@@ -456,6 +458,32 @@ db.prepare("UPDATE settings SET value='0' WHERE key='sync_applying'").run();
    WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
    BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
    VALUES('caderno_entries',OLD.id,'DELETE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  // ── users — v1.8.1 : sync des utilisateurs entre machines ──
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_ins_users AFTER INSERT ON users
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('users',NEW.id,'INSERT',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_upd_users AFTER UPDATE ON users
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('users',NEW.id,'UPDATE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  // ── settings globaux — v1.9.1 : sync des settings partagés entre machines ──
+  // Clés locales exclues : machine_id, machine_label, network_key, supabase_url/key,
+  //                        cloud_last_seq, sync_applying, printer_mode, printer_machine_id
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_upd_settings AFTER UPDATE ON settings
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   AND NEW.key NOT IN ('machine_id','machine_label','network_key','supabase_url','supabase_key','cloud_last_seq','sync_applying','printer_mode','printer_machine_id')
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('settings',NEW.rowid,'UPDATE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_ins_settings AFTER INSERT ON settings
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   AND NEW.key NOT IN ('machine_id','machine_label','network_key','supabase_url','supabase_key','cloud_last_seq','sync_applying','printer_mode','printer_machine_id')
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('settings',NEW.rowid,'INSERT',(SELECT value FROM settings WHERE key='machine_id')); END`,
 
 ].forEach(sql => { try { db.exec(sql); } catch(e) { console.error('[DB] trigger:', e.message); } });
 

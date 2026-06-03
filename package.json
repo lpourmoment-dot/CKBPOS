@@ -1,6 +1,6 @@
 {
   "name": "ckbpos",
-  "version": "1.8.0",
+  "version": "1.9.1",
   "description": "CKBPOS - Application Point de Vente Professionnelle",
   "main": "main.js",
   "author": "CKB",
@@ -9,7 +9,10 @@
     "dev": "concurrently \"npm run react-start\" \"wait-on http://localhost:3000 && electron .\"",
     "react-start": "react-scripts start",
     "react-build": "react-scripts build",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "predist": "npm run react-build && npm run rebuild"
   },
   "build": {
     "appId": "com.ckb.pos",
@@ -27,7 +30,11 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "CKBPOS"
+      "shortcutName": "CKBPOS",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "include": "installer.nsh"
     },
     "files": [
       "build/**/*",
@@ -35,8 +42,7 @@
       "preload.js",
       "database/**/*",
       "assets/**/*",
-      "credentials.json",
-      "node_modules/**/*"
+      "credentials.json"
     ],
     "asar": true,
     "asarUnpack": [
@@ -67,7 +73,8 @@
     "concurrently": "^8.2.2",
     "electron": "^29.4.6",
     "electron-builder": "^24.13.3",
-    "wait-on": "^7.2.0"
+    "wait-on": "^7.2.0",
+    "@electron/rebuild": "^3.6.0"
   },
   "homepage": "./",
   "browserslist": {

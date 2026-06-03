@@ -249,7 +249,7 @@ export default function DashboardPage() {
       {(stats.caderno_plus > 0 || stats.caderno_moins > 0) && (
         <div style={{ marginBottom:24 }}>
           <div style={{ fontSize:12, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:10 }}>
-            \uD83D\uDCD3 Caderno de Caixa \u2014 Hoje
+            📓 Caderno de Caixa — Hoje
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12 }}>
             <div className="stat-card" style={{ borderLeft:'3px solid var(--success)' }}>
@@ -258,12 +258,12 @@ export default function DashboardPage() {
               <div className="stat-sub">Entradas hoje</div>
             </div>
             <div className="stat-card" style={{ borderLeft:'3px solid var(--danger)' }}>
-              <div className="stat-label">TOTAL \u2212</div>
-              <div className="stat-value" style={{ color:'var(--danger)', fontSize:16 }}>\u2212{fmt(stats.caderno_moins)}</div>
-              <div className="stat-sub">Sa\u00eddas hoje</div>
+              <div className="stat-label">TOTAL −</div>
+              <div className="stat-value" style={{ color:'var(--danger)', fontSize:16 }}>−{fmt(stats.caderno_moins)}</div>
+              <div className="stat-sub">Saídas hoje</div>
             </div>
             <div className="stat-card" style={{ borderLeft:'3px solid var(--warning)' }}>
-              <div className="stat-label">D\u00edvidas</div>
+              <div className="stat-label">Dívidas</div>
               <div className="stat-value" style={{ color:stats.caderno_dettes>0?'var(--danger)':'var(--text-muted)', fontSize:16 }}>
                 {stats.caderno_dettes > 0 ? `\u2212${fmt(stats.caderno_dettes)}` : '\u2014'}
               </div>
@@ -274,7 +274,7 @@ export default function DashboardPage() {
               <div className="stat-value" style={{ color:(stats.caderno_net||0)>=0?'var(--success)':'var(--danger)', fontSize:16 }}>
                 {(stats.caderno_net||0)>=0?'+':'\u2212'}{fmt(Math.abs(stats.caderno_net||0))}
               </div>
-              <div className="stat-sub">Balan\u00e7o do dia</div>
+              <div className="stat-sub">Balanço do dia</div>
             </div>
           </div>
         </div>
@@ -285,7 +285,7 @@ export default function DashboardPage() {
         <div style={{ marginBottom:24 }}>
           <div style={{ fontSize:12, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:12, display:'flex', alignItems:'center', gap:8 }}>
             <Activity size={13} color="var(--text-muted)"/>
-            Painel Multi-M\u00e1quinas
+            Painel Multi-Máquinas
             <span style={{ fontSize:10, color:'var(--text-muted)', fontWeight:400, letterSpacing:0, background:'var(--bg-hover)', padding:'1px 7px', borderRadius:10 }}>
               {machinesData.filter(m => m.status==='online').length}/{machinesData.length} online
             </span>
@@ -333,7 +333,7 @@ export default function DashboardPage() {
                     <div>
                       <div style={{ fontSize:9, color:'var(--text-muted)', marginBottom:2 }}>7 DIAS</div>
                       <div style={{ fontSize:13, fontWeight:600, fontFamily:'monospace' }}>{fmt(m.week_total)}</div>
-                      <div style={{ fontSize:9, color:'var(--text-muted)' }}>este m\u00eas: {fmt(m.month_total)}</div>
+                      <div style={{ fontSize:9, color:'var(--text-muted)' }}>este mês: {fmt(m.month_total)}</div>
                     </div>
                   </div>
 
@@ -345,7 +345,7 @@ export default function DashboardPage() {
                   {/* Top produto do dia */}
                   {m.top_product && (
                     <div style={{ fontSize:10, color:'var(--text-muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                      \uD83D\uDCC8 {m.top_product}
+                      📈 {m.top_product}
                     </div>
                   )}
                 </div>
