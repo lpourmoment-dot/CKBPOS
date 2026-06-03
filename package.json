@@ -1,6 +1,6 @@
 {
   "name": "ckbpos",
-  "version": "1.9.1",
+  "version": "1.10.0",
   "description": "CKBPOS - Application Point de Vente Professionnelle",
   "main": "main.js",
   "author": "CKB",
