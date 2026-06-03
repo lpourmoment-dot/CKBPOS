@@ -383,7 +383,7 @@ export default function CadernoPage() {
           </button>
           <button onClick={handlePrintCaderno}
             style={{ background:'var(--bg-card)', color:'var(--text)', border:'1px solid var(--border)', borderRadius:8, padding:'8px 14px', cursor:'pointer', fontSize:13, fontWeight:600, display:'flex', alignItems:'center', gap:6, fontFamily:'inherit' }}>
-            \uD83D\uDDA8 {tc('printDay')}
+            🖨 {tc('printDay')}
           </button>
         </div>
       </div>

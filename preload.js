@@ -93,6 +93,16 @@ contextBridge.exposeInMainWorld('electron', {
   getNetworkKey: ()      => ipcRenderer.invoke('get-network-key'),
   setNetworkKey: (key)   => ipcRenderer.invoke('set-network-key', key),
 
+  // ── v1.9.1 Impression partagée ──────────────────────────
+  getPrinterMachines: () => ipcRenderer.invoke('get-printer-machines'),
+  setPrinterMode: (mode, targetMachineId) => ipcRenderer.invoke('set-printer-mode', { mode, targetMachineId }),
+  getPrinterMode: () => ipcRenderer.invoke('get-printer-mode'),
+  onPrinterModeChanged: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('printer-mode-changed', handler);
+    return () => ipcRenderer.removeListener('printer-mode-changed', handler);
+  },
+
   // Écouter les mises à jour de pairs en temps réel
   // Retourne une fonction de cleanup à appeler dans useEffect return
   onNetworkPeersUpdate: (cb) => {
