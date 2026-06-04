@@ -11,6 +11,7 @@ import UsersPage from './pages/UsersPage';
 import SettingsPage from './pages/SettingsPage';
 import EstoquePage from './pages/EstoquePage';
 import CadernoPage from './pages/CadernoPage';
+import CoordDashboardPage from './pages/CoordDashboardPage';
 import Layout from './components/Layout';
 import './styles/global.css';
 
@@ -41,6 +42,8 @@ function KeyboardShortcuts({ user }) {
         case 'F6': e.preventDefault(); navigate('/historique'); break;
         case 'F7': e.preventDefault(); navigate('/caderno'); break;
         case 'F8': e.preventDefault(); if (user.role==='admin') navigate('/settings'); break;
+        // v3.5.0 — F9 → Dashboard Coordenador (admin only)
+        case 'F9': e.preventDefault(); if (user.role==='admin') navigate('/coord'); break;
         case 'Escape': {
           const overlay = document.querySelector('.modal-overlay');
           if (overlay) {
@@ -164,6 +167,8 @@ function App() {
                 <Route path="users"     element={user?.role==='admin' ? <UsersPage/>     : <Navigate to="/"/>} />
                 <Route path="settings"  element={user?.role==='admin' ? <SettingsPage/>  : <Navigate to="/"/>} />
                 <Route path="caderno"   element={<CadernoPage/>} />
+                {/* v3.5.0 — Dashboard Coordenador */}
+                <Route path="coord"     element={user?.role==='admin' ? <CoordDashboardPage/> : <Navigate to="/"/>} />
               </Route>
               {/* Fallback */}
               <Route path="*" element={<Navigate to={!isSetup ? '/setup' : !user ? '/login' : '/'}/>}/>

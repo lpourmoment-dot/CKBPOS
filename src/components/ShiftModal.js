@@ -34,6 +34,7 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
   const [argentEnvoye, setArgentEnvoye] = useState('');
   const [note, setNote] = useState('');
   const [loading, setLoading] = useState(false);
+  const [fundoCaixa, setFundoCaixa] = useState(0);
 
   useEffect(() => { loadShiftData(); }, []);
 
@@ -64,6 +65,10 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
     const shopAddrRes = await window.electron.dbGet("SELECT value FROM settings WHERE key='shop_address'");
     const shopPhoneRes = await window.electron.dbGet("SELECT value FROM settings WHERE key='shop_phone'");
     const shopNifRes = await window.electron.dbGet("SELECT value FROM settings WHERE key='shop_nif'");
+    // v3.6.0 — Fundo de caixa
+    const fundoRes = await window.electron.dbGet("SELECT value FROM settings WHERE key='fundo_caixa_hoje'");
+    const fundo = Number(fundoRes?.data?.value || 0);
+    setFundoCaixa(fundo);
 
     setShiftData({
       total: totalRes.data?.total || 0,
@@ -104,6 +109,7 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
         argentEnMain: Number(argentEnMain) || 0,
         argentEnvoye: Number(argentEnvoye) || 0,
         note,
+        fundoCaixa,
         currency,
         shopName: shiftData.shopName,
         shopAddress: shiftData.shopAddress,
@@ -118,6 +124,8 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
 
   const diffMain    = (Number(argentEnMain)  || 0) - (shiftData?.totalDinheiro || 0);
   const diffExpress = (Number(argentEnvoye)  || 0) - (shiftData?.totalExpress  || 0);
+  // v3.6.0 — Écart caisse (argent_en_main - fundo - total_dinheiro)
+  const ecartCaixa  = (Number(argentEnMain) || 0) - fundoCaixa - (shiftData?.totalDinheiro || 0);
 
   // Loading state
   if (!shiftData) return (
@@ -209,6 +217,20 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
           <span>Vendedor: <strong style={{ color: 'var(--text-primary)' }}>{user.nom}</strong></span>
           <span>📅 {new Date().toLocaleDateString('fr-FR')}</span>
         </motion.div>
+
+        {/* v3.6.0 — Fundo de Caixa */}
+        {fundoCaixa > 0 && (
+          <motion.div
+            custom={0}
+            variants={sectionVariants}
+            initial="initial"
+            animate="animate"
+            style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8, padding: '6px 10px', background: 'var(--bg-hover)', borderRadius: 8 }}
+          >
+            <span>💰 Fundo de Caixa (abertura)</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>{fundoCaixa.toLocaleString('fr-FR')} {currency}</span>
+          </motion.div>
+        )}
 
         {/* Total card */}
         <motion.div
@@ -366,6 +388,36 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
             />
           </div>
         </motion.div>
+
+        {/* v3.6.0 — Récapitulatif écart */}
+        {(argentEnMain || argentEnvoye) && (
+          <motion.div
+            custom={3}
+            variants={sectionVariants}
+            initial="initial"
+            animate="animate"
+            style={{ background: ecartCaixa >= 0 ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)', border: `1px solid ${ecartCaixa >= 0 ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)' }}>
+              <span>Argent en main</span>
+              <span style={{ fontFamily: 'monospace' }}>{(Number(argentEnMain)||0).toLocaleString('fr-FR')} {currency}</span>
+            </div>
+            {fundoCaixa > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+                <span>Fundo de caixa</span>
+                <span style={{ fontFamily: 'monospace' }}>-{fundoCaixa.toLocaleString('fr-FR')} {currency}</span>
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+              <span>Total dinheiro sistema</span>
+              <span style={{ fontFamily: 'monospace' }}>-{(shiftData?.totalDinheiro||0).toLocaleString('fr-FR')} {currency}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 800, marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', color: ecartCaixa >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+              <span>Écart Caixa</span>
+              <span style={{ fontFamily: 'monospace' }}>{ecartCaixa >= 0 ? '+' : ''}{ecartCaixa.toLocaleString('fr-FR')} {currency}</span>
+            </div>
+          </motion.div>
+        )}
 
         {/* Actions */}
         <motion.div
