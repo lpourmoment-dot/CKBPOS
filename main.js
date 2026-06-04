@@ -713,6 +713,13 @@ ipcMain.handle('force-migration', async () => {
         actif INTEGER DEFAULT 1,
         created_at TEXT DEFAULT (datetime('now','utc'))
       );
+      CREATE TABLE IF NOT EXISTS user_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        machine_id TEXT,
+        machine_label TEXT,
+        login_at TEXT DEFAULT (datetime('now','utc'))
+      );
     `);
 
     // Settings v1.0.9
@@ -1294,10 +1301,11 @@ function generateHistoriqueTicketHTML(data) {
   </body></html>`;
 }
 function generateShiftHTML(data) {
-  const { vendeur, dateDebut, dateFin, items, totalVentes, totalDinheiro, totalExpress, argentEnMain, argentEnvoye, note, currency, shopName, shopAddress, shopPhone, shopNif, cadernoResume, ticketSizeMm: _tMm } = data;
+  const { vendeur, dateDebut, dateFin, items, totalVentes, totalDinheiro, totalExpress, argentEnMain, argentEnvoye, note, currency, shopName, shopAddress, shopPhone, shopNif, cadernoResume, fundoCaixa, ticketSizeMm: _tMm } = data;
   const ticketW = `${_tMm || 72}mm`;
   const diffMain = argentEnMain - totalDinheiro;
   const diffExpress = argentEnvoye - totalExpress;
+  const ecartCaixa = argentEnMain - (fundoCaixa || 0) - totalDinheiro;
 
   const grouped = {};
   (items||[]).forEach(i => {
@@ -1368,6 +1376,7 @@ function generateShiftHTML(data) {
   <div class="bold" style="margin-bottom:4px;">DIFERENÇAS:</div>
   <div class="row"><span>Numerário</span><span>${diffMain>=0?'+':''}${diffMain.toLocaleString('fr-FR')} ${currency}</span></div>
   <div class="row"><span>App Express</span><span>${diffExpress>=0?'+':''}${diffExpress.toLocaleString('fr-FR')} ${currency}</span></div>
+  ${(fundoCaixa && fundoCaixa > 0) ? `<div class="separator-thin"></div><div class="row"><span>Fundo Caixa</span><span>${Number(fundoCaixa).toLocaleString('fr-FR')} ${currency}</span></div><div class="row bold"><span>ÉCART CAIXA</span><span>${ecartCaixa>=0?'+':''}${ecartCaixa.toLocaleString('fr-FR')} ${currency}</span></div>` : ''}
   ${note ? `<div class="separator-thin"></div><div>Obs: ${note}</div>` : ''}
   <div class="separator"></div>
   ${cadernoResume ? `
@@ -2438,7 +2447,10 @@ function handleSyncDelta(ws, msg) {
 
     // Notifier le renderer
     if (mainWindow && !mainWindow.isDestroyed()) {
-      try { mainWindow.webContents.send('sync-status-changed', { status: applied > 0 ? 'synced' : 'idle', pending: 0, online: peersMap.size, applied }); } catch(_e) {}
+      // v3.7.0 — inclure le label de la machine source pour le toast
+      const fromPeer = db.prepare('SELECT * FROM network_peers WHERE machine_id=?').get(machine_id);
+      const fromLabel = fromPeer?.machine_label || machine_id?.slice(0,8) || '?';
+      try { mainWindow.webContents.send('sync-status-changed', { status: applied > 0 ? 'synced' : 'idle', pending: 0, online: peersMap.size, applied, fromLabel }); } catch(_e) {}
     }
     updateSyncStatus();
   } catch(e) {
@@ -2987,6 +2999,23 @@ setInterval(checkDegradedMode, 5000);
 // DASHBOARD COORDINATEUR — v3.2
 // ============================================================
 
+// ── v3.7.0 Historique connexions ────────────────────────────────
+ipcMain.handle('get-user-sessions', (_, userId) => {
+  try {
+    const rows = db.prepare('SELECT * FROM user_sessions WHERE user_id=? ORDER BY id DESC LIMIT 10').all(userId);
+    return { success: true, data: rows };
+  } catch(e) { return { success: false, data: [] }; }
+});
+
+// ── v3.6.0 Fundo de caixa IPC ────────────────────────────────
+ipcMain.handle('get-fundo-caixa', () => {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key='fundo_caixa_hoje'").get();
+    const dateRow = db.prepare("SELECT value FROM settings WHERE key='fundo_caixa_date'").get();
+    return { success: true, montant: Number(row?.value || 0), date: dateRow?.value || null };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
 ipcMain.handle('coord-dashboard', () => {
   try {
     const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
@@ -3476,7 +3505,25 @@ ipcMain.handle('check-setup', () => {
   try {
     const done   = db.prepare("SELECT value FROM settings WHERE key='setup_done'").get()?.value;
     const machId = db.prepare("SELECT value FROM settings WHERE key='machine_id'").get()?.value;
-    const isSetup = done === '1' && !!machId;
+    let isSetup = done === '1' && !!machId;
+
+    // ── Fallback mise à jour : si des users existent, DB déjà configurée ──
+    if (!isSetup) {
+      const userCount = db.prepare("SELECT COUNT(*) as cnt FROM users").get()?.cnt || 0;
+      if (userCount > 0) {
+        // Réparer les clés manquantes silencieusement
+        if (done !== '1') {
+          db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('setup_done','1')").run();
+        }
+        if (!machId) {
+          const crypto = require('crypto');
+          const generatedId = crypto.randomBytes(4).toString('hex').toUpperCase();
+          db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('machine_id',?)").run(generatedId);
+        }
+        isSetup = true;
+      }
+    }
+
     // Health check rapide
     const health = runHealthCheck();
     return { success: true, isSetup, health };

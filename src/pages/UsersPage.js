@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLang } from '../utils/useLang';
-import { Plus, Edit2, Trash2, UserCheck, UserX, X, Eye, EyeOff, FileEdit } from 'lucide-react';
+import { Plus, Edit2, Trash2, UserCheck, UserX, X, Eye, EyeOff, FileEdit, Clock } from 'lucide-react';
 import bcrypt from 'bcryptjs';
 import { useAlert, useConfirm } from '../components/AlertModal'; // ✅ AJOUT
 
@@ -19,9 +19,22 @@ export default function UsersPage() {
   const [editing, setEditing] = useState(null);
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
+  // v3.7.0 — Historique connexions
+  const [showSessions, setShowSessions] = useState(null); // user object
+  const [sessions, setSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
 
   useEffect(() => { loadUsers(); }, []);
 
+
+  const loadSessions = async (userId) => {
+    setSessionsLoading(true);
+    try {
+      const res = await window.electron.getUserSessions(userId);
+      setSessions(res?.data || []);
+    } catch(e) { setSessions([]); }
+    setSessionsLoading(false);
+  };
 
   const loadUsers = async () => {
     const res = await window.electron.dbQuery("SELECT * FROM users ORDER BY role, nom", []);
@@ -158,6 +171,7 @@ export default function UsersPage() {
                     <button onClick={() => toggleActive(u)} className="btn btn-icon btn-secondary">
                       {u.actif?<UserX size={14}/>:<UserCheck size={14}/>}
                     </button>
+                    <button onClick={() => { setShowSessions(u); loadSessions(u.id); }} className="btn btn-icon btn-secondary" title="Histórico de acessos"><Clock size={14}/></button>
                     <button onClick={() => handleDelete(u)} className="btn btn-icon btn-danger"><Trash2 size={14}/></button>
                   </div>
                 </td>
@@ -230,6 +244,37 @@ export default function UsersPage() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* v3.7.0 — Modal Histórico de Acessos */}
+      {showSessions && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: 420 }}>
+            <div className="modal-header">
+              <h2 className="modal-title"><Clock size={16} style={{ display:'inline', marginRight:6 }}/>Actividade — {showSessions.nom}</h2>
+              <button onClick={() => { setShowSessions(null); setSessions([]); }} className="btn btn-icon btn-secondary"><X size={16}/></button>
+            </div>
+            {sessionsLoading ? (
+              <div style={{ textAlign:'center', padding:24, color:'var(--text-muted)' }}>Carregando...</div>
+            ) : sessions.length === 0 ? (
+              <div style={{ textAlign:'center', padding:24, color:'var(--text-muted)', fontSize:13 }}>Nenhum acesso registado</div>
+            ) : (
+              <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                {sessions.map((s, i) => (
+                  <div key={s.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 12px', borderRadius:8, background:'var(--bg-hover)', fontSize:12, border:'1px solid var(--border)' }}>
+                    <div>
+                      <div style={{ fontWeight:600 }}>{s.machine_label || s.machine_id?.slice(0,8) || '?'}</div>
+                      <div style={{ fontSize:10, color:'var(--text-muted)', fontFamily:'monospace' }}>{s.machine_id?.slice(0,8) || ''}</div>
+                    </div>
+                    <span style={{ fontFamily:'monospace', color:'var(--text-muted)', fontSize:11 }}>
+                      {s.login_at ? new Date(s.login_at + 'Z').toLocaleString('fr-FR') : '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

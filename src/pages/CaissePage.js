@@ -684,15 +684,20 @@ export default function CaissePage() {
                                     className="card product-grid-card"
                   style={{
                     padding:16, display:'flex', flexDirection:'column', gap:10,
-                                        outline: 'none',
+                    outline: 'none',
                     transition: 'outline 0.1s, box-shadow 0.1s, transform 0.1s',
+                    border: availUnits<=0?'1px solid rgba(239,68,68,0.4)':undefined,
                   }}>
                   <div>
                     <div style={{fontWeight:600,fontSize:14,marginBottom:2,display:'flex',alignItems:'center',gap:6}}>
                       {product.nom}{product.has_variants&&<Layers size={12} color="var(--accent)"/>}
                     </div>
                     <div style={{fontSize:11,color:'var(--text-muted)'}}>{product.categorie}</div>
-                    <div style={{fontSize:11,color:availUnits<=upc?'var(--warning)':'var(--text-muted)',marginTop:4}}>Stock: {stockDisplay}</div>
+                    <div style={{fontSize:11,color:availUnits<=0?'var(--danger)':availUnits<=upc?'var(--warning)':'var(--text-muted)',marginTop:4,display:'flex',alignItems:'center',gap:4}}>
+                      {availUnits<=0&&<span style={{display:'inline-block',width:7,height:7,borderRadius:'50%',background:'var(--danger)',flexShrink:0}}/>}
+                      Stock: {stockDisplay}
+                      {availUnits<=0&&<span style={{fontSize:9,fontWeight:700,color:'var(--danger)',background:'rgba(239,68,68,0.12)',borderRadius:4,padding:'1px 5px',border:'1px solid rgba(239,68,68,0.3)'}}>RUPTURA</span>}
+                    </div>
                   </div>
                   {['carton','demi','unite'].map((type, tIdx)=>{
                     const typeUnits=type==='carton'?upc:type==='demi'?Math.ceil(upc/2):1;

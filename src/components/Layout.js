@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../App';
 import { useLang } from '../utils/useLang';
-import { LayoutDashboard, ShoppingCart, Package, Warehouse, History, Users, Settings, LogOut, Minus, Square, X, ChevronLeft, ChevronRight, RefreshCw, AlertTriangle, BookOpen, Terminal } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Package, Warehouse, History, Users, Settings, LogOut, Minus, Square, X, ChevronLeft, ChevronRight, RefreshCw, AlertTriangle, BookOpen, Terminal, Monitor } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ShiftModal from './ShiftModal';
 
@@ -78,6 +78,9 @@ export default function Layout() {
   const [printerMode, setPrinterMode] = useState({ mode: 'local', targetLabel: '' });
   // ── v3.0 Coordinateur ──
   const [coordStatus, setCoordStatus] = useState({ isCoordinator: false, coordinatorId: '', coordinatorLabel: '', degraded: false });
+  // ── v3.7.0 Toast notification sync ──
+  const [syncToast, setSyncToast] = useState(null);
+  const syncToastTimerRef = useRef(null);
 
   // Horloge temps réel
   useEffect(() => {
@@ -125,7 +128,16 @@ export default function Layout() {
   // ── v1.5.0 Sync status ──
   useEffect(() => {
     window.electron.syncStatus().then(res => { if (res?.success) setSyncSt(res); }).catch(() => {});
-    const cleanup = window.electron.onSyncUpdate((data) => setSyncSt(data));
+    const cleanup = window.electron.onSyncUpdate((data) => {
+      setSyncSt(data);
+      // v3.7.0 — Toast sync si ventes reçues
+      if (data.applied && data.applied > 0 && data.fromLabel) {
+        const msg = `✅ Sync de ${data.fromLabel} — ${data.applied} entrée(s)`;
+        setSyncToast({ msg, key: Date.now() });
+        clearTimeout(syncToastTimerRef.current);
+        syncToastTimerRef.current = setTimeout(() => setSyncToast(null), 3000);
+      }
+    });
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
@@ -187,6 +199,7 @@ export default function Layout() {
     { to: '/historique', icon: History, label: t('nav','history') },
     { to: '/caderno', icon: BookOpen, label: t('nav','caderno') },
     ...(isAdmin ? [{ to: '/settings', icon: Settings, label: t('nav','settings') }] : []),
+    ...(isAdmin ? [{ to: '/coord', icon: Monitor, label: 'Coord. F9' }] : []),
   ];
 
   const handleSync = async () => {
@@ -476,6 +489,20 @@ export default function Layout() {
           </AnimatePresence>
         </main>
       </div>
+
+      {/* ── v3.7.0 Toast notification sync ── */}
+      {syncToast && (
+        <div key={syncToast.key} style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+          background: 'var(--bg-card)', border: '1px solid rgba(34,197,94,0.4)',
+          borderRadius: 10, padding: '10px 18px', fontSize: 13, fontWeight: 600,
+          color: 'var(--text-primary)', boxShadow: 'var(--shadow)',
+          display: 'flex', alignItems: 'center', gap: 8,
+          animation: 'fadeInUp 0.25s ease',
+        }}>
+          {syncToast.msg}
+        </div>
+      )}
 
       {/* Stock Alert Popup */}
       <AnimatePresence>

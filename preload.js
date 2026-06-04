@@ -183,4 +183,10 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.on('cloud-data-changed', handler);
     return () => ipcRenderer.removeListener('cloud-data-changed', handler);
   },
+
+  // ── v3.6.0 Rapport journalier ────────────────────────────────
+  getFundoCaixa: () => ipcRenderer.invoke('get-fundo-caixa'),
+
+  // ── v3.7.0 Historique connexions ────────────────────────────────
+  getUserSessions: (userId) => ipcRenderer.invoke('get-user-sessions', userId),
 });
