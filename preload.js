@@ -117,6 +117,31 @@ contextBridge.exposeInMainWorld('electron', {
   stockReserve: (product_id, variant_id, qty) => ipcRenderer.invoke('stock-reserve', { product_id, variant_id, qty }),
   stockRelease: (reservation_id, consumed)    => ipcRenderer.invoke('stock-release', { reservation_id, consumed }),
 
+  // ── v3.4 Setup & Onboarding ─────────────────────────────
+  checkSetup:          ()       => ipcRenderer.invoke('check-setup'),
+  healthCheck:         ()       => ipcRenderer.invoke('health-check'),
+  setupComplete:       (data)   => ipcRenderer.invoke('setup-complete', data),
+  lanScanForSnapshot:  ()       => ipcRenderer.invoke('lan-scan-for-snapshot'),
+  generateInviteCode:  ()       => ipcRenderer.invoke('generate-invite-code'),
+  requestSnapshot:     (data)   => ipcRenderer.invoke('request-snapshot', data),
+  setRememberSession:  (r)      => ipcRenderer.invoke('set-remember-session', { remember: r }),
+  getRememberSession:  ()       => ipcRenderer.invoke('get-remember-session'),
+  onSnapshotProgress: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('snapshot-progress', handler);
+    return () => ipcRenderer.removeListener('snapshot-progress', handler);
+  },
+  onSnapshotDone: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('snapshot-done', handler);
+    return () => ipcRenderer.removeListener('snapshot-done', handler);
+  },
+  onSnapshotDenied: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('snapshot-denied', handler);
+    return () => ipcRenderer.removeListener('snapshot-denied', handler);
+  },
+
   // Écouter les mises à jour de pairs en temps réel
   // Retourne une fonction de cleanup à appeler dans useEffect return
   onNetworkPeersUpdate: (cb) => {
