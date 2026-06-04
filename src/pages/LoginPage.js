@@ -4,6 +4,7 @@ import { useAuth } from '../App';
 import { Eye, EyeOff, Lock, Mail, Hash, AlertTriangle, KeyRound } from 'lucide-react';
 import bcrypt from 'bcryptjs';
 import { useLang } from '../utils/useLang';
+import { SyncLanPanel, RememberSession } from './LoginPagePatch';
 
 export default function LoginPage() {
   const { t } = useLang();
@@ -18,6 +19,10 @@ export default function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const [mode, setMode] = useState('password');
+  // v3.4 — Fundo de caixa popup
+  const [showFundo, setShowFundo]     = useState(false);
+  const [fundoAmount, setFundoAmount] = useState('');
+  const [pendingUser, setPendingUser] = useState(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [pin, setPin] = useState('');
@@ -68,8 +73,8 @@ export default function LoginPage() {
       await window.electron.dbQuery(
         "UPDATE users SET last_login=datetime('now'), tentativas_login=0 WHERE id=?", [user.id]
       );
-      await login({ id:user.id, nom:user.nom, email:user.email, role:user.role, peut_modifier_factures:user.peut_modifier_factures });
-      navigate('/');
+      setPendingUser({ id:user.id, nom:user.nom, email:user.email, role:user.role, peut_modifier_factures:user.peut_modifier_factures });
+      setShowFundo(true);
     } catch(err) { setError(t('login','connectionError2')); }
     setLoading(false);
   };
@@ -85,8 +90,8 @@ export default function LoginPage() {
       }
       const user = res.data;
       await window.electron.dbQuery("UPDATE users SET last_login=datetime('now') WHERE id=?", [user.id]);
-      await login({ id:user.id, nom:user.nom, email:user.email, role:user.role, peut_modifier_factures:user.peut_modifier_factures });
-      navigate('/');
+      setPendingUser({ id:user.id, nom:user.nom, email:user.email, role:user.role, peut_modifier_factures:user.peut_modifier_factures });
+      setShowFundo(true);
     } catch(err) { setError('Erro'); setPin(''); }
     setLoading(false);
   };
@@ -128,6 +133,25 @@ export default function LoginPage() {
     );
     setResetMsg(t('login','resetSuccess'));
     setTimeout(() => { setShowReset(false); setResetStep(1); setResetEmail(''); setResetAnswer(''); setNewPassword(''); setResetMsg(''); }, 2000);
+  };
+
+  // v3.4 — Confirmer fundo de caixa et finaliser login
+  const confirmFundo = async () => {
+    if (!pendingUser) return;
+    const montant = parseFloat((fundoAmount || '0').replace(',','.')) || 0;
+    try {
+      // Enregistrer le fundo dans shifts ou settings locaux
+      await window.electron.dbQuery(
+        "INSERT OR REPLACE INTO settings (key,value) VALUES ('fundo_caixa_hoje',?)",
+        [String(montant)]
+      );
+      await window.electron.dbQuery(
+        "INSERT OR REPLACE INTO settings (key,value) VALUES ('fundo_caixa_date',date('now'))",
+        []
+      );
+    } catch(_e) {}
+    await login(pendingUser);
+    navigate('/');
   };
 
   return (
@@ -197,6 +221,8 @@ export default function LoginPage() {
               <button type="submit" className="btn btn-primary btn-lg w-full" disabled={loading} style={{ justifyContent:'center' }}>
                 {loading ? t('login','enteringButton') : t('login','enterButton')}
               </button>
+              {/* ── v3.4 Remember session ── */}
+              <RememberSession/>
             </form>
           ) : (
             <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:20 }}>
@@ -223,23 +249,15 @@ export default function LoginPage() {
                 }}
                 style={{ position:'absolute', opacity:0, width:1, height:1, pointerEvents:'none' }}
               />
-              {/* Keyboard hint */}
-              <div style={{ background:'var(--bg-hover)', border:'1px solid var(--border)', borderRadius:10, padding:'12px 16px', textAlign:'center', marginTop:4 }}>
-                <div style={{ fontSize:12, color:'var(--text-muted)', marginBottom:8 }}>{t('login','physicalKeyboard')}</div>
-                <div style={{ display:'flex', gap:4, justifyContent:'center', flexWrap:'wrap' }}>
-                  {[1,2,3,4,5,6,7,8,9,0].map(n=>(
-                    <div key={n} style={{ width:24, height:24, background:'var(--bg-secondary)', border:'1px solid var(--border)', borderRadius:4, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, color:'var(--text-muted)', fontFamily:'monospace' }}>{n}</div>
-                  ))}
-                  <div style={{ width:28, height:24, background:'var(--bg-secondary)', border:'1px solid var(--accent)', borderRadius:4, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, color:'var(--accent)', fontFamily:'monospace' }}>⌫</div>
-                </div>
-              </div>
+
               {error && <div style={{ color:'var(--danger)', fontSize:13, textAlign:'center', marginTop:4 }}>{error}</div>}
             </div>
           )}
         </div>
-        <div style={{ textAlign:'center', marginTop:16, color:'var(--text-muted)', fontSize:12 }}>
-          {t('login','defaultAccount')} <span style={{ color:'var(--accent)', fontFamily:'monospace' }}>admin@ckbpos.com / admin123</span>
-        </div>
+
+
+        {/* ── v3.4 Sync LAN depuis login ── */}
+        <SyncLanPanel onSynced={() => window.location.reload()}/>
       </div>
 
       {/* Reset Password Modal */}
@@ -297,6 +315,59 @@ export default function LoginPage() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── v3.4 Modal Fundo de Caixa ── */}
+      {showFundo && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <div style={{ width:'100%', maxWidth:400, background:'var(--bg-secondary)', border:'1px solid var(--accent)', borderRadius:14, padding:28, margin:'0 16px', boxShadow:'0 0 40px rgba(232,197,71,0.12)' }}>
+            <div style={{ textAlign:'center', marginBottom:20 }}>
+              <div style={{ fontSize:32, marginBottom:8 }}>💰</div>
+              <div style={{ fontSize:18, fontWeight:700, color:'var(--text-primary)', marginBottom:4 }}>
+                Fundo de Caixa
+              </div>
+              <div style={{ fontSize:13, color:'var(--text-muted)', lineHeight:1.6 }}>
+                Bom dia, <strong style={{ color:'var(--accent)' }}>{pendingUser?.nom}</strong>!<br/>
+                Quantos kwanzas tem na caixa para começar?
+              </div>
+            </div>
+            <div style={{ marginBottom:20 }}>
+              <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:6, textTransform:'uppercase', letterSpacing:1 }}>Valor inicial (AOA)</div>
+              <div style={{ position:'relative' }}>
+                <span style={{ position:'absolute', left:14, top:'50%', transform:'translateY(-50%)', fontSize:16, color:'var(--accent)', fontWeight:700 }}>Kz</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="100"
+                  autoFocus
+                  value={fundoAmount}
+                  onChange={e => setFundoAmount(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && confirmFundo()}
+                  placeholder="0"
+                  style={{ width:'100%', background:'var(--bg)', border:'1px solid var(--accent)', borderRadius:8, padding:'12px 14px 12px 42px', fontSize:24, fontWeight:700, color:'var(--accent)', outline:'none', boxSizing:'border-box', fontFamily:'monospace', textAlign:'right' }}
+                />
+              </div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:10 }}>
+                {[0, 1000, 2000, 5000, 10000, 20000, 50000].map(v => (
+                  <button key={v} onClick={() => setFundoAmount(String(v))}
+                    style={{ padding:'5px 12px', borderRadius:6, border:'1px solid var(--border)', background: fundoAmount===String(v)?'var(--accent-dim)':'var(--bg-hover)', color: fundoAmount===String(v)?'var(--accent)':'var(--text-muted)', fontSize:12, cursor:'pointer', fontFamily:'monospace', transition:'all 0.1s' }}>
+                    {v === 0 ? 'Vazio' : v.toLocaleString() + ' Kz'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:10 }}>
+              <button onClick={() => { setFundoAmount('0'); confirmFundo(); }}
+                style={{ flex:1, padding:'10px', borderRadius:8, border:'1px solid var(--border)', background:'transparent', color:'var(--text-muted)', fontSize:13, cursor:'pointer', fontFamily:'inherit' }}>
+                Pular
+              </button>
+              <button onClick={confirmFundo}
+                style={{ flex:2, padding:'10px', borderRadius:8, border:'none', background:'var(--accent)', color:'#0a0a0a', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                Confirmar e Entrar
+              </button>
+            </div>
           </div>
         </div>
       )}
