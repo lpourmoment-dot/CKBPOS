@@ -323,9 +323,13 @@ if (!adminExists) {
   // ── v1.1.2 ──────────────────────────────────────────────
   ['machine_id',     ''],
   ['machine_label',  'Caixa Principal'],
-  ['network_key',    ''],              // Clé réseau LAN par entreprise — v1.8.0
-  ['printer_mode',   'local'],        // 'local' | 'shared' — v1.9.1
-  ['printer_machine_id', ''],         // machine_id de la machine cible — v1.9.1
+  ['network_key',    ''],
+  ['printer_mode',   'local'],
+  ['printer_machine_id', ''],
+  ['coordinator_id',    ''],
+  ['coordinator_label', ''],
+  ['setup_done',     '0'],         // v3.4 — 0=première fois, 1=configuré
+  ['remember_session','0'],        // v3.4 — session persistante
 ].forEach(([k,v]) => db.prepare('INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)').run(k,v));
 
 // ── Générer machine_id si absent ou vide ──────────────────
@@ -470,7 +474,38 @@ db.prepare("UPDATE settings SET value='0' WHERE key='sync_applying'").run();
    BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
    VALUES('users',NEW.id,'UPDATE',(SELECT value FROM settings WHERE key='machine_id')); END`,
 
-  // ── settings globaux — v1.9.1 : sync des settings partagés entre machines ──
+  // ── caderno_motivos/trabalhadores/produtos — v3.4 ──────────
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_ins_caderno_motivos AFTER INSERT ON caderno_motivos
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('caderno_motivos',NEW.id,'INSERT',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_upd_caderno_motivos AFTER UPDATE ON caderno_motivos
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('caderno_motivos',NEW.id,'UPDATE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_ins_caderno_trabalhadores AFTER INSERT ON caderno_trabalhadores
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('caderno_trabalhadores',NEW.id,'INSERT',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_upd_caderno_trabalhadores AFTER UPDATE ON caderno_trabalhadores
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('caderno_trabalhadores',NEW.id,'UPDATE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_ins_caderno_produtos AFTER INSERT ON caderno_produtos
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('caderno_produtos',NEW.id,'INSERT',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  `CREATE TRIGGER IF NOT EXISTS trg_sync_upd_caderno_produtos AFTER UPDATE ON caderno_produtos
+   WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+   BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+   VALUES('caderno_produtos',NEW.id,'UPDATE',(SELECT value FROM settings WHERE key='machine_id')); END`,
+
+  // ── settings globaux — v1.9.1 (recréé si manquant — migration) ──
   // Clés locales exclues : machine_id, machine_label, network_key, supabase_url/key,
   //                        cloud_last_seq, sync_applying, printer_mode, printer_machine_id
   `CREATE TRIGGER IF NOT EXISTS trg_sync_upd_settings AFTER UPDATE ON settings
@@ -532,6 +567,34 @@ db.prepare("INSERT OR IGNORE INTO settings (key,value) VALUES ('coordinator_id',
 db.prepare("INSERT OR IGNORE INTO settings (key,value) VALUES ('coordinator_label','')").run();
 
 // ── Export ───────────────────────────────────────────────
+// ── Migration v3.4 : forcer recréation triggers settings si absents ──
+// Nécessaire pour les DBs créées avant v1.9.1 qui n'ont pas ces triggers
+try {
+  const hasTrigger = db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name='trg_sync_upd_settings'").get();
+  if (!hasTrigger) {
+    console.log('[DB] Migration v3.4 : création triggers settings globaux');
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_upd_settings AFTER UPDATE ON settings
+      WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+      AND NEW.key NOT IN ('machine_id','machine_label','network_key','supabase_url','supabase_key','cloud_last_seq','sync_applying','printer_mode','printer_machine_id','coordinator_id','coordinator_label','setup_done','remember_session','fundo_caixa_hoje','fundo_caixa_date')
+      BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+      VALUES('settings',NEW.rowid,'UPDATE',(SELECT value FROM settings WHERE key='machine_id')); END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_sync_ins_settings AFTER INSERT ON settings
+      WHEN (SELECT value FROM settings WHERE key='sync_applying')!='1'
+      AND NEW.key NOT IN ('machine_id','machine_label','network_key','supabase_url','supabase_key','cloud_last_seq','sync_applying','printer_mode','printer_machine_id','coordinator_id','coordinator_label','setup_done','remember_session','fundo_caixa_hoje','fundo_caixa_date')
+      BEGIN INSERT INTO sync_log(table_name,record_id,operation,machine_id)
+      VALUES('settings',NEW.rowid,'INSERT',(SELECT value FROM settings WHERE key='machine_id')); END;
+    `);
+  }
+} catch(e) { console.error('[DB] Migration triggers settings:', e.message); }
+
+// ── Settings fundo de caixa (local, non-sync) ─────────────
+try {
+  db.prepare("INSERT OR IGNORE INTO settings (key,value) VALUES ('fundo_caixa_hoje','0')").run();
+  db.prepare("INSERT OR IGNORE INTO settings (key,value) VALUES ('fundo_caixa_date','')").run();
+} catch(_e) {}
+
 const MACHINE_ID_FINAL = db.prepare("SELECT value FROM settings WHERE key='machine_id'").get()?.value || 'UNKNOWN';
 module.exports = db;
 module.exports.MACHINE_ID = MACHINE_ID_FINAL;

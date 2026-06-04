@@ -111,12 +111,23 @@ ipcMain.handle('app-version', () => APP_VERSION);
 
 ipcMain.handle('db-query', (_, sql, params) => {
   try {
-    const stmt = db.prepare(sql);
-    if (sql.trim().toUpperCase().startsWith('SELECT')) return { success:true, data:stmt.all(...(params||[])) };
-    const result = stmt.run(...(params||[]));
-    // v1.8.1 — Push instantané si écriture sur ventes/vente_items/users
+    if (sql.trim().toUpperCase().startsWith('SELECT')) {
+      return { success:true, data:db.prepare(sql).all(...(params||[])) };
+    }
+    // v3.4 — Injecter machine_id automatiquement dans INSERT INTO ventes si absent
+    let finalSql    = sql;
+    let finalParams = params ? [...params] : [];
     const sqlUp = sql.trim().toUpperCase();
-    if (!sqlUp.startsWith('SELECT') && /\b(VENTES|VENTE_ITEMS|USERS)\b/.test(sqlUp)) {
+    if (sqlUp.startsWith('INSERT') && /\bVENTES\b/.test(sqlUp) && !/MACHINE_ID/.test(sqlUp)) {
+      finalSql = sql.replace(
+        /INSERT INTO ventes\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i,
+        (m, cols, vals) => 'INSERT INTO ventes (' + cols + ', machine_id) VALUES (' + vals + ', ?)'
+      );
+      finalParams.push(MACHINE_ID);
+    }
+    const result = db.prepare(finalSql).run(...finalParams);
+    // v1.8.1 — Push instantané si écriture sur ventes/vente_items/users
+    if (/\b(VENTES|VENTE_ITEMS|USERS)\b/.test(sqlUp)) {
       setImmediate(() => triggerInstantSync());
     }
     return { success:true, data:result };
@@ -2104,9 +2115,30 @@ ipcMain.handle('machines-stats', () => {
     };
 
     // Pairs connus en DB + statut live
-    const peers = db.prepare('SELECT * FROM network_peers ORDER BY last_seen DESC').all()
+    const rawPeers = db.prepare('SELECT * FROM network_peers ORDER BY last_seen DESC').all()
       .map(p => ({ ...p, isLocal: false, status: peersMap.has(p.machine_id) ? 'online' : 'offline' }));
 
+    // v3.4 — Déduplication par machine_label :
+    // Si deux entrées ont le même label, c'est la même machine physique
+    // (réinstall, changement d'IP, etc.) — garder la plus récente / online
+    const seenLabels = new Map(); // label → peer
+    for (const p of rawPeers) {
+      const label = (p.machine_label || p.machine_id).trim().toLowerCase();
+      const existing = seenLabels.get(label);
+      if (!existing) {
+        seenLabels.set(label, p);
+      } else {
+        // Garder online > offline, sinon la plus récente
+        const keepNew = (p.status === 'online' && existing.status !== 'online') ||
+                        (p.status === existing.status && p.last_seen > existing.last_seen);
+        if (keepNew) seenLabels.set(label, p);
+      }
+    }
+    // Exclure aussi les pairs qui ont le même label que la machine locale
+    const localLabel = (localMachine.machine_label || '').trim().toLowerCase();
+    seenLabels.delete(localLabel);
+
+    const peers = [...seenLabels.values()];
     const all = [localMachine, ...peers];
 
     const result = all.map(m => {
@@ -2229,7 +2261,7 @@ app.on('before-quit', () => {
 // Résolution conflits : last-write-wins (INSERT OR REPLACE)
 // ============================================================
 
-const SYNC_TABLES = new Set(['ventes','vente_items','products','stock_mouvements','caderno_entries','users','settings']);
+const SYNC_TABLES = new Set(['ventes','vente_items','products','stock_mouvements','caderno_entries','caderno_motivos','caderno_trabalhadores','caderno_produtos','users','settings']);
 const SYNC_LIMIT  = 200; // entrées max par delta
 
 // ── Statut sync courant ─────────────────────────────────────
@@ -2358,9 +2390,29 @@ function handleSyncDelta(ws, msg) {
               // ── Cas spécial : table settings (PK = key TEXT, pas id) ──
               if (e.table_name === 'settings') {
                 // Filtrer les clés locales — ne jamais écraser machine_id, network_key, etc.
-                const LOCAL_KEYS = new Set(['machine_id','machine_label','network_key','supabase_url','supabase_key','cloud_last_seq','sync_applying','printer_mode','printer_machine_id']);
+                const LOCAL_KEYS = new Set(['machine_id','machine_label','network_key','supabase_url','supabase_key','cloud_last_seq','sync_applying','printer_mode','printer_machine_id','coordinator_id','coordinator_label','setup_done','remember_session','fundo_caixa_hoje','fundo_caixa_date']);
                 if (LOCAL_KEYS.has(e.row.key)) { skipped++; continue; }
                 db.prepare('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)').run(e.row.key, e.row.value);
+              } else if (e.table_name === 'users') {
+                // users : dédupliquer par email (pas par id auto-increment)
+                // pour éviter d'écraser le mauvais user si les id diffèrent entre machines
+                const row = e.row;
+                const existing = db.prepare('SELECT id FROM users WHERE email=?').get(row.email);
+                if (existing) {
+                  // Mettre à jour sans écraser l'id local
+                  const skip = new Set(['id','created_at']);
+                  const sets = Object.keys(row).filter(k=>!skip.has(k)).map(k=>'"'+k+'"=?').join(',');
+                  const vals = Object.keys(row).filter(k=>!skip.has(k)).map(k=>row[k]);
+                  db.prepare('UPDATE users SET '+sets+' WHERE email=?').run(...vals, row.email);
+                } else {
+                  // Insérer sans forcer l'id (laisser AUTOINCREMENT gérer)
+                  const skip = new Set(['id']);
+                  const cols = Object.keys(row).filter(k=>!skip.has(k)).map(c=>'"'+c+'"').join(',');
+                  const phs  = Object.keys(row).filter(k=>!skip.has(k)).map(()=>'?').join(',');
+                  const vals = Object.keys(row).filter(k=>!skip.has(k)).map(k=>row[k]);
+                  try { db.prepare('INSERT INTO users ('+cols+') VALUES ('+phs+')').run(...vals); }
+                  catch(_eu) { /* email unique conflict — déjà présent */ }
+                }
               } else {
                 const cols = Object.keys(e.row).map(c => '"' + c + '"').join(',');
                 const phs  = Object.keys(e.row).map(() => '?').join(',');
@@ -3237,9 +3289,24 @@ function applyCloudRow(entry) {
       } else if (entry.row_data && typeof entry.row_data === 'object') {
         // ── Cas spécial : table settings ──
         if (entry.table_name === 'settings') {
-          const LOCAL_KEYS = new Set(['machine_id','machine_label','network_key','supabase_url','supabase_key','cloud_last_seq','sync_applying','printer_mode','printer_machine_id']);
+          const LOCAL_KEYS = new Set(['machine_id','machine_label','network_key','supabase_url','supabase_key','cloud_last_seq','sync_applying','printer_mode','printer_machine_id','coordinator_id','coordinator_label','setup_done','remember_session','fundo_caixa_hoje','fundo_caixa_date']);
           if (LOCAL_KEYS.has(entry.row_data.key)) return;
           db.prepare('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)').run(entry.row_data.key, entry.row_data.value);
+        } else if (entry.table_name === 'users') {
+          const row = entry.row_data;
+          const existing = db.prepare('SELECT id FROM users WHERE email=?').get(row.email);
+          if (existing) {
+            const skip = new Set(['id','created_at']);
+            const sets = Object.keys(row).filter(k=>!skip.has(k)).map(k=>'"'+k+'"=?').join(',');
+            const vals = Object.keys(row).filter(k=>!skip.has(k)).map(k=>row[k]);
+            db.prepare('UPDATE users SET '+sets+' WHERE email=?').run(...vals, row.email);
+          } else {
+            const skip = new Set(['id']);
+            const cols = Object.keys(row).filter(k=>!skip.has(k)).map(c=>'"'+c+'"').join(',');
+            const phs  = Object.keys(row).filter(k=>!skip.has(k)).map(()=>'?').join(',');
+            const vals = Object.keys(row).filter(k=>!skip.has(k)).map(k=>row[k]);
+            try { db.prepare('INSERT INTO users ('+cols+') VALUES ('+phs+')').run(...vals); } catch(_eu) {}
+          }
         } else {
           const cols = Object.keys(entry.row_data).map(c => '"' + c + '"').join(',');
           const phs  = Object.keys(entry.row_data).map(() => '?').join(',');
@@ -3384,3 +3451,272 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   if (_supaChannel) { try { _supabase?.removeChannel(_supaChannel); } catch(_e) {} }
 });
+
+// ============================================================
+// SETUP & ONBOARDING — v3.4
+// Premier démarrage : wizard setup ou login normal
+// ============================================================
+
+const SNAPSHOT_TABLES = [
+  'products','product_variants','stock_mouvements',
+  'caderno_motivos','caderno_trabalhadores','caderno_produtos',
+  'users','clients','empresas','shifts',
+  'settings',  // globaux seulement (filtre appliqué côté envoi)
+  'ventes','vente_items',  // 30 derniers jours
+];
+
+const LOCAL_SETTINGS = new Set([
+  'machine_id','machine_label','network_key','supabase_url','supabase_key',
+  'cloud_last_seq','sync_applying','printer_mode','printer_machine_id',
+  'coordinator_id','coordinator_label','setup_done','remember_session',
+]);
+
+// ── IPC : vérifier si setup déjà fait ───────────────────────
+ipcMain.handle('check-setup', () => {
+  try {
+    const done   = db.prepare("SELECT value FROM settings WHERE key='setup_done'").get()?.value;
+    const machId = db.prepare("SELECT value FROM settings WHERE key='machine_id'").get()?.value;
+    const isSetup = done === '1' && !!machId;
+    // Health check rapide
+    const health = runHealthCheck();
+    return { success: true, isSetup, health };
+  } catch(e) { return { success: false, isSetup: false, health: { ok: false, error: e.message } }; }
+});
+
+// ── Health check ─────────────────────────────────────────────
+function runHealthCheck() {
+  try {
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name);
+    const required = ['products','ventes','users','settings','sync_log'];
+    const missing = required.filter(t => !tables.includes(t));
+    if (missing.length) return { ok: false, missing };
+    const userCount = db.prepare('SELECT COUNT(*) as c FROM users').get()?.c || 0;
+    return { ok: true, tables: tables.length, userCount };
+  } catch(e) { return { ok: false, error: e.message }; }
+}
+
+ipcMain.handle('health-check', () => ({ success: true, ...runHealthCheck() }));
+
+// ── IPC : finaliser le setup (nova boutique) ────────────────
+ipcMain.handle('setup-complete', (_, { shop, machine, admin, sync }) => {
+  try {
+    // Shop info
+    if (shop.name)    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('shop_name',?)").run(shop.name);
+    if (shop.address) db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('shop_address',?)").run(shop.address);
+    if (shop.phone)   db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('shop_phone',?)").run(shop.phone);
+    if (shop.currency)db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('currency',?)").run(shop.currency);
+    if (shop.language)db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('language',?)").run(shop.language);
+    if (shop.theme)   db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('theme',?)").run(shop.theme);
+
+    // Machine identity
+    const newMachineId = require('crypto').randomBytes(4).toString('hex').toUpperCase();
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('machine_id',?)").run(newMachineId);
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('machine_label',?)").run(machine.label || 'Caixa Principal');
+    if (machine.networkKey) db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('network_key',?)").run(machine.networkKey);
+    if (machine.ticketSize) {
+      db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('ticket_size_mm',?)").run(machine.ticketSize);
+      const microns = { 52: 1500000, 60: 1700000, 72: 2050000, 80: 2270000 }[parseInt(machine.ticketSize)] || 2050000;
+      db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('ticket_width_microns',?)").run(microns);
+    }
+
+    // Sync optionnel
+    if (sync?.supabaseUrl) db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('supabase_url',?)").run(sync.supabaseUrl);
+    if (sync?.supabaseKey) db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('supabase_key',?)").run(sync.supabaseKey);
+
+    // Créer admin
+    const bcrypt = require('bcryptjs');
+    const hash = bcrypt.hashSync(admin.password, 10);
+    const existing = db.prepare('SELECT id FROM users WHERE email=?').get(admin.email);
+    if (!existing) {
+      db.prepare('INSERT INTO users (nom,email,password_hash,role,actif) VALUES (?,?,?,?,1)')
+        .run(admin.name, admin.email, hash, 'admin');
+    } else {
+      db.prepare('UPDATE users SET nom=?,password_hash=?,role=? WHERE email=?')
+        .run(admin.name, hash, 'admin', admin.email);
+    }
+
+    // Marquer setup comme terminé
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('setup_done','1')").run();
+    console.log('[SETUP] Setup terminé — machine: ' + newMachineId);
+    // Redémarrer services réseau avec nouvelle machine_id
+    setTimeout(() => { try { restartNetworkServices(); } catch(_e) {} }, 500);
+    return { success: true, machineId: newMachineId };
+  } catch(e) { console.error('[SETUP] setup-complete:', e.message); return { success: false, error: e.message }; }
+});
+
+// ── IPC : scan LAN pour snapshot ────────────────────────────
+ipcMain.handle('lan-scan-for-snapshot', () => {
+  try {
+    const peers = db.prepare('SELECT * FROM network_peers ORDER BY last_seen DESC').all()
+      .map(p => ({ ...p, online: peersMap.has(p.machine_id) }));
+    // Aussi inclure les pairs en mémoire non encore en DB
+    for (const [id, peer] of peersMap.entries()) {
+      if (!peers.find(p => p.machine_id === id)) {
+        peers.push({ machine_id: id, machine_label: peer.machine_label || id.slice(0,8), ip: peer.ip, online: true });
+      }
+    }
+    return { success: true, data: peers };
+  } catch(e) { return { success: false, data: [], error: e.message }; }
+});
+
+// ── Code invitation (6 chiffres, TTL 5 min) ─────────────────
+const _inviteCodes = new Map(); // code → { machine_id, expires }
+
+ipcMain.handle('generate-invite-code', () => {
+  try {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expires = Date.now() + 5 * 60 * 1000;
+    _inviteCodes.set(code, { machine_id: MACHINE_ID, expires });
+    // Nettoyer les codes expirés
+    for (const [k, v] of _inviteCodes.entries()) { if (v.expires < Date.now()) _inviteCodes.delete(k); }
+    console.log('[SETUP] Code invitation généré: ' + code);
+    return { success: true, code, expiresIn: 300 };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ── IPC : envoyer snapshot complet à une machine qui demande ─
+// Déclenché quand on reçoit WS SNAPSHOT_REQUEST
+function handleSnapshotRequest(ws, msg) {
+  const { invite_code, network_key } = msg;
+  // Valider code invitation OU clé réseau
+  const myKey = db.prepare("SELECT value FROM settings WHERE key='network_key'").get()?.value || '';
+  const codeEntry = _inviteCodes.get(invite_code);
+  const codeValid = codeEntry && codeEntry.expires > Date.now();
+  const keyValid  = network_key && myKey && network_key === myKey;
+  if (!codeValid && !keyValid) {
+    try { ws.send(JSON.stringify({ type: 'SNAPSHOT_DENIED', reason: 'invalid_auth' })); } catch(_e) {}
+    console.warn('[SETUP] SNAPSHOT_REQUEST refusé — auth invalide');
+    return;
+  }
+  if (codeEntry) _inviteCodes.delete(invite_code); // usage unique
+  console.log('[SETUP] SNAPSHOT_REQUEST accepté — envoi en cours...');
+  try {
+    const snapshot = {};
+    const cutoff30 = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0,10);
+    for (const table of SNAPSHOT_TABLES) {
+      try {
+        if (table === 'settings') {
+          snapshot[table] = db.prepare('SELECT key,value FROM settings').all()
+            .filter(r => !LOCAL_SETTINGS.has(r.key));
+        } else if (table === 'ventes') {
+          snapshot[table] = db.prepare('SELECT * FROM ventes WHERE date_heure >= ?').all(cutoff30 + 'T00:00:00');
+        } else if (table === 'vente_items') {
+          snapshot[table] = db.prepare(
+            'SELECT vi.* FROM vente_items vi INNER JOIN ventes v ON vi.vente_id=v.id WHERE v.date_heure >= ?'
+          ).all(cutoff30 + 'T00:00:00');
+        } else {
+          snapshot[table] = db.prepare('SELECT * FROM "' + table + '"').all();
+        }
+      } catch(_e) { snapshot[table] = []; }
+    }
+    // Envoyer en chunks de 500KB pour éviter les gros messages WS
+    const json = JSON.stringify({ type: 'SNAPSHOT_DATA', snapshot });
+    const CHUNK = 480 * 1024;
+    if (json.length <= CHUNK) {
+      ws.send(json);
+    } else {
+      const total = Math.ceil(json.length / CHUNK);
+      for (let i = 0; i < total; i++) {
+        ws.send(JSON.stringify({
+          type: 'SNAPSHOT_CHUNK',
+          index: i, total,
+          data: json.slice(i * CHUNK, (i + 1) * CHUNK),
+        }));
+      }
+    }
+    console.log('[SETUP] Snapshot envoyé — ' + Object.values(snapshot).reduce((s,a) => s + a.length, 0) + ' enregistrements');
+  } catch(e) { console.error('[SETUP] handleSnapshotRequest:', e.message); }
+}
+
+// ── Appliquer snapshot reçu ──────────────────────────────────
+let _snapshotChunks = [];
+let _snapshotTotal  = 0;
+
+function handleSnapshotData(data) {
+  try {
+    applySnapshot(data.snapshot);
+  } catch(e) { console.error('[SETUP] handleSnapshotData:', e.message); }
+}
+
+function handleSnapshotChunk(msg) {
+  _snapshotChunks[msg.index] = msg.data;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('snapshot-progress', { received: _snapshotChunks.filter(Boolean).length, total: msg.total }); } catch(_e) {}
+  }
+  if (_snapshotChunks.filter(Boolean).length === msg.total) {
+    try {
+      const full = JSON.parse(_snapshotChunks.join(''));
+      _snapshotChunks = [];
+      applySnapshot(full.snapshot);
+    } catch(e) { console.error('[SETUP] handleSnapshotChunk assemble:', e.message); }
+  }
+}
+
+function applySnapshot(snapshot) {
+  console.log('[SETUP] Application snapshot...');
+  db.transaction(() => {
+    db.prepare("UPDATE settings SET value='1' WHERE key='sync_applying'").run();
+    try {
+      for (const [table, rows] of Object.entries(snapshot)) {
+        if (!rows?.length) continue;
+        if (table === 'settings') {
+          for (const r of rows) {
+            if (!LOCAL_SETTINGS.has(r.key)) {
+              db.prepare('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)').run(r.key, r.value);
+            }
+          }
+        } else {
+          for (const row of rows) {
+            try {
+              const cols = Object.keys(row).map(c => '"' + c + '"').join(',');
+              const phs  = Object.keys(row).map(() => '?').join(',');
+              db.prepare('INSERT OR IGNORE INTO "' + table + '" (' + cols + ') VALUES (' + phs + ')').run(...Object.values(row));
+            } catch(_e) {}
+          }
+        }
+      }
+    } finally {
+      db.prepare("UPDATE settings SET value='0' WHERE key='sync_applying'").run();
+    }
+  })();
+  console.log('[SETUP] Snapshot appliqué');
+  db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('setup_done','1')").run();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('snapshot-done', { success: true }); } catch(_e) {}
+  }
+}
+
+// ── IPC : demander snapshot à une machine ───────────────────
+ipcMain.handle('request-snapshot', (_, { machine_id, invite_code, network_key }) => {
+  try {
+    const peer = peersMap.get(machine_id);
+    if (!peer || peer.ws?.readyState !== WebSocket.OPEN) {
+      return { success: false, error: 'Machine hors ligne' };
+    }
+    _snapshotChunks = [];
+    peer.ws.send(JSON.stringify({ type: 'SNAPSHOT_REQUEST', invite_code: invite_code || '', network_key: network_key || '' }));
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ── IPC : remember session ───────────────────────────────────
+ipcMain.handle('set-remember-session', (_, { remember }) => {
+  db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('remember_session',?)").run(remember ? '1' : '0');
+  return { success: true };
+});
+ipcMain.handle('get-remember-session', () => {
+  const v = db.prepare("SELECT value FROM settings WHERE key='remember_session'").get()?.value;
+  return { success: true, remember: v === '1' };
+});
+
+// ── Étendre handleSyncMessageV3 pour les messages SNAPSHOT ──
+const _v3HandlerFinal = global._ckbSyncHandlers.handleSyncMessage;
+global._ckbSyncHandlers.handleSyncMessage = (ws, msg, peerMachineId) => {
+  if      (msg.type === 'SNAPSHOT_REQUEST') handleSnapshotRequest(ws, msg);
+  else if (msg.type === 'SNAPSHOT_DATA')    handleSnapshotData(msg);
+  else if (msg.type === 'SNAPSHOT_CHUNK')   handleSnapshotChunk(msg);
+  else if (msg.type === 'SNAPSHOT_DENIED')  {
+    if (mainWindow && !mainWindow.isDestroyed()) try { mainWindow.webContents.send('snapshot-denied', {}); } catch(_e) {}
+  }
+  else _v3HandlerFinal(ws, msg, peerMachineId);
+};
