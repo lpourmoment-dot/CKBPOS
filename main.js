@@ -126,6 +126,21 @@ ipcMain.handle('db-query', (_, sql, params) => {
       finalParams.push(MACHINE_ID);
     }
     const result = db.prepare(finalSql).run(...finalParams);
+
+    // v3.8.0 — Enregistrer dans sync_log pour les tables synchées (users, products, etc.)
+    const SYNC_WRITE_TABLES = ['USERS','PRODUCTS','STOCK_MOUVEMENTS','CADERNO_ENTRIES','CADERNO_MOTIVOS','CADERNO_TRABALHADORES','CADERNO_PRODUTOS'];
+    const matchedTable = SYNC_WRITE_TABLES.find(t => new RegExp('\\b' + t + '\\b').test(sqlUp));
+    if (matchedTable && result?.lastInsertRowid) {
+      const tableLower = matchedTable.toLowerCase();
+      const operation  = sqlUp.startsWith('INSERT') ? 'INSERT' : sqlUp.startsWith('UPDATE') ? 'UPDATE' : 'DELETE';
+      const recordId   = result.lastInsertRowid;
+      try {
+        db.prepare(
+          "INSERT INTO sync_log (machine_id, table_name, record_id, operation, synced_to) VALUES (?,?,?,?,'[]')"
+        ).run(MACHINE_ID, tableLower, recordId, operation);
+      } catch(_sl) {}
+    }
+
     // v1.8.1 — Push instantané si écriture sur ventes/vente_items/users
     if (/\b(VENTES|VENTE_ITEMS|USERS)\b/.test(sqlUp)) {
       setImmediate(() => triggerInstantSync());
@@ -661,6 +676,10 @@ ipcMain.handle('force-migration', async () => {
       "ALTER TABLE reservations ADD COLUMN created_at TEXT DEFAULT (datetime('now','utc'))",
       // v1.2.9 — prix pour caderno_produtos
       "ALTER TABLE caderno_produtos ADD COLUMN prix REAL DEFAULT 0",
+      // v3.9.0 — colonne unites manquante sur anciennes BDD
+      "ALTER TABLE products ADD COLUMN unites INTEGER DEFAULT 1",
+      // v3.9.0 — machine_label dans coordinator_log
+      "ALTER TABLE coordinator_log ADD COLUMN machine_label TEXT",
     ];
 
     let applied = 0;
@@ -2563,7 +2582,7 @@ function becomeCoordinator() {
   _coordinatorLabel = label;
   db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('coordinator_id',?)").run(MACHINE_ID);
   db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('coordinator_label',?)").run(label);
-  try { db.prepare("INSERT INTO coordinator_log (machine_id,event) VALUES (?,'ELECTED')").run(MACHINE_ID); } catch(_e) {}
+  try { db.prepare("INSERT INTO coordinator_log (machine_id,machine_label,event) VALUES (?,?,'ELECTED')").run(MACHINE_ID, label); } catch(_e) {}
   console.log('[COORD] Coordinateur élu: ' + label);
   broadcastCoordAnnounce();
   startPrintQueueWorker();
@@ -2779,15 +2798,36 @@ function stopPrintQueueWorker() {
 
 async function processPrintQueue() {
   if (_printQueueRunning) return;
+  _printQueueRunning = true;
   try {
     const job = db.prepare("SELECT * FROM print_queue WHERE status='queued' ORDER BY priority ASC, id ASC LIMIT 1").get();
-    if (!job) return;
-    _printQueueRunning = true;
+    if (!job) { _printQueueRunning = false; return; }
     db.prepare("UPDATE print_queue SET status='printing' WHERE id=?").run(job.id);
     console.log('[PRINT] Job ' + job.job_id.slice(0,8) + ' type=' + job.print_type);
     try {
       const data = JSON.parse(job.data_json);
       const { ticketSizeMm, copiesTicket, copiesShift } = getPrintSettings();
+
+      // Vérifier si impression doit être routée vers machine distante
+      const printerMode = db.prepare("SELECT value FROM settings WHERE key='printer_mode'").get()?.value || 'local';
+      const targetId    = db.prepare("SELECT value FROM settings WHERE key='printer_machine_id'").get()?.value || '';
+      const useRemote   = printerMode === 'shared' && targetId && targetId !== MACHINE_ID;
+
+      if (useRemote) {
+        const peer = peersMap.get(targetId);
+        if (peer?.ws?.readyState === WebSocket.OPEN) {
+          console.log('[PRINT] Router job vers machine distante: ' + targetId);
+          await sendPrintRequest(targetId, job.print_type, data);
+          db.prepare("UPDATE print_queue SET status='done', done_at=datetime('now','utc') WHERE id=?").run(job.id);
+          notifyPrintDone(job.job_id, job.machine_source, true, null);
+          _printQueueRunning = false;
+          return;
+        } else {
+          console.warn('[PRINT] Machine distante hors ligne (' + targetId + ') — fallback local');
+        }
+      }
+
+      // Impression locale
       if (job.print_type === 'ticket') {
         let qrDataUrl = '';
         if (QRCode) try { const t = [data.numeroFacture||'N/A',`${data.total} ${data.currency}`,data.date,data.seller].join('|'); qrDataUrl = await QRCode.toDataURL(t,{width:128,margin:2,errorCorrectionLevel:'L',color:{dark:'#000000',light:'#ffffff'}}); } catch(_e) {}
@@ -3024,17 +3064,37 @@ ipcMain.handle('coord-dashboard', () => {
       ...p, isLocal: false, isCoordinator: p.machine_id === _coordinatorId, status: peersMap.has(p.machine_id) ? 'online' : 'offline',
     }));
     const printQueue = db.prepare("SELECT job_id,print_type,status,priority,machine_source,created_at,done_at,error FROM print_queue ORDER BY id DESC LIMIT 20").all();
-    const reservations = db.prepare(
-      "SELECT r.*,p.nom as product_nom FROM stock_reservations r LEFT JOIN products p ON r.product_id=p.id WHERE r.status='active' AND r.expires_at > datetime('now','utc') ORDER BY r.created_at DESC"
-    ).all();
-    const coordLog = db.prepare("SELECT * FROM coordinator_log ORDER BY id DESC LIMIT 10").all();
-    const stockAlerte = db.prepare(`
-      SELECT p.id,p.nom,p.stock_cartons,
+    const reservations = (() => { try { return db.prepare("SELECT r.*,p.nom as product_nom FROM stock_reservations r LEFT JOIN products p ON r.product_id=p.id WHERE r.status='active' AND r.expires_at > datetime('now','utc') ORDER BY r.created_at DESC").all(); } catch(e) { return []; } })();
+    const coordLog = (() => { try { return db.prepare("SELECT * FROM coordinator_log ORDER BY id DESC LIMIT 10").all(); } catch(e) { return []; } })();
+    const stockAlerte = (() => { try { return db.prepare(`
+      SELECT p.id,p.nom,p.stock_cartons,COALESCE(p.unites,1) as unites,
         COALESCE((SELECT SUM(r.qty_reserved) FROM stock_reservations r WHERE r.product_id=p.id AND r.status='active' AND r.expires_at>datetime('now','utc')),0) as qty_reserved
-      FROM products p WHERE p.actif=1 AND p.stock_cartons<=p.stock_alerte+2 ORDER BY p.stock_cartons ASC LIMIT 10
-    `).all();
+      FROM products p WHERE p.actif=1 AND p.stock_cartons<=COALESCE(p.stock_alerte,2) ORDER BY p.stock_cartons ASC LIMIT 20
+    `).all(); } catch(e) { return []; } })();
     return { success: true, isCoordinator: _isCoordinator, coordinatorId: _coordinatorId, coordinatorLabel: _coordinatorLabel, degradedMode: _degradedMode, machines: [localMachine, ...peers], printQueue, reservations, coordLog, stockAlerte };
   } catch(e) { console.error('[COORD] coord-dashboard:', e.message); return { success: false, error: e.message }; }
+});
+
+// ── v3.9.0 Actions rapides coordinateur ─────────────────────────────
+ipcMain.handle('coord-force-sync', () => {
+  try {
+    triggerInstantSync();
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('coord-rescan', () => {
+  try {
+    sendDiscoveryBroadcast();
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('coord-clear-queue', () => {
+  try {
+    db.prepare("DELETE FROM print_queue WHERE status IN ('done','failed')").run();
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
 });
 
 app.on('before-quit', () => {
@@ -3500,30 +3560,55 @@ const LOCAL_SETTINGS = new Set([
   'coordinator_id','coordinator_label','setup_done','remember_session',
 ]);
 
+// ── IPC : importer une DB existante (Setup wizard option 3) ─
+ipcMain.handle('import-db-file', async () => {
+  try {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: 'Selecionar ficheiro de base de dados',
+      filters: [{ name: 'SQLite Database', extensions: ['db'] }],
+      properties: ['openFile'],
+    });
+    if (canceled || !filePaths[0]) return { success: false, reason: 'canceled' };
+
+    const srcPath = filePaths[0];
+    const BetterSqlite = require('better-sqlite3');
+
+    // Validar: verificar se é uma DB CKBPOS (tabela users existe)
+    let testDb;
+    try {
+      testDb = new BetterSqlite(srcPath, { readonly: true });
+      const hasUsers = testDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
+      if (!hasUsers) { testDb.close(); return { success: false, reason: 'invalid_db' }; }
+      const userCount = testDb.prepare("SELECT COUNT(*) as cnt FROM users").get()?.cnt || 0;
+      if (userCount === 0) { testDb.close(); return { success: false, reason: 'empty_db' }; }
+      testDb.close();
+    } catch(e) {
+      try { testDb?.close(); } catch(_) {}
+      return { success: false, reason: 'corrupt_db', error: e.message };
+    }
+
+    // Copiar para o caminho da DB ativa
+    const destPath = path.join(app.getPath('userData'), 'ckbpos.db');
+    fs.copyFileSync(srcPath, destPath);
+
+    // Marcar setup como feito (será lido no próximo arranque)
+    // Reabrir DB e forçar setup_done
+    const newDb = new BetterSqlite(destPath);
+    newDb.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('setup_done','1')").run();
+    newDb.close();
+
+    return { success: true };
+  } catch(e) {
+    return { success: false, reason: 'error', error: e.message };
+  }
+});
+
 // ── IPC : vérifier si setup déjà fait ───────────────────────
 ipcMain.handle('check-setup', () => {
   try {
     const done   = db.prepare("SELECT value FROM settings WHERE key='setup_done'").get()?.value;
     const machId = db.prepare("SELECT value FROM settings WHERE key='machine_id'").get()?.value;
-    let isSetup = done === '1' && !!machId;
-
-    // ── Fallback mise à jour : si des users existent, DB déjà configurée ──
-    if (!isSetup) {
-      const userCount = db.prepare("SELECT COUNT(*) as cnt FROM users").get()?.cnt || 0;
-      if (userCount > 0) {
-        // Réparer les clés manquantes silencieusement
-        if (done !== '1') {
-          db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('setup_done','1')").run();
-        }
-        if (!machId) {
-          const crypto = require('crypto');
-          const generatedId = crypto.randomBytes(4).toString('hex').toUpperCase();
-          db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('machine_id',?)").run(generatedId);
-        }
-        isSetup = true;
-      }
-    }
-
+    const isSetup = done === '1' && !!machId;
     // Health check rapide
     const health = runHealthCheck();
     return { success: true, isSetup, health };

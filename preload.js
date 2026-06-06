@@ -106,6 +106,9 @@ contextBridge.exposeInMainWorld('electron', {
   // ── v3.0 Coordinateur ───────────────────────────────────
   coordStatus:    () => ipcRenderer.invoke('coord-status'),
   coordDashboard: () => ipcRenderer.invoke('coord-dashboard'),
+  coordForceSync: () => ipcRenderer.invoke('coord-force-sync'),
+  coordRescan:    () => ipcRenderer.invoke('coord-rescan'),
+  coordClearQueue:() => ipcRenderer.invoke('coord-clear-queue'),
   printQueueStatus: () => ipcRenderer.invoke('print-queue-status'),
   onCoordStatusChanged: (cb) => {
     const handler = (_, data) => cb(data);
@@ -189,4 +192,7 @@ contextBridge.exposeInMainWorld('electron', {
 
   // ── v3.7.0 Historique connexions ────────────────────────────────
   getUserSessions: (userId) => ipcRenderer.invoke('get-user-sessions', userId),
+
+  // ── v3.8.0 Import DB (Setup wizard) ─────────────────────────────
+  importDbFile: () => ipcRenderer.invoke('import-db-file'),
 });
