@@ -109,6 +109,8 @@ contextBridge.exposeInMainWorld('electron', {
   coordForceSync: () => ipcRenderer.invoke('coord-force-sync'),
   coordRescan:    () => ipcRenderer.invoke('coord-rescan'),
   coordClearQueue:() => ipcRenderer.invoke('coord-clear-queue'),
+  coordMetrics:   () => ipcRenderer.invoke('coord-metrics'),
+  coordMetrics:   () => ipcRenderer.invoke('coord-metrics'),
   printQueueStatus: () => ipcRenderer.invoke('print-queue-status'),
   onCoordStatusChanged: (cb) => {
     const handler = (_, data) => cb(data);

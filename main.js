@@ -3097,6 +3097,65 @@ ipcMain.handle('coord-clear-queue', () => {
   } catch(e) { return { success: false, error: e.message }; }
 });
 
+// ── v4.0.0 Métriques système + graphiques ───────────────────
+ipcMain.handle('coord-metrics', () => {
+  try {
+    // CPU
+    const cpus = os.cpus();
+    let cpuUsage = 0;
+    if (cpus && cpus.length > 0) {
+      const cpu = cpus[0];
+      const total = Object.values(cpu.times).reduce((a, b) => a + b, 0);
+      cpuUsage = Math.round(((total - cpu.times.idle) / total) * 100);
+    }
+    // RAM
+    const totalMem = os.totalmem();
+    const freeMem  = os.freemem();
+    const usedMem  = totalMem - freeMem;
+    const ramPct   = Math.round((usedMem / totalMem) * 100);
+
+    // Ventes 7 derniers jours
+    const ventes7j = (() => { try {
+      return db.prepare(`
+        SELECT date(created_at,'localtime') as jour,
+               COUNT(*) as nb_ventes,
+               COALESCE(SUM(total),0) as total_aoa
+        FROM ventes
+        WHERE created_at >= datetime('now','-7 days')
+        GROUP BY jour ORDER BY jour ASC
+      `).all();
+    } catch(e) { return []; } })();
+
+    // Activité sync 7 derniers jours
+    const sync7j = (() => { try {
+      return db.prepare(`
+        SELECT date(created_at,'localtime') as jour,
+               COUNT(*) as nb_ops
+        FROM sync_log
+        WHERE created_at >= datetime('now','-7 days')
+        GROUP BY jour ORDER BY jour ASC
+      `).all();
+    } catch(e) { return []; } })();
+
+    // Top 5 produits vendus (7j)
+    const topProduits = (() => { try {
+      return db.prepare(`
+        SELECT p.nom, COALESCE(SUM(vi.quantite),0) as qte
+        FROM vente_items vi
+        JOIN products p ON vi.product_id=p.id
+        JOIN ventes v ON vi.vente_id=v.id
+        WHERE v.created_at >= datetime('now','-7 days')
+        GROUP BY vi.product_id ORDER BY qte DESC LIMIT 5
+      `).all();
+    } catch(e) { return []; } })();
+
+    // Uptime
+    const uptimeSec = os.uptime();
+
+    return { success: true, cpu: cpuUsage, ram: { pct: ramPct, used: usedMem, total: totalMem }, uptime: uptimeSec, ventes7j, sync7j, topProduits };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
 app.on('before-quit', () => {
   clearInterval(_coordCheckTimer);
   clearInterval(_coordAnnounceTimer);

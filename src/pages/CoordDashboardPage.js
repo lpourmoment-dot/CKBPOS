@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Monitor, Printer, Package, AlertTriangle, Star, RefreshCw, Wifi, WifiOff, Clock, Zap, Radio, Trash2 } from 'lucide-react';
+import { Monitor, Printer, Package, AlertTriangle, Star, RefreshCw, Wifi, WifiOff, Clock, Zap, Radio, Trash2, Cpu, MemoryStick, Activity, TrendingUp, BarChart2 } from 'lucide-react';
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useLang } from '../utils/useLang';
 
-// ── Couleurs statuts ──────────────────────────────────────────────
 const STATUS_COLOR = {
   queued:   { bg: 'rgba(234,179,8,0.12)',   border: 'rgba(234,179,8,0.35)',   text: '#facc15' },
   printing: { bg: 'rgba(96,165,250,0.12)',  border: 'rgba(96,165,250,0.35)',  text: '#60a5fa' },
@@ -62,20 +62,22 @@ function formatStock(stockCartons, unites) {
   return parts.join(' + ');
 }
 
+function formatBytes(bytes) {
+  const gb = bytes / (1024 ** 3);
+  return gb >= 1 ? gb.toFixed(1) + ' GB' : (bytes / (1024 ** 2)).toFixed(0) + ' MB';
+}
+
+function formatUptime(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 // ── KPI Card ─────────────────────────────────────────────────────
 function KpiCard({ icon: Icon, label, value, color, sub }) {
   return (
-    <div style={{
-      padding: '14px 16px', borderRadius: 12,
-      background: 'var(--bg-card)',
-      border: '1px solid var(--border)',
-      display: 'flex', alignItems: 'center', gap: 14,
-    }}>
-      <div style={{
-        width: 40, height: 40, borderRadius: 10, flexShrink: 0,
-        background: color + '1a',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
+    <div style={{ padding: '14px 16px', borderRadius: 12, background: 'var(--bg-card)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 14 }}>
+      <div style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: color + '1a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <Icon size={18} color={color} />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -87,68 +89,89 @@ function KpiCard({ icon: Icon, label, value, color, sub }) {
   );
 }
 
+// ── Jauge circulaire simple ───────────────────────────────────────
+function GaugeBar({ label, pct, color, sub }) {
+  const c = pct > 80 ? '#ef4444' : pct > 60 ? '#facc15' : color;
+  return (
+    <div style={{ flex: 1 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>{label}</span>
+        <span style={{ fontSize: 12, fontFamily: 'monospace', fontWeight: 700, color: c }}>{pct}%</span>
+      </div>
+      <div style={{ height: 6, background: 'var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{ width: pct + '%', height: '100%', background: c, borderRadius: 4, transition: 'width 1s ease' }} />
+      </div>
+      {sub && <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
+}
+
 // ── Bouton action rapide ──────────────────────────────────────────
 function ActionBtn({ icon: Icon, label, onClick, loading, color = 'var(--accent)' }) {
   return (
-    <button
-      onClick={onClick}
-      disabled={loading}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '9px 16px', borderRadius: 9, cursor: loading ? 'not-allowed' : 'pointer',
-        background: color + '14', border: `1px solid ${color}55`,
-        color, fontSize: 12, fontWeight: 600, opacity: loading ? 0.6 : 1,
-        transition: 'opacity 0.2s',
-      }}
-    >
+    <button onClick={onClick} disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 16px', borderRadius: 9, cursor: loading ? 'not-allowed' : 'pointer', background: color + '14', border: `1px solid ${color}55`, color, fontSize: 12, fontWeight: 600, opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
       <Icon size={14} />
       {loading ? '…' : label}
     </button>
   );
 }
 
+// ── Tooltip recharts custom ───────────────────────────────────────
+function CustomTooltip({ active, payload, label, fmt }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background: '#1e1e1e', border: '1px solid #333', borderRadius: 8, padding: '8px 12px', fontSize: 12 }}>
+      <div style={{ color: 'var(--text-muted)', marginBottom: 4 }}>{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ color: p.color, fontWeight: 600 }}>{p.name}: {fmt ? fmt(p.value) : p.value}</div>
+      ))}
+    </div>
+  );
+}
+
 export default function CoordDashboardPage() {
-  const { t } = useLang();
+  const { t, fmt } = useLang();
   const [data, setData] = useState(null);
+  const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [actionLoading, setActionLoading] = useState({ sync: false, rescan: false, clear: false });
   const [actionFeedback, setActionFeedback] = useState(null);
   const intervalRef = useRef(null);
+  const metricsIntervalRef = useRef(null);
   const autoIntervalRef = useRef(null);
 
   const loadRef = useRef(null);
   const load = useCallback(async () => {
     try {
       const res = await window.electron.coordDashboard();
-      if (res?.success) {
-        setData(res);
-        setError(null);
-        setLastRefresh(new Date());
-      } else {
-        setError(res?.error || 'Erro desconhecido');
-      }
-    } catch (e) {
-      setError(e.message);
-    }
+      if (res?.success) { setData(res); setError(null); setLastRefresh(new Date()); }
+      else setError(res?.error || 'Erro desconhecido');
+    } catch(e) { setError(e.message); }
     setLoading(false);
   }, []);
   loadRef.current = load;
 
+  const loadMetrics = useCallback(async () => {
+    try {
+      const res = await window.electron.coordMetrics();
+      if (res?.success) setMetrics(res);
+    } catch(_e) {}
+  }, []);
+
   useEffect(() => {
     load();
+    loadMetrics();
     intervalRef.current = setInterval(load, 5000);
-    return () => clearInterval(intervalRef.current);
-  }, [load]);
+    metricsIntervalRef.current = setInterval(loadMetrics, 10000);
+    return () => { clearInterval(intervalRef.current); clearInterval(metricsIntervalRef.current); };
+  }, [load, loadMetrics]);
 
   useEffect(() => {
     const hasPrinting = data?.printQueue?.some(j => j.status === 'printing' || j.status === 'queued');
-    if (hasPrinting) {
-      autoIntervalRef.current = setInterval(load, 3000);
-    } else {
-      clearInterval(autoIntervalRef.current);
-    }
+    if (hasPrinting) { autoIntervalRef.current = setInterval(load, 3000); }
+    else { clearInterval(autoIntervalRef.current); }
     return () => clearInterval(autoIntervalRef.current);
   }, [data, load]);
 
@@ -159,44 +182,37 @@ export default function CoordDashboardPage() {
 
   const handleForceSync = async () => {
     setActionLoading(s => ({ ...s, sync: true }));
-    try {
-      const res = await window.electron.coordForceSync();
-      showFeedback(res?.success ? t('coord', 'syncDone') : (res?.error || 'Erro'), res?.success);
-    } catch(e) { showFeedback(e.message, false); }
+    try { const res = await window.electron.coordForceSync(); showFeedback(res?.success ? t('coord','syncDone') : (res?.error||'Erro'), res?.success); }
+    catch(e) { showFeedback(e.message, false); }
     setActionLoading(s => ({ ...s, sync: false }));
   };
 
   const handleRescan = async () => {
     setActionLoading(s => ({ ...s, rescan: true }));
-    try {
-      const res = await window.electron.coordRescan();
-      showFeedback(res?.success ? t('coord', 'rescanDone') : (res?.error || 'Erro'), res?.success);
-    } catch(e) { showFeedback(e.message, false); }
+    try { const res = await window.electron.coordRescan(); showFeedback(res?.success ? t('coord','rescanDone') : (res?.error||'Erro'), res?.success); }
+    catch(e) { showFeedback(e.message, false); }
     setActionLoading(s => ({ ...s, rescan: false }));
   };
 
   const handleClearQueue = async () => {
     setActionLoading(s => ({ ...s, clear: true }));
-    try {
-      const res = await window.electron.coordClearQueue();
-      showFeedback(res?.success ? t('coord', 'clearDone') : (res?.error || 'Erro'), res?.success);
-      if (res?.success) load();
-    } catch(e) { showFeedback(e.message, false); }
+    try { const res = await window.electron.coordClearQueue(); showFeedback(res?.success ? t('coord','clearDone') : (res?.error||'Erro'), res?.success); if (res?.success) load(); }
+    catch(e) { showFeedback(e.message, false); }
     setActionLoading(s => ({ ...s, clear: false }));
   };
 
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 14 }}>
-      {t('coord', 'loading')}
+      {t('coord','loading')}
     </div>
   );
 
   if (!data) return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12 }}>
-      <div style={{ color: 'var(--danger)', fontSize: 14 }}>{t('coord', 'loadError')}</div>
+      <div style={{ color: 'var(--danger)', fontSize: 14 }}>{t('coord','loadError')}</div>
       {error && <div style={{ color: 'var(--text-muted)', fontSize: 11, fontFamily: 'monospace', maxWidth: 400, textAlign: 'center' }}>{error}</div>}
-      <button onClick={load} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', fontSize: 13 }}>
-        <RefreshCw size={14} /> {t('coord', 'refresh')}
+      <button onClick={load} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px' }}>
+        <RefreshCw size={14} /> {t('coord','refresh')}
       </button>
     </div>
   );
@@ -205,12 +221,32 @@ export default function CoordDashboardPage() {
   const onlineMachines = machines.filter(m => m.status === 'online').length;
   const pendingJobs = printQueue.filter(j => j.status === 'queued' || j.status === 'printing').length;
 
-  const statusLabel = {
-    queued:   t('coord', 'statusQueued'),
-    printing: t('coord', 'statusPrinting'),
-    done:     t('coord', 'statusDone'),
-    failed:   t('coord', 'statusFailed'),
-  };
+  const statusLabel = { queued: t('coord','statusQueued'), printing: t('coord','statusPrinting'), done: t('coord','statusDone'), failed: t('coord','statusFailed') };
+
+  // Préparer données graphique ventes — remplir jours manquants
+  const ventesData = (() => {
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const jour = d.toISOString().slice(0, 10);
+      const label = d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric' });
+      const found = metrics?.ventes7j?.find(v => v.jour === jour);
+      days.push({ label, nb: found?.nb_ventes || 0, total: found?.total_aoa || 0 });
+    }
+    return days;
+  })();
+
+  const syncData = (() => {
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const jour = d.toISOString().slice(0, 10);
+      const label = d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric' });
+      const found = metrics?.sync7j?.find(s => s.jour === jour);
+      days.push({ label, ops: found?.nb_ops || 0 });
+    }
+    return days;
+  })();
 
   return (
     <div style={{ padding: 24, height: '100%', overflowY: 'auto' }}>
@@ -219,66 +255,96 @@ export default function CoordDashboardPage() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
             <Monitor size={20} color="var(--accent)" />
-            {t('coord', 'title')}
+            {t('coord','title')}
           </h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4 }}>
             {isCoordinator
-              ? <span style={{ color: '#63b3ed' }}>⭐ {t('coord', 'thisMachineIsCoord')}</span>
-              : <span>{t('coord', 'coordinator')}: <strong style={{ color: '#e8c547' }}>{coordinatorLabel || '—'}</strong></span>}
-            {degradedMode && <span style={{ color: 'var(--danger)', marginLeft: 12 }}>⚠️ {t('coord', 'degradedMode')}</span>}
+              ? <span style={{ color: '#63b3ed' }}>⭐ {t('coord','thisMachineIsCoord')}</span>
+              : <span>{t('coord','coordinator')}: <strong style={{ color: '#e8c547' }}>{coordinatorLabel || '—'}</strong></span>}
+            {degradedMode && <span style={{ color: 'var(--danger)', marginLeft: 12 }}>⚠️ {t('coord','degradedMode')}</span>}
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {lastRefresh && (
-            <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-              {lastRefresh.toLocaleTimeString('fr-FR')}
-            </span>
-          )}
+          {lastRefresh && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{lastRefresh.toLocaleTimeString('fr-FR')}</span>}
           <button onClick={load} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px' }}>
-            <RefreshCw size={14} /> {t('coord', 'refresh')}
+            <RefreshCw size={14} /> {t('coord','refresh')}
           </button>
         </div>
       </div>
 
-      {/* ── KPI CARDS ────────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
-        <KpiCard
-          icon={Wifi}
-          label={t('coord', 'kpiMachines')}
-          value={`${onlineMachines}/${machines.length}`}
-          color="#22c55e"
-          sub={onlineMachines === machines.length ? t('coord', 'kpiAllOnline') : null}
-        />
-        <KpiCard
-          icon={Printer}
-          label={t('coord', 'kpiPrintJobs')}
-          value={pendingJobs}
-          color={pendingJobs > 0 ? '#60a5fa' : '#6b7280'}
-          sub={pendingJobs > 0 ? t('coord', 'kpiJobsPending') : null}
-        />
-        <KpiCard
-          icon={AlertTriangle}
-          label={t('coord', 'kpiStockAlert')}
-          value={stockAlerte.length}
-          color={stockAlerte.length > 0 ? '#facc15' : '#6b7280'}
-          sub={stockAlerte.length > 0 ? t('coord', 'kpiCheckStock') : null}
-        />
-        <KpiCard
-          icon={Clock}
-          label={t('coord', 'kpiReservations')}
-          value={reservations.length}
-          color={reservations.length > 0 ? '#f97316' : '#6b7280'}
-          sub={null}
-        />
+      {/* ── KPI CARDS ─────────────────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+        <KpiCard icon={Wifi}          label={t('coord','kpiMachines')}     value={`${onlineMachines}/${machines.length}`} color="#22c55e" sub={onlineMachines===machines.length ? t('coord','kpiAllOnline') : null} />
+        <KpiCard icon={Printer}       label={t('coord','kpiPrintJobs')}    value={pendingJobs}  color={pendingJobs>0?'#60a5fa':'#6b7280'} sub={pendingJobs>0?t('coord','kpiJobsPending'):null} />
+        <KpiCard icon={AlertTriangle} label={t('coord','kpiStockAlert')}   value={stockAlerte.length} color={stockAlerte.length>0?'#facc15':'#6b7280'} sub={stockAlerte.length>0?t('coord','kpiCheckStock'):null} />
+        <KpiCard icon={Clock}         label={t('coord','kpiReservations')} value={reservations.length} color={reservations.length>0?'#f97316':'#6b7280'} />
       </div>
 
-      {/* ── ACTIONS RAPIDES ──────────────────────────────────────── */}
+      {/* ── MONITORING SYSTÈME ────────────────────────────────── */}
+      {metrics && (
+        <Card>
+          <SectionTitle icon={Cpu} title={t('coord','systemMonitor')} />
+          <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <GaugeBar label="CPU" pct={metrics.cpu} color="#60a5fa" sub={`${os_cpuCount()} cores`} />
+            <GaugeBar label="RAM" pct={metrics.ram.pct} color="#a78bfa" sub={`${formatBytes(metrics.ram.used)} / ${formatBytes(metrics.ram.total)}`} />
+            <div style={{ flex: 1, minWidth: 120 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600, marginBottom: 5 }}>Uptime</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-primary)' }}>{formatUptime(metrics.uptime)}</div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* ── GRAPHIQUES ────────────────────────────────────────── */}
+      {metrics && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+          {/* Ventes 7j */}
+          <Card style={{ marginBottom: 0 }}>
+            <SectionTitle icon={TrendingUp} title={t('coord','chartSales7d')} />
+            <ResponsiveContainer width="100%" height={160}>
+              <AreaChart data={ventesData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="gVentes" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#e8c547" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#e8c547" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#6b7280' }} />
+                <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} />
+                <Tooltip content={<CustomTooltip fmt={v => fmt(v)} />} />
+                <Area type="monotone" dataKey="total" name={t('coord','chartRevenue')} stroke="#e8c547" fill="url(#gVentes)" strokeWidth={2} dot={false} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </Card>
+
+          {/* Top 5 produits */}
+          <Card style={{ marginBottom: 0 }}>
+            <SectionTitle icon={BarChart2} title={t('coord','chartTopProducts')} />
+            {metrics.topProduits?.length > 0 ? (
+              <ResponsiveContainer width="100%" height={160}>
+                <BarChart data={metrics.topProduits} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="nom" tick={{ fontSize: 9, fill: '#6b7280' }} />
+                  <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="qte" name={t('coord','chartQty')} fill="#60a5fa" radius={[4,4,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, padding: '40px 0' }}>{t('coord','noData')}</div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* ── ACTIONS RAPIDES ───────────────────────────────────── */}
       <Card>
-        <SectionTitle icon={Zap} title={t('coord', 'quickActions')} />
+        <SectionTitle icon={Zap} title={t('coord','quickActions')} />
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <ActionBtn icon={RefreshCw} label={t('coord', 'actionForceSync')} onClick={handleForceSync} loading={actionLoading.sync} color="#60a5fa" />
-          <ActionBtn icon={Radio}     label={t('coord', 'actionRescan')}    onClick={handleRescan}    loading={actionLoading.rescan} color="#a78bfa" />
-          <ActionBtn icon={Trash2}    label={t('coord', 'actionClearQueue')}onClick={handleClearQueue} loading={actionLoading.clear} color="#f97316" />
+          <ActionBtn icon={RefreshCw} label={t('coord','actionForceSync')}  onClick={handleForceSync}  loading={actionLoading.sync}   color="#60a5fa" />
+          <ActionBtn icon={Radio}     label={t('coord','actionRescan')}     onClick={handleRescan}     loading={actionLoading.rescan} color="#a78bfa" />
+          <ActionBtn icon={Trash2}    label={t('coord','actionClearQueue')} onClick={handleClearQueue} loading={actionLoading.clear}  color="#f97316" />
           {actionFeedback && (
             <span style={{ fontSize: 12, fontWeight: 600, color: actionFeedback.ok ? '#22c55e' : '#ef4444', marginLeft: 8 }}>
               {actionFeedback.ok ? '✅' : '❌'} {actionFeedback.msg}
@@ -287,48 +353,35 @@ export default function CoordDashboardPage() {
         </div>
       </Card>
 
-      {/* ── SECTION 1 : Statut réseau ──────────────────────────── */}
+      {/* ── TOPOLOGIE RÉSEAU ──────────────────────────────────── */}
       <Card>
-        <SectionTitle icon={Wifi} title={t('coord', 'networkStatus')} count={`${onlineMachines}/${machines.length}`} />
+        <SectionTitle icon={Wifi} title={t('coord','networkStatus')} count={`${onlineMachines}/${machines.length}`} />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
           {machines.map((m) => (
-            <div key={m.machine_id} style={{
-              padding: '12px 14px', borderRadius: 10,
-              background: m.status === 'online' ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)',
-              border: `1px solid ${m.status === 'online' ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.2)'}`,
-              position: 'relative',
-            }}>
-              {m.isCoordinator && (
-                <span style={{ position: 'absolute', top: 8, right: 10, fontSize: 14 }} title={t('coord', 'coordinator')}>⭐</span>
-              )}
+            <div key={m.machine_id} style={{ padding: '12px 14px', borderRadius: 10, background: m.status==='online' ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)', border: `1px solid ${m.status==='online' ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.2)'}`, position: 'relative' }}>
+              {m.isCoordinator && <span style={{ position: 'absolute', top: 8, right: 10, fontSize: 14 }}>⭐</span>}
               <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-                {m.status === 'online' ? <Wifi size={12} color="#22c55e" /> : <WifiOff size={12} color="#ef4444" />}
-                {m.machine_label || m.machine_id?.slice(0, 8)}
+                {m.status==='online' ? <Wifi size={12} color="#22c55e"/> : <WifiOff size={12} color="#ef4444"/>}
+                {m.machine_label || m.machine_id?.slice(0,8)}
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{m.ip || '—'}</div>
               <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, fontWeight: 700,
-                  background: m.status === 'online' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                  color: m.status === 'online' ? '#22c55e' : '#ef4444' }}>
-                  {m.status === 'online' ? t('coord', 'online') : t('coord', 'offline')}
+                <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, fontWeight: 700, background: m.status==='online'?'rgba(34,197,94,0.15)':'rgba(239,68,68,0.15)', color: m.status==='online'?'#22c55e':'#ef4444' }}>
+                  {m.status==='online' ? t('coord','online') : t('coord','offline')}
                 </span>
-                {m.isCoordinator && (
-                  <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, fontWeight: 700, background: 'rgba(99,179,237,0.15)', color: '#63b3ed' }}>COORD</span>
-                )}
-                {m.isLocal && (
-                  <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, fontWeight: 700, background: 'rgba(232,197,71,0.12)', color: '#e8c547' }}>{t('coord', 'local')}</span>
-                )}
+                {m.isCoordinator && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, fontWeight: 700, background: 'rgba(99,179,237,0.15)', color: '#63b3ed' }}>COORD</span>}
+                {m.isLocal && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, fontWeight: 700, background: 'rgba(232,197,71,0.12)', color: '#e8c547' }}>{t('coord','local')}</span>}
               </div>
             </div>
           ))}
         </div>
       </Card>
 
-      {/* ── SECTION 2 : File d'impression ─────────────────────── */}
+      {/* ── FILE D'IMPRESSION ─────────────────────────────────── */}
       <Card>
-        <SectionTitle icon={Printer} title={t('coord', 'printQueue')} count={printQueue.length} />
+        <SectionTitle icon={Printer} title={t('coord','printQueue')} count={printQueue.length} />
         {printQueue.length === 0 ? (
-          <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, padding: '12px 0' }}>{t('coord', 'noPrintJobs')}</div>
+          <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, padding: '12px 0' }}>{t('coord','noPrintJobs')}</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {printQueue.map((job) => {
@@ -339,9 +392,7 @@ export default function CoordDashboardPage() {
                   <span style={{ fontFamily: 'monospace', color: sc.text, fontWeight: 700, minWidth: 80 }}>{statusLabel[job.status] || job.status}</span>
                   <span style={{ flex: 1, color: 'var(--text-primary)', fontWeight: 600 }}>{job.print_type || '—'}</span>
                   <span style={{ color: 'var(--text-muted)' }}>{job.machine_source || '—'}</span>
-                  <span style={{ fontFamily: 'monospace', color: 'var(--text-muted)', fontSize: 11 }}>
-                    {job.created_at ? new Date(job.created_at + 'Z').toLocaleTimeString('fr-FR') : '—'}
-                  </span>
+                  <span style={{ fontFamily: 'monospace', color: 'var(--text-muted)', fontSize: 11 }}>{job.created_at ? new Date(job.created_at+'Z').toLocaleTimeString('fr-FR') : '—'}</span>
                 </div>
               );
             })}
@@ -350,11 +401,11 @@ export default function CoordDashboardPage() {
       </Card>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-        {/* ── SECTION 3 : Réservations stock actives ─────────── */}
+        {/* ── RÉSERVATIONS ──────────────────────────────────── */}
         <Card style={{ marginBottom: 0 }}>
-          <SectionTitle icon={Clock} title={t('coord', 'activeReservations')} count={reservations.length} />
+          <SectionTitle icon={Clock} title={t('coord','activeReservations')} count={reservations.length} />
           {reservations.length === 0 ? (
-            <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, padding: '12px 0' }}>{t('coord', 'noReservations')}</div>
+            <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, padding: '12px 0' }}>{t('coord','noReservations')}</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {reservations.map((r) => (
@@ -363,7 +414,7 @@ export default function CoordDashboardPage() {
                     <span style={{ fontWeight: 600 }}>{r.product_nom || r.product_id}</span>
                     <span style={{ fontFamily: 'monospace', color: 'var(--accent)', fontWeight: 700 }}>×{r.qty_reserved}</span>
                   </div>
-                  <div style={{ color: 'var(--text-muted)', marginBottom: 6 }}>{r.machine_id?.slice(0, 8) || '—'}</div>
+                  <div style={{ color: 'var(--text-muted)', marginBottom: 6 }}>{r.machine_id?.slice(0,8) || '—'}</div>
                   <TTLBar expiresAt={r.expires_at} />
                 </div>
               ))}
@@ -371,15 +422,15 @@ export default function CoordDashboardPage() {
           )}
         </Card>
 
-        {/* ── SECTION 4 : Stock en alerte ────────────────────── */}
+        {/* ── STOCK EN ALERTE ───────────────────────────────── */}
         <Card style={{ marginBottom: 0 }}>
-          <SectionTitle icon={AlertTriangle} title={t('coord', 'stockAlert')} count={stockAlerte.length} />
+          <SectionTitle icon={AlertTriangle} title={t('coord','stockAlert')} count={stockAlerte.length} />
           {stockAlerte.length === 0 ? (
-            <div style={{ textAlign: 'center', color: 'var(--success)', fontSize: 13, padding: '12px 0' }}>✅ {t('coord', 'noStockAlert')}</div>
+            <div style={{ textAlign: 'center', color: 'var(--success)', fontSize: 13, padding: '12px 0' }}>✅ {t('coord','noStockAlert')}</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 0, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+            <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 8, padding: '6px 12px', background: 'var(--bg-hover)', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>
-                <span>{t('coord', 'product')}</span><span>{t('coord', 'reserved')}</span><span>{t('coord', 'available')}</span>
+                <span>{t('coord','product')}</span><span>{t('coord','reserved')}</span><span>{t('coord','available')}</span>
               </div>
               {stockAlerte.map((p) => {
                 const upc = p.unites || 1;
@@ -390,9 +441,7 @@ export default function CoordDashboardPage() {
                   <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 12, background: isRupture ? 'rgba(239,68,68,0.05)' : 'transparent' }}>
                     <span style={{ fontWeight: 600, color: isRupture ? 'var(--danger)' : 'var(--text-primary)' }}>{p.nom}</span>
                     <span style={{ fontFamily: 'monospace', color: 'var(--text-muted)', textAlign: 'right', fontSize: 11 }}>{p.qty_reserved || 0}</span>
-                    <span style={{ fontFamily: 'monospace', fontWeight: 700, color: isRupture ? 'var(--danger)' : dispCartons <= 2 ? '#facc15' : 'var(--success)', textAlign: 'right', fontSize: 11 }}>
-                      {dispStr}
-                    </span>
+                    <span style={{ fontFamily: 'monospace', fontWeight: 700, color: isRupture ? 'var(--danger)' : dispCartons<=2 ? '#facc15' : 'var(--success)', textAlign: 'right', fontSize: 11 }}>{dispStr}</span>
                   </div>
                 );
               })}
@@ -401,21 +450,19 @@ export default function CoordDashboardPage() {
         </Card>
       </div>
 
-      {/* ── SECTION 5 : Log élections coordinateur ─────────────── */}
+      {/* ── LOG ÉLECTIONS ─────────────────────────────────────── */}
       <Card style={{ marginTop: 16 }}>
-        <SectionTitle icon={Star} title={t('coord', 'electionLog')} count={coordLog.length} />
+        <SectionTitle icon={Star} title={t('coord','electionLog')} count={coordLog.length} />
         {coordLog.length === 0 ? (
-          <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, padding: '12px 0' }}>{t('coord', 'noEvents')}</div>
+          <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, padding: '12px 0' }}>{t('coord','noEvents')}</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {coordLog.map((ev, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '7px 12px', borderRadius: 7, background: i === 0 ? 'rgba(99,179,237,0.07)' : 'transparent', border: i === 0 ? '1px solid rgba(99,179,237,0.2)' : '1px solid transparent', fontSize: 12 }}>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '7px 12px', borderRadius: 7, background: i===0?'rgba(99,179,237,0.07)':'transparent', border: i===0?'1px solid rgba(99,179,237,0.2)':'1px solid transparent', fontSize: 12 }}>
                 <span style={{ fontSize: 10 }}>⭐</span>
-                <span style={{ fontWeight: 600, color: i === 0 ? '#63b3ed' : 'var(--text-primary)', flex: 1 }}>{ev.machine_label || ev.machine_id?.slice(0, 8) || '—'}</span>
-                <span style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-muted)' }}>
-                  {ev.created_at ? new Date(ev.created_at + 'Z').toLocaleString('fr-FR') : '—'}
-                </span>
-                {i === 0 && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, background: 'rgba(99,179,237,0.15)', color: '#63b3ed', fontWeight: 700 }}>{t('coord', 'current')}</span>}
+                <span style={{ fontWeight: 600, color: i===0?'#63b3ed':'var(--text-primary)', flex: 1 }}>{ev.machine_label || ev.machine_id?.slice(0,8) || '—'}</span>
+                <span style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-muted)' }}>{ev.created_at ? new Date(ev.created_at+'Z').toLocaleString('fr-FR') : '—'}</span>
+                {i===0 && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, background: 'rgba(99,179,237,0.15)', color: '#63b3ed', fontWeight: 700 }}>{t('coord','current')}</span>}
               </div>
             ))}
           </div>
@@ -424,3 +471,6 @@ export default function CoordDashboardPage() {
     </div>
   );
 }
+
+// Helper — nombre de CPUs (appelé côté renderer, pas accès à os)
+function os_cpuCount() { return ''; }
