@@ -226,6 +226,97 @@ function ChoiceScreen({ onChoice }) {
           </div>
           <ChevronRight size={16} color='rgba(255,255,255,0.3)' style={{ marginLeft:'auto' }}/>
         </motion.button>
+
+        <motion.button whileHover={{ scale:1.01 }} whileTap={{ scale:0.99 }}
+          onClick={() => onChoice('importdb')}
+          style={{ background:BgCard, border:'1px solid rgba(255,255,255,0.1)', borderRadius:12, padding:'20px 24px', cursor:'pointer', textAlign:'left', display:'flex', alignItems:'center', gap:16 }}
+        >
+          <div style={{ width:44, height:44, borderRadius:10, background:'rgba(34,197,94,0.1)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+            <Database size={20} color='#22c55e'/>
+          </div>
+          <div>
+            <div style={{ color:'#fff', fontSize:14, fontWeight:700, marginBottom:3, letterSpacing:1 }}>Restaurar base de dados</div>
+            <div style={{ color:'rgba(255,255,255,0.4)', fontSize:12 }}>Importar um ficheiro .db existente do CKBPOS</div>
+          </div>
+          <ChevronRight size={16} color='rgba(255,255,255,0.3)' style={{ marginLeft:'auto' }}/>
+        </motion.button>
+      </div>
+    </motion.div>
+  );
+}
+
+// ── WIZARD Importar DB ────────────────────────────────────────
+function WizardImportDb({ onDone, onBack }) {
+  const [status, setStatus] = useState('idle'); // idle | loading | success | error
+  const [errMsg, setErrMsg] = useState('');
+
+  const handleImport = async () => {
+    setStatus('loading');
+    setErrMsg('');
+    try {
+      const res = await window.electron.importDbFile();
+      if (res?.success) {
+        setStatus('success');
+        // Recarregar app após 2s
+        setTimeout(() => { window.location.reload(); }, 2000);
+      } else {
+        const msgs = {
+          canceled:   'Operação cancelada.',
+          invalid_db: 'Ficheiro inválido — não é uma base de dados CKBPOS.',
+          empty_db:   'Base de dados vazia — nenhum utilizador encontrado.',
+          corrupt_db: 'Ficheiro corrompido ou ilegível.',
+          error:      res?.error || 'Erro desconhecido.',
+        };
+        setErrMsg(msgs[res?.reason] || msgs.error);
+        setStatus('error');
+      }
+    } catch(e) {
+      setErrMsg(e.message || 'Erro ao importar ficheiro.');
+      setStatus('error');
+    }
+  };
+
+  return (
+    <motion.div initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-16 }}>
+      <div style={{ textAlign:'center', marginBottom:28 }}>
+        <div style={{ width:56, height:56, borderRadius:14, background:'rgba(34,197,94,0.12)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px' }}>
+          <Database size={26} color='#22c55e'/>
+        </div>
+        <div style={{ fontSize:18, color:'#fff', fontWeight:700, marginBottom:8 }}>Restaurar base de dados</div>
+        <div style={{ fontSize:13, color:'rgba(255,255,255,0.45)', lineHeight:1.6 }}>
+          Selecione um ficheiro <strong style={{ color:'rgba(255,255,255,0.7)' }}>.db</strong> exportado anteriormente do CKBPOS.<br/>
+          Todos os dados (produtos, vendas, utilizadores) serão restaurados.
+        </div>
+      </div>
+
+      {status === 'success' && (
+        <div style={{ background:'rgba(34,197,94,0.1)', border:'1px solid rgba(34,197,94,0.3)', borderRadius:10, padding:'14px 18px', marginBottom:20, display:'flex', alignItems:'center', gap:10, color:'#22c55e', fontSize:13 }}>
+          <Check size={16}/> Base de dados importada com sucesso! A recarregar...
+        </div>
+      )}
+
+      {status === 'error' && (
+        <div style={{ background:'rgba(239,68,68,0.1)', border:'1px solid rgba(239,68,68,0.3)', borderRadius:10, padding:'14px 18px', marginBottom:20, display:'flex', alignItems:'center', gap:10, color:'#ef4444', fontSize:13 }}>
+          <AlertTriangle size={16}/> {errMsg}
+        </div>
+      )}
+
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        <motion.button
+          whileHover={{ scale: status === 'loading' ? 1 : 1.01 }}
+          whileTap={{ scale: status === 'loading' ? 1 : 0.99 }}
+          onClick={handleImport}
+          disabled={status === 'loading' || status === 'success'}
+          style={{ background: status === 'success' ? 'rgba(34,197,94,0.2)' : 'rgba(34,197,94,0.15)', border:`1.5px solid ${status === 'success' ? '#22c55e' : 'rgba(34,197,94,0.4)'}`, borderRadius:10, padding:'14px 20px', cursor: status === 'loading' ? 'wait' : 'pointer', color:'#22c55e', fontWeight:700, fontSize:14, display:'flex', alignItems:'center', justifyContent:'center', gap:10 }}
+        >
+          {status === 'loading'
+            ? <><Loader size={16} style={{ animation:'spin 1s linear infinite' }}/> A selecionar ficheiro...</>
+            : <><Database size={16}/> Selecionar ficheiro .db</>}
+        </motion.button>
+
+        <button onClick={onBack} style={{ background:'transparent', border:'none', color:'rgba(255,255,255,0.35)', fontSize:13, cursor:'pointer', padding:'8px 0', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+          <ChevronLeft size={14}/> Voltar
+        </button>
       </div>
     </motion.div>
   );
@@ -636,7 +727,7 @@ export default function SetupPage({ onDone }) {
             </div>
             {view !== 'choice' && (
               <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', letterSpacing:2, paddingTop:6 }}>
-                {view === 'new' ? 'NOVA BOUTIQUE' : 'REDE EXISTENTE'}
+              {view === 'new'      ? 'NOVA BOUTIQUE' : view === 'join' ? 'REDE EXISTENTE' : 'RESTAURAR DB'}
               </div>
             )}
           </div>
@@ -645,9 +736,10 @@ export default function SetupPage({ onDone }) {
         {/* Body */}
         <div style={s.body}>
           <AnimatePresence mode="wait">
-            {view === 'choice' && <ChoiceScreen key="choice" onChoice={setView}/>}
-            {view === 'new'    && <WizardNova   key="new"    onDone={onDone} onBack={() => setView('choice')}/>}
-            {view === 'join'   && <WizardJoin   key="join"   onDone={onDone} onBack={() => setView('choice')}/>}
+            {view === 'choice'   && <ChoiceScreen  key="choice"   onChoice={setView}/>}
+            {view === 'new'      && <WizardNova    key="new"      onDone={onDone} onBack={() => setView('choice')}/>}
+            {view === 'join'     && <WizardJoin    key="join"     onDone={onDone} onBack={() => setView('choice')}/>}
+            {view === 'importdb' && <WizardImportDb key="importdb" onDone={onDone} onBack={() => setView('choice')}/>}
           </AnimatePresence>
         </div>
       </motion.div>
