@@ -140,7 +140,6 @@ export default function LoginPage() {
     if (!pendingUser) return;
     const montant = parseFloat((fundoAmount || '0').replace(',','.')) || 0;
     try {
-      // Enregistrer le fundo dans shifts ou settings locaux
       await window.electron.dbQuery(
         "INSERT OR REPLACE INTO settings (key,value) VALUES ('fundo_caixa_hoje',?)",
         [String(montant)]
@@ -148,6 +147,17 @@ export default function LoginPage() {
       await window.electron.dbQuery(
         "INSERT OR REPLACE INTO settings (key,value) VALUES ('fundo_caixa_date',date('now'))",
         []
+      );
+    } catch(_e) {}
+    // v3.9.0 — Enregistrer session dans user_sessions
+    try {
+      const machineRes = await window.electron.dbGet("SELECT value FROM settings WHERE key='machine_id'");
+      const machineId = machineRes?.data?.value || 'LOCAL';
+      const labelRes = await window.electron.dbGet("SELECT value FROM settings WHERE key='machine_label'");
+      const machineLabel = labelRes?.data?.value || machineId;
+      await window.electron.dbQuery(
+        "INSERT INTO user_sessions (user_id, machine_id, machine_label, login_at) VALUES (?, ?, ?, datetime('now'))",
+        [pendingUser.id, machineId, machineLabel]
       );
     } catch(_e) {}
     await login(pendingUser);
