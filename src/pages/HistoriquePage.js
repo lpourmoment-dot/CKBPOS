@@ -51,6 +51,16 @@ export default function HistoriquePage() {
 
   useEffect(() => { loadVentesDay(todayStr(), true); loadSettings(); loadModifications(); loadProdutos(); if(isAdmin) loadUsers(); }, []);
 
+  // v3.9.0 — Refresh automatique après sync LAN
+  useEffect(() => {
+    const cleanup = window.electron.onSyncUpdate((data) => {
+      if (data?.applied > 0) {
+        loadVentes();
+      }
+    });
+    return () => { try { cleanup?.(); } catch(_e) {} };
+  }, []); // eslint-disable-line
+
   // ✅ v1.2.7 — Quand filtres changent : mode filtre ou retour mode jour
   useEffect(() => {
     if (tab === 'produtos')      { loadProdutos(); return; }
@@ -104,7 +114,9 @@ export default function HistoriquePage() {
         setVentes(rows);
         setSelected(new Set());
       } else {
-        setVentes(prev => [...prev, ...rows]);
+        setVentes(prev => [...prev, ...rows].sort((a, b) =>
+          new Date(b.date_vente) - new Date(a.date_vente)
+        ));
       }
       // Chercher le jour précédent qui a des ventes
       const prevRes = await window.electron.dbGet(
