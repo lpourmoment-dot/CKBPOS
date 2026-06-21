@@ -1,6 +1,6 @@
 {
   "name": "ckbpos",
-  "version": "4.0.0",
+  "version": "4.9.3",
   "description": "CKBPOS - Application Point de Vente Professionnelle",
   "main": "main.js",
   "author": "CKB",
@@ -10,6 +10,7 @@
     "react-start": "react-scripts start",
     "react-build": "react-scripts build",
     "dist": "electron-builder --win",
+    "publish-update": "electron-builder --win --publish always",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "electron-rebuild -f -w better-sqlite3",
     "predist": "npm run react-build && npm run rebuild"
@@ -49,7 +50,14 @@
       "node_modules/better-sqlite3/**/*",
       "node_modules/ws/**/*",
       "node_modules/@supabase/**/*"
-    ]
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "lpourmoment-dot",
+      "repo": "ckbpos",
+      "channel": "latest",
+      "releaseType": "release"
+    }
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.43.0",
@@ -57,9 +65,11 @@
     "better-sqlite3": "^9.4.3",
     "date-fns": "^3.3.1",
     "electron-store": "^8.1.0",
+    "electron-updater": "^6.3.4",
     "framer-motion": "^11.18.2",
     "googleapis": "^140.0.0",
     "lucide-react": "^0.344.0",
+    "nodemailer": "^8.0.10",
     "qrcode": "^1.5.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -70,11 +80,11 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
     "concurrently": "^8.2.2",
     "electron": "^29.4.6",
     "electron-builder": "^24.13.3",
-    "wait-on": "^7.2.0",
-    "@electron/rebuild": "^3.6.0"
+    "wait-on": "^7.2.0"
   },
   "homepage": "./",
   "browserslist": {
