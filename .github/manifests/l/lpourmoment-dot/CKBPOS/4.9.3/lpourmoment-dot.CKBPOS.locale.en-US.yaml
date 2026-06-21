@@ -1,0 +1,22 @@
+PackageIdentifier: lpourmoment-dot.CKBPOS
+PackageVersion: 4.9.3
+PackageLocale: en-US
+Publisher: lpourmoment-dot
+PublisherUrl: https://github.com/lpourmoment-dot
+PublisherSupportUrl: https://github.com/lpourmoment-dot/CKBPOS/issues
+Author: lpourmoment-dot
+HomepageUrl: https://github.com/lpourmoment-dot/CKBPOS
+License: MIT
+LicenseUrl: https://github.com/lpourmoment-dot/CKBPOS/blob/main/LICENSE
+Description: 'CKBPOS - Modern point of sale (POS) system for retail stores and shops. Touch interface, product management, sales history, Google Drive sync, and auto-update.'
+Moniker: ckbpos
+Tags:
+  - pos
+  - point-of-sale
+  - retail
+  - cash-register
+  - shop
+  - commerce
+  - electron
+ManifestType: locale
+ManifestVersion: 1.4.0

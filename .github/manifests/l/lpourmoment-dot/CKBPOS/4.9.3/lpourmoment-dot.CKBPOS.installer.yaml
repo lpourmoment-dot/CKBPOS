@@ -1,0 +1,17 @@
+PackageIdentifier: lpourmoment-dot.CKBPOS
+PackageVersion: 4.9.3
+Platform:
+  - Windows.Desktop
+MinimumOSVersion: 10.0.10240.0
+InstallerType: exe
+Scope: machine
+InstallModes:
+  - silent
+  - silentWithProgress
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/lpourmoment-dot/CKBPOS/releases/download/v4.9.3/CKBPOS-Setup-4.9.3.exe
+    InstallerSha256: 3936D99DF37621496753D555DB9382A4B452DCB19AE449A44DA507F0440CE207
+UpgradeBehavior: install
+ManifestType: installer
+ManifestVersion: 1.4.0
