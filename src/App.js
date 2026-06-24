@@ -12,6 +12,8 @@ import SettingsPage from './pages/SettingsPage';
 import EstoquePage from './pages/EstoquePage';
 import CadernoPage from './pages/CadernoPage';
 import CoordDashboardPage from './pages/CoordDashboardPage';
+import AuditLogPage from './pages/AuditLogPage';
+import MessagingPage from './pages/MessagingPage';
 import Layout from './components/Layout';
 import './styles/global.css';
 
@@ -169,6 +171,9 @@ function App() {
                 <Route path="caderno"   element={<CadernoPage/>} />
                 {/* v3.5.0 — Dashboard Coordenador */}
                 <Route path="coord"     element={user?.role==='admin' ? <CoordDashboardPage/> : <Navigate to="/"/>} />
+                {/* v5 — Audit & Mensagens */}
+                <Route path="audit"     element={user?.role==='admin' ? <AuditLogPage/> : <Navigate to="/"/>} />
+                <Route path="messaging" element={<MessagingPage/>} />
               </Route>
               {/* Fallback */}
               <Route path="*" element={<Navigate to={!isSetup ? '/setup' : !user ? '/login' : '/'}/>}/>

@@ -2,14 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { useLang } from '../utils/useLang';
 import { Plus, Edit2, Trash2, UserCheck, UserX, X, Eye, EyeOff, FileEdit, Clock } from 'lucide-react';
 import bcrypt from 'bcryptjs';
-import { useAlert, useConfirm } from '../components/AlertModal'; // ✅ AJOUT
+import { useAlert, useConfirm } from '../components/AlertModal'; // \u2705 AJOUT
 
-const emptyForm = { nom:'', email:'', role:'vendeur', password:'', pin:'', actif:1, peut_modifier_factures:0 };
+const emptyForm = { nom:'', email:'', role:'vendeur', password:'', pin:'', actif:1, peut_modifier_factures:0, photo_base64:'' };
 
 export default function UsersPage() {
-  const { t } = useLang();
+  const { t, lang } = useLang();
+  const intlLocale = lang === 'fr' ? 'fr-FR' : lang === 'en' ? 'en-US' : 'pt-BR';
 
-  // ✅ Hooks modals React (remplacent alert() et confirm() natifs)
+  // \u2705 Hooks modals React (remplacent alert() et confirm() natifs)
   const { showAlert, AlertModalComponent } = useAlert();
   const { showConfirm, ConfirmModalComponent } = useConfirm();
 
@@ -43,32 +44,41 @@ export default function UsersPage() {
 
   const openAdd  = () => { setForm(emptyForm); setEditing(null); setShowModal(true); };
   const openEdit = (u) => {
-    setForm({ nom:u.nom, email:u.email, role:u.role, password:'', pin:u.pin||'', actif:u.actif, peut_modifier_factures:u.peut_modifier_factures||0 });
+    setForm({ nom:u.nom, email:u.email, role:u.role, password:'', pin:u.pin||'', actif:u.actif, peut_modifier_factures:u.peut_modifier_factures||0, photo_base64:u.photo_base64||'' });
     setEditing(u.id); setShowModal(true);
   };
 
+  const handlePhotoChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 50 * 1024 * 1024) { showAlert('', 'Photo trop grande (max 50 MB)', 'warning'); return; }
+    const reader = new FileReader();
+    reader.onloadend = () => f('photo_base64', reader.result);
+    reader.readAsDataURL(file);
+  };
+
   const handleSave = async () => {
-    // ✅ Remplacé alert() natifs → showAlert React
+    // \u2705 Remplacé alert() natifs \u2192 showAlert React
     if (!form.nom || !form.email) { showAlert('', t('users','nameRequired'), 'warning'); return; }
     if (!editing && !form.password) { showAlert('', t('users','passwordRequired'), 'warning'); return; }
     setLoading(true);
     try {
       if (editing) {
-        const updates = ['nom=?','email=?','role=?','pin=?','actif=?','peut_modifier_factures=?'];
-        const vals    = [form.nom,form.email,form.role,form.pin||null,form.actif,form.peut_modifier_factures];
+        const updates = ['nom=?','email=?','role=?','pin=?','actif=?','peut_modifier_factures=?','photo_base64=?'];
+        const vals    = [form.nom,form.email,form.role,form.pin||null,form.actif,form.peut_modifier_factures,form.photo_base64||null];
         if (form.password) { updates.push('password_hash=?'); vals.push(bcrypt.hashSync(form.password,10)); }
         vals.push(editing);
         await window.electron.dbQuery(`UPDATE users SET ${updates.join(',')} WHERE id=?`, vals);
       } else {
         const hash = bcrypt.hashSync(form.password, 10);
         await window.electron.dbQuery(
-          "INSERT INTO users (nom,email,role,password_hash,pin,actif,peut_modifier_factures) VALUES (?,?,?,?,?,?,?)",
-          [form.nom,form.email,form.role,hash,form.pin||null,1,form.peut_modifier_factures]
+          "INSERT INTO users (nom,email,role,password_hash,pin,actif,peut_modifier_factures,photo_base64) VALUES (?,?,?,?,?,?,?,?)",
+          [form.nom,form.email,form.role,hash,form.pin||null,1,form.peut_modifier_factures,form.photo_base64||null]
         );
       }
       setShowModal(false); loadUsers();
     } catch(e) {
-      // ✅ Remplacé alert() natif → showAlert React
+      // \u2705 Remplacé alert() natif \u2192 showAlert React
       showAlert('Erro', e.message, 'error');
     }
     setLoading(false);
@@ -88,12 +98,12 @@ export default function UsersPage() {
     if (u.role === 'admin') {
       const adminCount = users.filter(x => x.role === 'admin').length;
       if (adminCount <= 1) {
-        // ✅ Remplacé alert() natif → showAlert React
+        // \u2705 Remplacé alert() natif \u2192 showAlert React
         showAlert('', t('users','lastAdminError'), 'warning');
         return;
       }
     }
-    // ✅ Remplacé window.confirm() natif → showConfirm React (async/await)
+    // \u2705 Remplacé window.confirm() natif \u2192 showConfirm React (async/await)
     const ok = await showConfirm(
       t('users','deleteConfirmMsg'),
       `"${u.nom}" ? ${t('users','deleteConfirmMsg2')}`,
@@ -144,8 +154,19 @@ export default function UsersPage() {
               <tr key={u.id} className="users-row"
                 style={{ cursor:'pointer' }}>
                 <td>
-                  <div style={{ fontWeight:600 }}>{u.nom}</div>
-                  <div style={{ fontSize:11, color:'var(--text-muted)' }}>{u.email}</div>
+                  <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                    {u.photo_base64 ? (
+                      <img src={u.photo_base64} alt="" style={{ width:32, height:32, borderRadius:'50%', objectFit:'cover', border:'2px solid var(--border)', flexShrink:0 }}/>
+                    ) : (
+                      <div style={{ width:32, height:32, borderRadius:'50%', background:'var(--bg-hover)', border:'2px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:700, color:'var(--text-muted)', flexShrink:0 }}>
+                        {u.nom?.[0]?.toUpperCase() || '?'}
+                      </div>
+                    )}
+                    <div>
+                      <div style={{ fontWeight:600 }}>{u.nom}</div>
+                      <div style={{ fontSize:11, color:'var(--text-muted)' }}>{u.email}</div>
+                    </div>
+                  </div>
                 </td>
                 <td><span className={`badge badge-${u.role}`}>{u.role}</span></td>
                 <td style={{ fontFamily:'monospace', color:'var(--text-muted)' }}>{u.pin?'••••':'—'}</td>
@@ -158,12 +179,12 @@ export default function UsersPage() {
                       {u.peut_modifier_factures ? t('users','editFacturasYes') : t('users','editFacturasNo')}
                     </button>
                   ) : (
-                    <span style={{ fontSize:12, color:'var(--accent)' }}>✓ Admin</span>
+                    <span style={{ fontSize:12, color:'var(--accent)' }}>{'\u2713'} Admin</span>
                   )}
                 </td>
                 <td><span className={`badge ${u.actif?'badge-success':'badge-danger'}`}>{u.actif?t('users','active'):t('users','inactive')}</span></td>
                 <td style={{ fontSize:12, color:'var(--text-muted)' }}>
-                  {u.last_login ? new Date(u.last_login).toLocaleString('fr-FR') : t('users','never')}
+                  {u.last_login ? new Date(u.last_login).toLocaleString(intlLocale) : t('users','never')}
                 </td>
                 <td>
                   <div style={{ display:'flex', gap:6 }}>
@@ -189,6 +210,31 @@ export default function UsersPage() {
               <button onClick={() => setShowModal(false)} className="btn btn-icon btn-secondary"><X size={16}/></button>
             </div>
             <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+              {/* Photo profil */}
+              <div style={{ display:'flex', alignItems:'center', gap:16 }}>
+                <div style={{ position:'relative', flexShrink:0 }}>
+                  {form.photo_base64 ? (
+                    <img src={form.photo_base64} alt="" style={{ width:72, height:72, borderRadius:'50%', objectFit:'cover', border:'3px solid var(--border)' }}/>
+                  ) : (
+                    <div style={{ width:72, height:72, borderRadius:'50%', background:'var(--bg-hover)', border:'3px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, fontWeight:700, color:'var(--text-muted)' }}>
+                      {form.nom?.[0]?.toUpperCase() || '?'}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                  <label style={{ fontSize:12, color:'var(--text-muted)', fontWeight:600 }}>{t('users','profilePhotoLabel')}</label>
+                  <label style={{ padding:'6px 14px', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', cursor:'pointer', fontSize:12, display:'inline-block', color:'var(--text-primary)' }}>
+                    {'\u{1F4F7}'} Choisir une photo
+                    <input type="file" accept="image/*" onChange={handlePhotoChange} style={{ display:'none' }}/>
+                  </label>
+                  {form.photo_base64 && (
+                    <button type="button" onClick={() => f('photo_base64','')} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--danger)', fontSize:12, textAlign:'left', padding:0 }}>
+                      {'\u{1F5D1}'} Supprimer
+                    </button>
+                  )}
+                  <span style={{ fontSize:10, color:'var(--text-muted)' }}>{t('users','photoHint')}</span>
+                </div>
+              </div>
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
                 <div className="form-group">
                   <label className="form-label">{t('users','nameLabel')}</label>
@@ -253,13 +299,13 @@ export default function UsersPage() {
         <div className="modal-overlay">
           <div className="modal" style={{ maxWidth: 420 }}>
             <div className="modal-header">
-              <h2 className="modal-title"><Clock size={16} style={{ display:'inline', marginRight:6 }}/>Actividade — {showSessions.nom}</h2>
+              <h2 className="modal-title"><Clock size={16} style={{ display:'inline', marginRight:6 }}/>{t('users','activityTitlePrefix')} — {showSessions.nom}</h2>
               <button onClick={() => { setShowSessions(null); setSessions([]); }} className="btn btn-icon btn-secondary"><X size={16}/></button>
             </div>
             {sessionsLoading ? (
-              <div style={{ textAlign:'center', padding:24, color:'var(--text-muted)' }}>Carregando...</div>
+              <div style={{ textAlign:'center', padding:24, color:'var(--text-muted)' }}>{t('users','loadingSessions')}</div>
             ) : sessions.length === 0 ? (
-              <div style={{ textAlign:'center', padding:24, color:'var(--text-muted)', fontSize:13 }}>Nenhum acesso registado</div>
+              <div style={{ textAlign:'center', padding:24, color:'var(--text-muted)', fontSize:13 }}>{t('users','noAccessLogged')}</div>
             ) : (
               <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
                 {sessions.map((s, i) => (
@@ -269,7 +315,7 @@ export default function UsersPage() {
                       <div style={{ fontSize:10, color:'var(--text-muted)', fontFamily:'monospace' }}>{s.machine_id?.slice(0,8) || ''}</div>
                     </div>
                     <span style={{ fontFamily:'monospace', color:'var(--text-muted)', fontSize:11 }}>
-                      {s.login_at ? new Date(s.login_at + 'Z').toLocaleString('fr-FR') : '—'}
+                      {s.login_at ? new Date(s.login_at + 'Z').toLocaleString(intlLocale) : '—'}
                     </span>
                   </div>
                 ))}
@@ -279,7 +325,7 @@ export default function UsersPage() {
         </div>
       )}
 
-      {/* ✅ Modals React purs — zéro focus trap */}
+      {/* {'\u2705'} Modals React purs — zéro focus trap */}
       {AlertModalComponent}
       {ConfirmModalComponent}
     </div>

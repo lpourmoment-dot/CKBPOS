@@ -28,7 +28,8 @@ const sectionVariants = {
 
 export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
   const { user } = useAuth();
-  const { currency } = useLang();
+  const { currency, lang, t } = useLang();
+  const intlLocale = lang === 'fr' ? 'fr-FR' : lang === 'en' ? 'en-US' : 'pt-BR';
   const [shiftData, setShiftData] = useState(null);
   const [argentEnMain, setArgentEnMain] = useState('');
   const [argentEnvoye, setArgentEnvoye] = useState('');
@@ -76,8 +77,8 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
       totalDinheiro: totalRes.data?.total_dinheiro || 0,
       totalExpress: totalRes.data?.total_express || 0,
       items: itemsRes.data || [],
-      date: new Date().toLocaleString('fr-FR'),       // heure de fermeture (fin)
-      dateDebut: new Date().toLocaleString('fr-FR'),  // ✅ heure d'ouverture du fecho (début)
+      date: new Date().toLocaleString(intlLocale),       // heure de fermeture (fin)
+      dateDebut: new Date().toLocaleString(intlLocale),  // \u2705 heure d'ouverture du fecho (début)
       today: today,
       shopName: shopNameRes.data?.value || 'CKBPOS',
       shopAddress: shopAddrRes.data?.value || '',
@@ -100,7 +101,7 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
 
       await window.electron.printShiftReport({
         vendeur: user.nom,
-        dateDebut: shiftData.dateDebut, // ✅ heure réelle d'ouverture de session
+        dateDebut: shiftData.dateDebut, // \u2705 heure réelle d'ouverture de session
         dateFin: shiftData.date,
         items: shiftData.items,
         totalVentes: shiftData.total,
@@ -154,7 +155,7 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
             margin: '0 auto 14px',
           }}
         />
-        <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Carregando turno...</span>
+        <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('shift','loading')}</span>
       </motion.div>
     </motion.div>
   );
@@ -191,7 +192,7 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
           initial="initial"
           animate="animate"
         >
-          <h2 className="modal-title">📊 Relatório do Dia</h2>
+          <h2 className="modal-title">{'\u{1F4CA}'} Relatório do Dia</h2>
           {isAdmin && (
             <motion.button
               whileHover={{ scale: 1.1, rotate: 90 }}
@@ -214,8 +215,8 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
           animate="animate"
           style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}
         >
-          <span>Vendedor: <strong style={{ color: 'var(--text-primary)' }}>{user.nom}</strong></span>
-          <span>📅 {new Date().toLocaleDateString('fr-FR')}</span>
+          <span>{t('shift','seller')} <strong style={{ color: 'var(--text-primary)' }}>{user.nom}</strong></span>
+          <span>{'\u{1F4C5}'} {new Date().toLocaleDateString(intlLocale)}</span>
         </motion.div>
 
         {/* v3.6.0 — Fundo de Caixa */}
@@ -227,8 +228,8 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
             animate="animate"
             style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8, padding: '6px 10px', background: 'var(--bg-hover)', borderRadius: 8 }}
           >
-            <span>💰 Fundo de Caixa (abertura)</span>
-            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>{fundoCaixa.toLocaleString('fr-FR')} {currency}</span>
+            <span>{'\u{1F4B0}'} Fundo de Caixa (abertura)</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>{fundoCaixa.toLocaleString(intlLocale)} {currency}</span>
           </motion.div>
         )}
 
@@ -248,14 +249,14 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
               transition={{ delay: 0.2, duration: 0.3, type: 'spring', stiffness: 260, damping: 18 }}
               style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent)', fontFamily: 'monospace' }}
             >
-              {shiftData.total.toLocaleString('fr-FR')} {currency}
+              {shiftData.total.toLocaleString(intlLocale)} {currency}
             </motion.div>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{shiftData.count} transação(ões)</div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             {[
-              { label: '💵 Dinheiro (sistema)', value: shiftData.totalDinheiro, color: 'var(--success)' },
-              { label: '📱 App Express (sistema)', value: shiftData.totalExpress, color: 'var(--info)' },
+              { label: '\u{1F4B5} Dinheiro (sistema)', value: shiftData.totalDinheiro, color: 'var(--success)' },
+              { label: '\u{1F4F1} App Express (sistema)', value: shiftData.totalExpress, color: 'var(--info)' },
             ].map((item, i) => (
               <motion.div
                 key={i}
@@ -266,7 +267,7 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
               >
                 <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{item.label}</div>
                 <div style={{ fontFamily: 'monospace', fontWeight: 700, color: item.color }}>
-                  {item.value.toLocaleString('fr-FR')} {currency}
+                  {item.value.toLocaleString(intlLocale)} {currency}
                 </div>
               </motion.div>
             ))}
@@ -306,7 +307,7 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
                 style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0', borderBottom: '1px solid var(--border)' }}
               >
                 <span><strong>{nom}</strong>: {parts.join(' + ')}</span>
-                <span style={{ fontFamily: 'monospace', color: 'var(--accent)' }}>{v.subtotal.toLocaleString('fr-FR')} {currency}</span>
+                <span style={{ fontFamily: 'monospace', color: 'var(--accent)' }}>{v.subtotal.toLocaleString(intlLocale)} {currency}</span>
               </motion.div>
             );
           })}
@@ -321,11 +322,11 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
           style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 12 }}
         >
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 10 }}>
-            ✅ CONFIRMAÇÃO DO VENDEDOR
+            {'\u2705'} CONFIRMAÇÃO DO VENDEDOR
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div className="form-group">
-              <label className="form-label">💵 Dinheiro real em mãos ({currency})</label>
+              <label className="form-label">{'\u{1F4B5}'} Dinheiro real em mãos ({currency})</label>
               <div style={{ display: 'flex', gap: 6 }}>
                 <input
                   type="number" className="form-input" value={argentEnMain}
@@ -353,13 +354,13 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
                     transition={{ duration: 0.15 }}
                     style={{ fontSize: 10, color: diffMain >= 0 ? 'var(--success)' : 'var(--danger)' }}
                   >
-                    {diffMain >= 0 ? `+${diffMain.toLocaleString('fr-FR')}` : diffMain.toLocaleString('fr-FR')} {currency}
+                    {diffMain >= 0 ? `+${diffMain.toLocaleString(intlLocale)}` : diffMain.toLocaleString(intlLocale)} {currency}
                   </motion.span>
                 )}
               </AnimatePresence>
             </div>
             <div className="form-group">
-              <label className="form-label">📱 App Express real ({currency})</label>
+              <label className="form-label">{'\u{1F4F1}'} App Express real ({currency})</label>
               <input
                 type="number" className="form-input" value={argentEnvoye}
                 onChange={e => setArgentEnvoye(e.target.value)} placeholder="0"
@@ -374,14 +375,14 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
                     transition={{ duration: 0.15 }}
                     style={{ fontSize: 10, color: diffExpress >= 0 ? 'var(--success)' : 'var(--danger)' }}
                   >
-                    {diffExpress >= 0 ? `+${diffExpress.toLocaleString('fr-FR')}` : diffExpress.toLocaleString('fr-FR')} {currency}
+                    {diffExpress >= 0 ? `+${diffExpress.toLocaleString(intlLocale)}` : diffExpress.toLocaleString(intlLocale)} {currency}
                   </motion.span>
                 )}
               </AnimatePresence>
             </div>
           </div>
           <div className="form-group" style={{ marginTop: 10 }}>
-            <label className="form-label">📝 Observação (opcional)</label>
+            <label className="form-label">{'\u{1F4DD}'} Observação (opcional)</label>
             <input
               type="text" className="form-input" value={note}
               onChange={e => setNote(e.target.value)} placeholder="Ex: Faltaram 500 AOA..."
@@ -399,22 +400,22 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
             style={{ background: ecartCaixa >= 0 ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)', border: `1px solid ${ecartCaixa >= 0 ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)' }}>
-              <span>Argent en main</span>
-              <span style={{ fontFamily: 'monospace' }}>{(Number(argentEnMain)||0).toLocaleString('fr-FR')} {currency}</span>
+              <span>{t('shift','cashInHand')}</span>
+              <span style={{ fontFamily: 'monospace' }}>{(Number(argentEnMain)||0).toLocaleString(intlLocale)} {currency}</span>
             </div>
             {fundoCaixa > 0 && (
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-                <span>Fundo de caixa</span>
-                <span style={{ fontFamily: 'monospace' }}>-{fundoCaixa.toLocaleString('fr-FR')} {currency}</span>
+                <span>{t('shift','cashFund')}</span>
+                <span style={{ fontFamily: 'monospace' }}>-{fundoCaixa.toLocaleString(intlLocale)} {currency}</span>
               </div>
             )}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-              <span>Total dinheiro sistema</span>
-              <span style={{ fontFamily: 'monospace' }}>-{(shiftData?.totalDinheiro||0).toLocaleString('fr-FR')} {currency}</span>
+              <span>{t('shift','totalCashSystem')}</span>
+              <span style={{ fontFamily: 'monospace' }}>-{(shiftData?.totalDinheiro||0).toLocaleString(intlLocale)} {currency}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 800, marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', color: ecartCaixa >= 0 ? 'var(--success)' : 'var(--danger)' }}>
-              <span>Écart Caixa</span>
-              <span style={{ fontFamily: 'monospace' }}>{ecartCaixa >= 0 ? '+' : ''}{ecartCaixa.toLocaleString('fr-FR')} {currency}</span>
+              <span>{t('shift','gapTitle')}</span>
+              <span style={{ fontFamily: 'monospace' }}>{ecartCaixa >= 0 ? '+' : ''}{ecartCaixa.toLocaleString(intlLocale)} {currency}</span>
             </div>
           </motion.div>
         )}
@@ -453,10 +454,10 @@ export default function ShiftModal({ onConfirm, onCancel, isAdmin }) {
                   transition={{ repeat: Infinity, duration: 0.8, ease: 'linear' }}
                   style={{ display: 'inline-block', width: 14, height: 14, borderRadius: '50%', border: '2px solid rgba(0,0,0,0.2)', borderTopColor: '#000', marginRight: 8 }}
                 />
-                Imprimindo...
+                {t('shift','printing')}
               </>
             ) : (
-              <><Printer size={16} style={{ marginRight: 6 }} />Imprimir e Sair</>
+              <><Printer size={16} style={{ marginRight: 6 }} />{t('shift','printAndExit')}</>
             )}
           </motion.button>
         </motion.div>

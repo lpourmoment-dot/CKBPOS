@@ -152,7 +152,7 @@ async function syncDatabase() {
   }
 
   store.set('last_sync', timestamp);
-  console.log('✅ Sync Google Drive réussie:', timestamp);
+  console.log('\u2705 Sync Google Drive réussie:', timestamp);
 }
 
 module.exports = { getAuthUrl, setToken, isConnected, syncDatabase, disconnect };

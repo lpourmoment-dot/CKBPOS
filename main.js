@@ -1,3 +1,12 @@
+const { registerLicenseIPC, incrementSalesCounter } = require('./license-ipc');
+// \u2705 Licensing — notifie le renderer pour re-verifier l'acces immediatement apres une vente
+function notifyLicenseSalesUpdated() {
+  try {
+    if (global._mainWindowRef && !global._mainWindowRef.isDestroyed()) {
+      global._mainWindowRef.webContents.send('license-sales-updated');
+    }
+  } catch (_e) {}
+}
 const { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -11,9 +20,14 @@ try { QRCode = require('qrcode'); } catch(e) { console.log('qrcode non installé
 let mainWindow;
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
+// \u2705 Auto-update (electron-updater)
+let autoUpdater = null;
+try { autoUpdater = require('electron-updater').autoUpdater; } catch(e) { console.log('electron-updater non installé'); }
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width:1280, height:800, minWidth:1024, minHeight:700,
+    // global._mainWindowRef defini juste apres la creation (voir plus bas)
     webPreferences:{
       nodeIntegration: false,
       contextIsolation: true,
@@ -26,6 +40,9 @@ function createWindow() {
     backgroundColor: '#0f0f0f',
     show: false,
   });
+
+  // \u2705 Licensing — reference globale pour notifications realtime (license-ipc.js)
+  global._mainWindowRef = mainWindow;
 
   // Fix bug input Electron Windows : redonner le focus au webContents
   // quand la fenêtre reprend le focus (évite le freeze des inputs)
@@ -50,7 +67,7 @@ function createWindow() {
     mainWindow.show();
     mainWindow.focus();
     mainWindow.webContents.focus();
-    // ✅ Fix charset UTF-8 : injecter meta charset si absent (corrige symboles/emojis cassés)
+    // \u2705 Fix charset UTF-8 : injecter meta charset si absent (corrige symboles/emojis cassés)
     mainWindow.webContents.executeJavaScript(`
       if (!document.querySelector('meta[charset]')) {
         const m = document.createElement('meta');
@@ -60,7 +77,7 @@ function createWindow() {
     `).catch(()=>{});
   });
 
-  // ✅ F12 / Ctrl+Shift+I → DevTools (before-input-event — fiable sur tous les claviers)
+  // \u2705 F12 / Ctrl+Shift+I \u2192 DevTools (before-input-event — fiable sur tous les claviers)
   mainWindow.webContents.on('before-input-event', (_, input) => {
     if (input.type === 'keyDown' && (
       input.key === 'F12' ||
@@ -70,9 +87,109 @@ function createWindow() {
     }
   });
 
-  if (isDev) mainWindow.loadURL('http://localhost:3000');
-  else mainWindow.loadFile(path.join(__dirname,'build','index.html'));
+  if (isDev) {
+    // Désactiver le cache en mode dev
+    mainWindow.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+      details.requestHeaders['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+      details.requestHeaders['Pragma'] = 'no-cache';
+      details.requestHeaders['Expires'] = '0';
+      callback({ requestHeaders: details.requestHeaders });
+    });
+
+    // Attendre que React dev server soit prêt avant de charger
+    mainWindow.loadURL('http://localhost:3000');
+
+    // Recharger si la page est blanche/noire (fallback après 5s)
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.executeJavaScript('document.body.innerHTML.length').then(len => {
+          if (len < 10) {
+            console.log('[DEV] Page vide détectée, rechargement...');
+            mainWindow.webContents.reloadIgnoringCache();
+          }
+        }).catch(() => {});
+      }
+    }, 5000);
+  } else {
+    mainWindow.loadFile(path.join(__dirname,'build','index.html'));
+  }
 }
+
+// ── Auto-update (electron-updater) ──────────────────────────
+// Source principale : serveur Windows distant (provider "generic" dans package.json>build.publish)
+// Fallback : GitHub Releases (2e entrée du tableau publish)
+let _updateCheckInProgress = false;
+
+function setupAutoUpdater() {
+  if (!autoUpdater || isDev) return; // pas de check en dev
+
+  autoUpdater.autoDownload = false;       // on demande confirmation avant de télécharger
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('checking-for-update', () => {
+    _send('update-status', { status: 'checking' });
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    _send('update-status', { status: 'available', version: info.version, releaseDate: info.releaseDate });
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    _send('update-status', { status: 'not-available' });
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.error('[autoUpdater]', err?.message || err);
+    _send('update-status', { status: 'error', error: err?.message || String(err) });
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    _send('update-status', {
+      status: 'downloading',
+      percent: Math.round(progress.percent || 0),
+      transferred: progress.transferred,
+      total: progress.total,
+      bytesPerSecond: progress.bytesPerSecond,
+    });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    _send('update-status', { status: 'downloaded', version: info.version });
+  });
+}
+
+function _send(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send(channel, payload); } catch(_e) {}
+  }
+}
+
+async function checkForUpdates(silent) {
+  if (!autoUpdater || isDev) return { success: false, error: 'auto-update indisponible en dev' };
+  if (_updateCheckInProgress) return { success: false, error: 'vérification déjà en cours' };
+  _updateCheckInProgress = true;
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return { success: true, data: result ? { version: result.updateInfo?.version } : null };
+  } catch(e) {
+    if (!silent) console.error('[checkForUpdates]', e.message);
+    return { success: false, error: e.message };
+  } finally {
+    _updateCheckInProgress = false;
+  }
+}
+
+ipcMain.handle('update-check', () => checkForUpdates(false));
+ipcMain.handle('update-download', async () => {
+  if (!autoUpdater) return { success: false, error: 'auto-update indisponible' };
+  try { await autoUpdater.downloadUpdate(); return { success: true }; }
+  catch(e) { return { success: false, error: e.message }; }
+});
+ipcMain.handle('update-install', () => {
+  if (!autoUpdater) return { success: false, error: 'auto-update indisponible' };
+  autoUpdater.quitAndInstall(false, true);
+  return { success: true };
+});
 
 app.whenReady().then(() => {
   createWindow();
@@ -82,6 +199,16 @@ app.whenReady().then(() => {
   }, 2000);
   // v1.4.0 — Services réseau LAN (WS + UDP) — délai pour laisser la BDD s'initialiser
   setTimeout(startNetworkServices, 1500);
+  // Auto-update : check au démarrage (5s après affichage, silencieux si rien)
+  setupAutoUpdater();
+  setTimeout(() => checkForUpdates(true), 5000);
+  // Check périodique : toutes les 30 minutes, même app en cours d'utilisation
+  setInterval(() => checkForUpdates(true), 30 * 60 * 1000);
+  // \u2705 Licensing — enregistrement des IPC de licence (apres init complete du module)
+  setTimeout(() => {
+    try { registerLicenseIPC(db, ipcMain, MACHINE_ID); }
+    catch(e) { console.error('[LICENSE] registerLicenseIPC echoue:', e.message); }
+  }, 100);
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
@@ -106,7 +233,7 @@ const db = require('./database/db');
 const { MACHINE_ID } = require('./database/db');
 // Version auto depuis package.json
 const APP_VERSION = (() => { try { return require('./package.json').version; } catch(e) { return '3.2.0'; } })();
-// ✅ Version auto depuis package.json — utilisé dans SettingsPage.js
+// \u2705 Version auto depuis package.json — utilisé dans SettingsPage.js
 ipcMain.handle('app-version', () => APP_VERSION);
 
 ipcMain.handle('db-query', (_, sql, params) => {
@@ -119,13 +246,18 @@ ipcMain.handle('db-query', (_, sql, params) => {
     let finalParams = params ? [...params] : [];
     const sqlUp = sql.trim().toUpperCase();
     if (sqlUp.startsWith('INSERT') && /\bVENTES\b/.test(sqlUp) && !/MACHINE_ID/.test(sqlUp)) {
-      finalSql = sql.replace(
+      const newSql = sql.replace(
         /INSERT INTO ventes\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i,
         (m, cols, vals) => 'INSERT INTO ventes (' + cols + ', machine_id) VALUES (' + vals + ', ?)'
       );
-      finalParams.push(MACHINE_ID);
+      if (newSql !== sql) { finalSql = newSql; finalParams.push(MACHINE_ID); }
     }
     const result = db.prepare(finalSql).run(...finalParams);
+
+    // \u2705 Licensing — incrémenter le compteur de ventes (tier FREE)
+    if (sqlUp.startsWith('INSERT') && /\bVENTES\b/.test(sqlUp)) {
+      try { incrementSalesCounter(db); notifyLicenseSalesUpdated(); } catch(_lic) {}
+    }
 
     // v3.8.0 — Enregistrer dans sync_log pour les tables synchées (users, products, etc.)
     const SYNC_WRITE_TABLES = ['USERS','PRODUCTS','STOCK_MOUVEMENTS','CADERNO_ENTRIES','CADERNO_MOTIVOS','CADERNO_TRABALHADORES','CADERNO_PRODUTOS'];
@@ -141,6 +273,25 @@ ipcMain.handle('db-query', (_, sql, params) => {
       } catch(_sl) {}
     }
 
+    // v4.2.0 — Audit Log automatique (non-bloquant)
+    setImmediate(() => {
+      try {
+        if (typeof insertAuditLog !== 'function') return;
+        const auditAction = (() => {
+          if (/\bVENTES\b/.test(sqlUp) && sqlUp.startsWith('INSERT') && !/VENTE_ITEMS/.test(sqlUp)) return 'VENTE';
+          if (/\bVENTES\b/.test(sqlUp) && /ANNULE/.test(sqlUp)) return 'ANNULATION';
+          if (/\bPRODUCTS\b/.test(sqlUp) && sqlUp.startsWith('INSERT')) return 'CREATE_PRODUCT';
+          if (/\bPRODUCTS\b/.test(sqlUp) && sqlUp.startsWith('DELETE')) return 'DELETE_PRODUCT';
+          if (/\bSTOCK_MOUVEMENTS\b/.test(sqlUp) && sqlUp.startsWith('INSERT')) return 'STOCK_MOUVEMENT';
+          if (/\bUSERS\b/.test(sqlUp) && sqlUp.startsWith('INSERT')) return 'CREATE_USER';
+          if (/\bUSERS\b/.test(sqlUp) && sqlUp.startsWith('DELETE')) return 'DELETE_USER';
+          if (/\bUSERS\b/.test(sqlUp) && sqlUp.startsWith('UPDATE') && !/last_login|tentativas/.test(sql)) return 'UPDATE_USER';
+          return null;
+        })();
+        if (auditAction) insertAuditLog(null, 'system', auditAction, null);
+      } catch(_al) {}
+    });
+
     // v1.8.1 — Push instantané si écriture sur ventes/vente_items/users
     if (/\b(VENTES|VENTE_ITEMS|USERS)\b/.test(sqlUp)) {
       setImmediate(() => triggerInstantSync());
@@ -151,6 +302,22 @@ ipcMain.handle('db-query', (_, sql, params) => {
 ipcMain.handle('db-get', (_, sql, params) => {
   try { return { success:true, data:db.prepare(sql).get(...(params||[])) }; }
   catch(err) { return { success:false, error:err.message }; }
+});
+
+// ── Console SQL (debug terrain) ──
+ipcMain.handle('dev-sql-query', (_, sql) => {
+  try {
+    const s = sql.trim();
+    if (!s) return { success:false, error:'Requête vide' };
+    const up = s.toUpperCase();
+    if (up.startsWith('SELECT') || up.startsWith('PRAGMA')) {
+      const rows = db.prepare(s).all();
+      return { success:true, rows, count: rows.length };
+    } else {
+      const r = db.prepare(s).run();
+      return { success:true, rows:[], count: r.changes, info: 'changes: ' + r.changes };
+    }
+  } catch(e) { return { success:false, error:e.message }; }
 });
 
 // ============================================================
@@ -169,7 +336,7 @@ ipcMain.handle('caderno-motivos-list', () => {
 ipcMain.handle('caderno-motivos-add', (_, { icone, label, direction, est_dette, role }) => {
   try {
     const r = db.prepare('INSERT INTO caderno_motivos (icone,label,direction,est_dette,role) VALUES (?,?,?,?,?)')
-      .run(icone||'📌', label, direction, est_dette||0, role||'Geral');
+      .run(icone||'\u{1F4CC}', label, direction, est_dette||0, role||'Geral');
     return { success:true, id:r.lastInsertRowid };
   } catch(e) { return { success:false, error:e.message }; }
 });
@@ -256,7 +423,7 @@ ipcMain.handle('caderno-entries-list', (_, { date_jour, user_id, is_admin }) => 
 });
 
 // ── Ajouter ou cumuler une entrée ──
-// Règle : même nom + même motivo + même date_jour → additionne le montant
+// Règle : même nom + même motivo + même date_jour \u2192 additionne le montant
 ipcMain.handle('caderno-entries-add', (_, entry) => {
   try {
     const { nom, motivo, montant, montant_raw, note, direction, est_dette, user_id, machine_id, date_jour } = entry;
@@ -376,7 +543,7 @@ ipcMain.handle('backup-local', async () => {
 
 ipcMain.handle('backup-restore', async () => {
   try {
-    // ✅ Dialog pour choisir le fichier .db à restaurer
+    // \u2705 Dialog pour choisir le fichier .db à restaurer
     const result = await dialog.showOpenDialog(mainWindow, {
       title: 'Restaurar Backup CKBPOS',
       defaultPath: 'D:\\',
@@ -388,7 +555,7 @@ ipcMain.handle('backup-restore', async () => {
     const backupPath = result.filePaths[0];
     const dbPath     = path.join(app.getPath('userData'), 'ckbpos.db');
 
-    // ✅ Vérifier que c'est bien une BDD CKBPOS (contient la table users)
+    // \u2705 Vérifier que c'est bien une BDD CKBPOS (contient la table users)
     // + forcer WAL checkpoint pour fusionner le WAL dans le fichier principal
     // (évite le crash "database disk image is malformed" avec better-sqlite3)
     let cleanedPath = backupPath;
@@ -416,11 +583,11 @@ ipcMain.handle('backup-restore', async () => {
       return { success: false, error: 'Fichier corrompido ou inválido : ' + e.message };
     }
 
-    // ✅ Sauvegarder l'actuelle avant d'écraser (sécurité)
+    // \u2705 Sauvegarder l'actuelle avant d'écraser (sécurité)
     const safetyBackup = path.join(app.getPath('userData'), 'ckbpos_before_restore_' + Date.now() + '.db');
     fs.copyFileSync(dbPath, safetyBackup);
 
-    // ✅ Remplacer la BDD avec le fichier nettoyé et relancer l'app
+    // \u2705 Remplacer la BDD avec le fichier nettoyé et relancer l'app
     fs.copyFileSync(cleanedPath, dbPath);
     // Supprimer les fichiers WAL/SHM résiduels de l'ancienne BDD
     [dbPath + '-wal', dbPath + '-shm'].forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch(e) {} });
@@ -438,7 +605,7 @@ ipcMain.handle('backup-restore', async () => {
 ipcMain.handle('next-facture-num', async () => {
   try {
     const year = new Date().getFullYear();
-    // ✅ Basé sur MAX(id) — séquentiel et jamais réutilisé même après annulation
+    // \u2705 Basé sur MAX(id) — séquentiel et jamais réutilisé même après annulation
     const row = db.prepare("SELECT COALESCE(MAX(id),0) as maxId FROM ventes").get();
     const seq = (row?.maxId || 0) + 1;
     const shortId = MACHINE_ID.slice(0,8).toUpperCase();
@@ -484,6 +651,7 @@ ipcMain.handle('reservation-create', async (_, data) => {
         "INSERT INTO ventes (user_id,client_nom,client_nif,total,montant_recu,monnaie_rendue,mode_paiement,montant_dinheiro,montant_express,statut,facture_num) VALUES (?,?,?,?,?,?,?,?,?,'pago_retirar',?)"
       ).run(userId, clientNom||null, clientNif||'CONSUMIDOR FINAL', total, total, 0, modeP, montantD||0, montantE||0, '');
       venteId = vRes.lastInsertRowid;
+      try { incrementSalesCounter(db); notifyLicenseSalesUpdated(); } catch(_lic) {}
 
       // Déduire stock immédiatement
       const itemsParsed = JSON.parse(items);
@@ -545,6 +713,7 @@ ipcMain.handle('reservation-payer', async (_, { id, userId, modeP, montantD, mon
       "INSERT INTO ventes (user_id,client_nom,client_nif,total,montant_recu,monnaie_rendue,mode_paiement,montant_dinheiro,montant_express,facture_num) VALUES (?,?,?,?,?,?,?,?,?,?)"
     ).run(userId, clientNom||res.client_nom, clientNif||res.client_nif, total, totalPaid, change, modeP||'dinheiro', montantD||0, montantE||0, numeroFacture);
     const venteId = vRes.lastInsertRowid;
+    try { incrementSalesCounter(db); notifyLicenseSalesUpdated(); } catch(_lic) {}
 
     // Insérer items + déduire stock
     const items = JSON.parse(res.items_json);
@@ -688,11 +857,11 @@ ipcMain.handle('force-migration', async () => {
       try { db.exec(sql); applied++; } catch(e) { skipped++; }
     }
 
-    // ✅ Fix statut : corriger les réservations créées avec statut='active' (bug v1.1.6)
+    // \u2705 Fix statut : corriger les réservations créées avec statut='active' (bug v1.1.6)
     // reservation-list filtre sur statut='pendente' — mettre à jour les anciens enregistrements
     try {
       const fixed = db.prepare("UPDATE reservations SET statut='pendente' WHERE statut='active'").run();
-      if (fixed.changes > 0) console.log(`[migration] ${fixed.changes} réservations 'active' → 'pendente'`);
+      if (fixed.changes > 0) console.log(`[migration] ${fixed.changes} réservations 'active' \u2192 'pendente'`);
     } catch(e) {}
 
     // Tables v1.0.9
@@ -812,13 +981,13 @@ function getPrintSettings() {
   return { printerName, copiesTicket, copiesShift, ticketSizeMm, ticketWidthMicrons };
 }
 
-// ✅ v1.2.3 — Lire les flags de personnalisation du ticket depuis settings
+// \u2705 v1.2.3 — Lire les flags de personnalisation du ticket depuis settings
 function getTicketFlags() {
   const defaults = {
     showQr: true, showAddress: true, showPhone: true, showNif: true,
     showFactureNum: true, showClientNom: true, showClientNif: true,
     showSeller: true, showObrigado: true, showVersion: true, showSecondaVia: true,
-    showMentionLegal: true, // ✅ Séparé de showAddress — mention légale Angola
+    showMentionLegal: true, // \u2705 Séparé de showAddress — mention légale Angola
   };
   try {
     const row = db.prepare("SELECT value FROM settings WHERE key='ticket_flags'").get();
@@ -875,12 +1044,12 @@ function printHTML(html, copies = 1, isTicket = false) {
             });
 
             if (result.canceled) {
-              // ✅ Dialog annulé = impression abandonnée volontairement
+              // \u2705 Dialog annulé = impression abandonnée volontairement
               // On résout avec success:true pour ne pas bloquer le bouton Imprimir
               return resolve({ success: true, canceled: true });
             }
             fs.writeFileSync(result.filePath, pdfBuffer);
-            // ✅ Ouvrir le PDF automatiquement après sauvegarde
+            // \u2705 Ouvrir le PDF automatiquement après sauvegarde
             shell.openPath(result.filePath).catch(() => {});
             return resolve({ success: true, path: result.filePath });
           }
@@ -1094,7 +1263,7 @@ function generateTicketHTML(data) {
   const frNum = numeroFacture || '';
 
   // Largeur utile 58mm - 2x2mm padding = 54mm
-  // font-size 11px Courier New = ~1.8mm/char → max ~40 chars/ligne
+  // font-size 11px Courier New = ~1.8mm/char \u2192 max ~40 chars/ligne
   const itemsRows = (items||[]).map(i => `
     <tr>
       <td style="width:50%;word-break:break-word;"><strong>${i.name}</strong><br><small style="font-size:9px;">(${i.type})</small></td>
@@ -1642,7 +1811,7 @@ function generateHistoriqueHTML(data) {
   <div class="meta">
     <div><strong>Impresso em:</strong> ${printedAt || '-'}</div>
     ${filterUser && filterUser !== 'all' && filterUser !== 'Todos' ? `<div><strong>Vendedor:</strong> ${filterUser}</div>` : ''}
-    ${filterDateFrom ? `<div><strong>Período:</strong> ${filterDateFrom} → ${filterDateTo || 'hoje'}</div>` : ''}
+    ${filterDateFrom ? `<div><strong>Período:</strong> ${filterDateFrom} \u2192 ${filterDateTo || 'hoje'}</div>` : ''}
     <div><strong>Registros:</strong> ${(ventes||[]).length} venda(s)</div>
   </div>
 
@@ -1759,7 +1928,7 @@ function generateCadernoTicketHTML(data) {
 
 // ============================================================
 // CONSOLE IN-APP — v1.4.1
-// Intercepte console.log/error/warn → envoie au renderer
+// Intercepte console.log/error/warn \u2192 envoie au renderer
 // Capture automatique des tags [LAN] [SYNC] [BEAT] [DB] etc.
 // ============================================================
 
@@ -1814,7 +1983,7 @@ const os        = require('os');
 const WS_PORT  = 41234;
 const UDP_PORT = 41235;
 
-// Peers actifs en mémoire : machine_id → { ws, machine_label, ip, lastSeen }
+// Peers actifs en mémoire : machine_id \u2192 { ws, machine_label, ip, lastSeen }
 const peersMap = new Map();
 
 let wssServer          = null;
@@ -1830,8 +1999,8 @@ function getNetworkKey() {
 
 function networkKeyMatches(receivedKey) {
   const myKey = getNetworkKey();
-  if (!myKey) return true;      // Pas de clé configurée → mode ouvert (legacy)
-  if (!receivedKey) return false; // Moi j'ai une clé, l'autre non → refus
+  if (!myKey) return true;      // Pas de clé configurée \u2192 mode ouvert (legacy)
+  if (!receivedKey) return false; // Moi j'ai une clé, l'autre non \u2192 refus
   return receivedKey === myKey;
 }
 
@@ -1912,7 +2081,8 @@ function startWsServer() {
           if (msg.type === 'CKBPOS_INFO') {
             if (msg.machine_id === MACHINE_ID) { ws.close(); return; }
             // ── v1.8.0 Clé réseau — isoler les entreprises sur le même LAN ──
-            if (!networkKeyMatches(msg.network_key)) {
+            // Exception : accepter si la machine distante n'a pas encore de clé (setup en cours)
+            if (!networkKeyMatches(msg.network_key) && msg.network_key) {
               console.warn('[LAN] Refusé (clé réseau différente): ' + (msg.machine_label || msg.machine_id) + ' @ ' + peerIp);
               ws.close(); return;
             }
@@ -2011,7 +2181,8 @@ function connectToPeer(ip, port) {
           // Eviter les doublons (connexion entrante peut deja exister)
           if (peersMap.has(msg.machine_id)) { ws.close(); return; }
           // ── v1.8.0 Clé réseau ──
-          if (!networkKeyMatches(msg.network_key)) {
+          // Exception : accepter si la machine distante n'a pas encore de clé (setup en cours)
+          if (!networkKeyMatches(msg.network_key) && msg.network_key) {
             console.warn('[LAN] Refusé (clé réseau différente): ' + msg.machine_id);
             ws.close(); return;
           }
@@ -2060,8 +2231,27 @@ function startUdpDiscovery() {
         const msg = JSON.parse(buf.toString());
         if (msg.machine_id === MACHINE_ID) return; // ignorer soi-meme
 
+        // ── Setup mode : répondre aux scans de nouvelles machines sans clé ──
+        if (msg.type === 'CKBPOS_DISCOVER' && msg.setup_mode) {
+          const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
+          const reply = Buffer.from(JSON.stringify({
+            type: 'CKBPOS_DISCOVER_REPLY',
+            machine_id: MACHINE_ID,
+            machine_label: labelRow?.value || 'CKBPOS',
+            port: WS_PORT,
+            setup_mode: true,
+          }));
+          // Répondre au reply_port si spécifié, sinon au port source
+          const replyPort = msg.reply_port || rinfo.port;
+          udpSocket.send(reply, replyPort, rinfo.address, () => {});
+          // Aussi envoyer en broadcast pour maximiser les chances
+          try { udpSocket.send(reply, 41235, rinfo.address, () => {}); } catch(_e) {}
+          return;
+        }
+
         // ── v1.8.0 Clé réseau — ignorer les broadcasts d'autres entreprises ──
-        if (!networkKeyMatches(msg.network_key)) {
+        // Exception : accepter les machines sans clé (setup en cours, pas encore configurées)
+        if (!networkKeyMatches(msg.network_key) && msg.network_key) {
           console.log('[LAN] UDP ignoré (clé réseau différente) @ ' + rinfo.address);
           return;
         }
@@ -2111,6 +2301,19 @@ ipcMain.handle('network-peers-list', () => {
   catch(e) { return { success: false, error: e.message, data: [] }; }
 });
 
+// ── Nettoyage machine détectée (v4.10.0) ───────────────────
+ipcMain.handle('network-peer-remove', (_, machine_id) => {
+  try {
+    if (!machine_id) return { success: false, error: 'machine_id manquant' };
+    db.prepare('DELETE FROM network_peers WHERE machine_id=?').run(machine_id);
+    peersMap.delete(machine_id);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('network-peers-changed', getPeersForRenderer()); } catch(_e) {}
+    }
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
 // ── v1.8.0 — Clé réseau LAN ────────────────────────────────
 ipcMain.handle('get-network-key', () => {
   try { return { success: true, key: getNetworkKey() }; }
@@ -2149,7 +2352,7 @@ ipcMain.handle('machines-stats', () => {
     // v3.4 — Déduplication par machine_label :
     // Si deux entrées ont le même label, c'est la même machine physique
     // (réinstall, changement d'IP, etc.) — garder la plus récente / online
-    const seenLabels = new Map(); // label → peer
+    const seenLabels = new Map(); // label \u2192 peer
     for (const p of rawPeers) {
       const label = (p.machine_label || p.machine_id).trim().toLowerCase();
       const existing = seenLabels.get(label);
@@ -2253,7 +2456,7 @@ function startNetworkServices() {
       try {
         if (peer.ws?.readyState === WebSocket.OPEN) {
           peer.ws.send(ping);
-          // Timeout : si pas de réponse depuis 15s → déconnecter
+          // Timeout : si pas de réponse depuis 15s \u2192 déconnecter
           if (now - peer.lastSeen > 15000) {
             peer.ws.terminate();
             peersMap.delete(id);
@@ -2285,12 +2488,24 @@ app.on('before-quit', () => {
 
 // ============================================================
 // SYNC SQLITE DELTA LAN — v1.5.0
-// Protocole : SYNC_REQUEST → SYNC_DELTA → SYNC_ACK
+// Protocole : SYNC_REQUEST \u2192 SYNC_DELTA \u2192 SYNC_ACK
 // Résolution conflits : last-write-wins (INSERT OR REPLACE)
 // ============================================================
 
 const SYNC_TABLES = new Set(['ventes','vente_items','products','stock_mouvements','caderno_entries','caderno_motivos','caderno_trabalhadores','caderno_produtos','users','settings']);
-const SYNC_LIMIT  = 200; // entrées max par delta
+const SYNC_LIMIT  = 1000; // entrées max par delta incrémental
+
+// ── Diagnostic démarrage : vérifier que MACHINE_ID correspond aux entrées sync_log ──
+setTimeout(() => {
+  try {
+    const syncCount = db.prepare('SELECT COUNT(*) as c FROM sync_log WHERE machine_id=?').get(MACHINE_ID)?.c || 0;
+    const totalCount = db.prepare('SELECT COUNT(*) as c FROM sync_log').get()?.c || 0;
+    console.log('[SYNC] MACHINE_ID:', MACHINE_ID, '| sync_log propres:', syncCount, '/ total:', totalCount);
+    if (totalCount > 0 && syncCount === 0) {
+      console.warn('[SYNC] \u26A0 ATTENTION: aucune entrée sync_log pour ce MACHINE_ID — machine_id mismatch possible!');
+    }
+  } catch(_e) {}
+}, 3000);
 
 // ── Statut sync courant ─────────────────────────────────────
 function updateSyncStatus() {
@@ -2319,7 +2534,7 @@ function sendSyncRequest(peerMachineId, ws) {
     const state    = db.prepare('SELECT last_seq FROM sync_state WHERE machine_id=?').get(peerMachineId);
     const last_seq = state?.last_seq || 0;
     ws.send(JSON.stringify({ type: 'SYNC_REQUEST', machine_id: MACHINE_ID, last_seq }));
-    console.log('[SYNC] SYNC_REQUEST → ' + peerMachineId + ' (seq ' + last_seq + ')');
+    console.log('[SYNC] SYNC_REQUEST \u2192 ' + peerMachineId + ' (seq ' + last_seq + ')');
     if (mainWindow && !mainWindow.isDestroyed()) {
       try { mainWindow.webContents.send('sync-status-changed', { status: 'syncing', pending: -1, online: peersMap.size }); } catch(_e) {}
     }
@@ -2337,19 +2552,21 @@ function scheduleCounterSync(peerMachineId) {
     const peer = peersMap.get(peerMachineId);
     if (peer?.ws?.readyState === WebSocket.OPEN) {
       sendSyncRequest(peerMachineId, peer.ws);
-      console.log('[SYNC] Counter-SYNC_REQUEST → ' + peerMachineId + ' (sync bidir)');
+      console.log('[SYNC] Counter-SYNC_REQUEST \u2192 ' + peerMachineId + ' (sync bidir)');
     }
   }, 5000);
   _counterSyncTimers.set(peerMachineId, timer);
 }
 
-// ── Répondre à SYNC_REQUEST → envoyer SYNC_DELTA ───────────
+// ── Répondre à SYNC_REQUEST \u2192 envoyer SYNC_DELTA ───────────
 function handleSyncRequest(ws, msg) {
   try {
     const { machine_id, last_seq } = msg;
-    const entries = db.prepare(
-      'SELECT * FROM sync_log WHERE machine_id=? AND id>? ORDER BY id LIMIT ?'
-    ).all(MACHINE_ID, last_seq || 0, SYNC_LIMIT);
+    // Sync initial (seq=0) : envoyer TOUT sans limite ; sync incrémental : limite SYNC_LIMIT
+    const isInitial = !last_seq || last_seq === 0;
+    const entries = isInitial
+      ? db.prepare('SELECT * FROM sync_log WHERE machine_id=? ORDER BY id').all(MACHINE_ID)
+      : db.prepare('SELECT * FROM sync_log WHERE machine_id=? AND id>? ORDER BY id LIMIT ?').all(MACHINE_ID, last_seq, SYNC_LIMIT);
 
     if (entries.length === 0) {
       ws.send(JSON.stringify({ type: 'SYNC_DELTA', machine_id: MACHINE_ID, last_id: last_seq || 0, entries: [] }));
@@ -2384,7 +2601,7 @@ function handleSyncRequest(ws, msg) {
 
     const lastId = entries[entries.length - 1].id;
     ws.send(JSON.stringify({ type: 'SYNC_DELTA', machine_id: MACHINE_ID, last_id: lastId, entries: enriched }));
-    console.log('[SYNC] SYNC_DELTA → ' + machine_id + ' : ' + enriched.length + ' entrees (seq ' + lastId + ')');
+    console.log('[SYNC] SYNC_DELTA \u2192 ' + machine_id + ' : ' + enriched.length + ' entrees (seq ' + lastId + ')');
     // v1.9.1 — sync bidir : après avoir répondu à A, demander les données de A
     scheduleCounterSync(machine_id);
   } catch(e) { console.error('[SYNC] handleSyncRequest:', e.message); }
@@ -2392,12 +2609,18 @@ function handleSyncRequest(ws, msg) {
 
 // ── Appliquer un SYNC_DELTA reçu ───────────────────────────
 function handleSyncDelta(ws, msg) {
+  // Déclarer avant le try pour que le catch puisse envoyer l'ACK même en cas d'erreur
+  const { machine_id, entries, last_id } = msg;
+  const ackSeq = last_id || 0;
   try {
-    const { machine_id, entries, last_id } = msg;
-    const ackSeq = last_id || 0;
 
     if (!entries || entries.length === 0) {
-      ws.send(JSON.stringify({ type: 'SYNC_ACK', machine_id: MACHINE_ID, last_seq: ackSeq }));
+      // Mettre à jour sync_state même si delta vide (évite boucle seq=0 infinie)
+      try {
+        db.prepare("INSERT OR REPLACE INTO sync_state (machine_id,last_sync_at,last_seq) VALUES (?,datetime('now','utc'),?)")
+          .run(machine_id, ackSeq);
+      } catch(_e) {}
+      try { ws.send(JSON.stringify({ type: 'SYNC_ACK', machine_id: MACHINE_ID, last_seq: ackSeq })); } catch(_e) {}
       return;
     }
 
@@ -2408,6 +2631,16 @@ function handleSyncDelta(ws, msg) {
 
     let applied = 0, skipped = 0;
     try {
+      // Cache des colonnes connues par table (pour tolérance aux différences de schéma)
+      const _colCache = new Map();
+      const knownCols = (tbl) => {
+        if (!_colCache.has(tbl)) {
+          try { _colCache.set(tbl, new Set(db.prepare('PRAGMA table_info("'+tbl+'")').all().map(c=>c.name))); }
+          catch(_) { _colCache.set(tbl, new Set()); }
+        }
+        return _colCache.get(tbl);
+      };
+
       db.transaction(() => {
         for (const e of entries) {
           if (!SYNC_TABLES.has(e.table_name)) { skipped++; continue; }
@@ -2417,34 +2650,34 @@ function handleSyncDelta(ws, msg) {
             } else if (e.row && typeof e.row === 'object') {
               // ── Cas spécial : table settings (PK = key TEXT, pas id) ──
               if (e.table_name === 'settings') {
-                // Filtrer les clés locales — ne jamais écraser machine_id, network_key, etc.
                 const LOCAL_KEYS = new Set(['machine_id','machine_label','network_key','supabase_url','supabase_key','cloud_last_seq','sync_applying','printer_mode','printer_machine_id','coordinator_id','coordinator_label','setup_done','remember_session','fundo_caixa_hoje','fundo_caixa_date']);
                 if (LOCAL_KEYS.has(e.row.key)) { skipped++; continue; }
                 db.prepare('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)').run(e.row.key, e.row.value);
               } else if (e.table_name === 'users') {
-                // users : dédupliquer par email (pas par id auto-increment)
-                // pour éviter d'écraser le mauvais user si les id diffèrent entre machines
                 const row = e.row;
                 const existing = db.prepare('SELECT id FROM users WHERE email=?').get(row.email);
                 if (existing) {
-                  // Mettre à jour sans écraser l'id local
                   const skip = new Set(['id','created_at']);
                   const sets = Object.keys(row).filter(k=>!skip.has(k)).map(k=>'"'+k+'"=?').join(',');
                   const vals = Object.keys(row).filter(k=>!skip.has(k)).map(k=>row[k]);
                   db.prepare('UPDATE users SET '+sets+' WHERE email=?').run(...vals, row.email);
                 } else {
-                  // Insérer sans forcer l'id (laisser AUTOINCREMENT gérer)
                   const skip = new Set(['id']);
                   const cols = Object.keys(row).filter(k=>!skip.has(k)).map(c=>'"'+c+'"').join(',');
                   const phs  = Object.keys(row).filter(k=>!skip.has(k)).map(()=>'?').join(',');
                   const vals = Object.keys(row).filter(k=>!skip.has(k)).map(k=>row[k]);
                   try { db.prepare('INSERT INTO users ('+cols+') VALUES ('+phs+')').run(...vals); }
-                  catch(_eu) { /* email unique conflict — déjà présent */ }
+                  catch(_eu) {}
                 }
               } else {
-                const cols = Object.keys(e.row).map(c => '"' + c + '"').join(',');
-                const phs  = Object.keys(e.row).map(() => '?').join(',');
-                db.prepare('INSERT OR REPLACE INTO "' + e.table_name + '" (' + cols + ') VALUES (' + phs + ')').run(...Object.values(e.row));
+                // ── Fix robustesse schéma : filtrer les colonnes inconnues ──
+                const known = knownCols(e.table_name);
+                const rowKeys = Object.keys(e.row).filter(k => known.has(k));
+                if (rowKeys.length === 0) { skipped++; continue; }
+                const cols = rowKeys.map(c => '"' + c + '"').join(',');
+                const phs  = rowKeys.map(() => '?').join(',');
+                const vals = rowKeys.map(k => e.row[k]);
+                db.prepare('INSERT OR REPLACE INTO "' + e.table_name + '" (' + cols + ') VALUES (' + phs + ')').run(...vals);
               }
             }
             applied++;
@@ -2475,6 +2708,8 @@ function handleSyncDelta(ws, msg) {
   } catch(e) {
     console.error('[SYNC] handleSyncDelta:', e.message);
     try { db.prepare("UPDATE settings SET value='0' WHERE key='sync_applying'").run(); } catch(_e2) {}
+    // Envoyer ACK même en cas d'erreur pour éviter la boucle infinie seq=0
+    try { ws.send(JSON.stringify({ type: 'SYNC_ACK', machine_id: MACHINE_ID, last_seq: ackSeq })); } catch(_e3) {}
   }
 }
 
@@ -3071,7 +3306,8 @@ ipcMain.handle('coord-dashboard', () => {
         COALESCE((SELECT SUM(r.qty_reserved) FROM stock_reservations r WHERE r.product_id=p.id AND r.status='active' AND r.expires_at>datetime('now','utc')),0) as qty_reserved
       FROM products p WHERE p.actif=1 AND p.stock_cartons<=COALESCE(p.stock_alerte,2) ORDER BY p.stock_cartons ASC LIMIT 20
     `).all(); } catch(e) { return []; } })();
-    return { success: true, isCoordinator: _isCoordinator, coordinatorId: _coordinatorId, coordinatorLabel: _coordinatorLabel, degradedMode: _degradedMode, machines: [localMachine, ...peers], printQueue, reservations, coordLog, stockAlerte };
+    const peersFiltered = peers.filter(p => p.machine_id !== MACHINE_ID); // éviter doublon avec localMachine
+    return { success: true, isCoordinator: _isCoordinator, coordinatorId: _coordinatorId, coordinatorLabel: _coordinatorLabel, degradedMode: _degradedMode, machines: [localMachine, ...peersFiltered], printQueue, reservations, coordLog, stockAlerte };
   } catch(e) { console.error('[COORD] coord-dashboard:', e.message); return { success: false, error: e.message }; }
 });
 
@@ -3114,14 +3350,15 @@ ipcMain.handle('coord-metrics', () => {
     const usedMem  = totalMem - freeMem;
     const ramPct   = Math.round((usedMem / totalMem) * 100);
 
-    // Ventes 7 derniers jours
+    // Ventes 7 derniers jours (date_vente = champ réel de la table ventes)
     const ventes7j = (() => { try {
       return db.prepare(`
-        SELECT date(created_at,'localtime') as jour,
+        SELECT date(date_vente,'localtime') as jour,
                COUNT(*) as nb_ventes,
                COALESCE(SUM(total),0) as total_aoa
         FROM ventes
-        WHERE created_at >= datetime('now','-7 days')
+        WHERE statut != 'annule'
+          AND date_vente >= datetime('now','-7 days')
         GROUP BY jour ORDER BY jour ASC
       `).all();
     } catch(e) { return []; } })();
@@ -3144,7 +3381,8 @@ ipcMain.handle('coord-metrics', () => {
         FROM vente_items vi
         JOIN products p ON vi.product_id=p.id
         JOIN ventes v ON vi.vente_id=v.id
-        WHERE v.created_at >= datetime('now','-7 days')
+        WHERE v.statut != 'annule'
+          AND v.date_vente >= datetime('now','-7 days')
         GROUP BY vi.product_id ORDER BY qte DESC LIMIT 5
       `).all();
     } catch(e) { return []; } })();
@@ -3201,7 +3439,7 @@ async function handlePrintRequest(ws, msg) {
 }
 
 // ── Handler WS : recevoir la réponse d'impression ───────────
-const _printResponseCallbacks = new Map(); // request_id → { resolve, reject, timer }
+const _printResponseCallbacks = new Map(); // request_id \u2192 { resolve, reject, timer }
 function handlePrintResponse(msg) {
   const { request_id, success, error } = msg;
   const cb = _printResponseCallbacks.get(request_id);
@@ -3226,7 +3464,7 @@ function sendPrintRequest(targetMachineId, print_type, data) {
     }, 10000);
     _printResponseCallbacks.set(request_id, { resolve, reject, timer });
     peer.ws.send(JSON.stringify({ type: 'PRINT_REQUEST', machine_id: MACHINE_ID, print_type, data, request_id }));
-    console.log('[PRINT] PRINT_REQUEST → ' + targetMachineId + ' (type: ' + print_type + ', req: ' + request_id + ')');
+    console.log('[PRINT] PRINT_REQUEST \u2192 ' + targetMachineId + ' (type: ' + print_type + ', req: ' + request_id + ')');
   });
 }
 
@@ -3253,7 +3491,7 @@ ipcMain.handle('set-printer-mode', (_, { mode, targetMachineId }) => {
     const m = mode === 'shared' ? 'shared' : 'local';
     db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('printer_mode',?)").run(m);
     db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('printer_machine_id',?)").run(targetMachineId || '');
-    console.log('[PRINT] Mode impression: ' + m + (targetMachineId ? ' → ' + targetMachineId : ''));
+    console.log('[PRINT] Mode impression: ' + m + (targetMachineId ? ' \u2192 ' + targetMachineId : ''));
     // Notifier le renderer pour mettre à jour le titlebar
     if (mainWindow && !mainWindow.isDestroyed()) {
       try { mainWindow.webContents.send('printer-mode-changed', { mode: m, targetMachineId: targetMachineId || '' }); } catch(_e) {}
@@ -3279,7 +3517,7 @@ ipcMain.handle('get-printer-mode', () => {
 // ============================================================
 // SUPABASE CLOUD BRIDGE — v1.7.0
 // Sync bidirectionnel cloud via Supabase (REST + Realtime)
-// Config : settings → supabase_url + supabase_key
+// Config : settings \u2192 supabase_url + supabase_key
 // Table Supabase requise : cloud_sync_log (voir SQL ci-dessous)
 // ============================================================
 
@@ -3491,7 +3729,7 @@ function subscribeRealtime() {
           sendCloudStatus({ status: 'connected' });
         } else if (s === 'CLOSED' || s === 'CHANNEL_ERROR') {
           // CHANNEL_ERROR = table pas dans la publication Realtime
-          // Le REST API + polling 60s fonctionnent toujours → statut 'connected' maintenu
+          // Le REST API + polling 60s fonctionnent toujours \u2192 statut 'connected' maintenu
           console.warn('[CLOUD] Realtime ' + s + ' — sync via polling uniquement (60s)');
           _supaChannel = null;
           // Ne pas passer en 'error' — le push/pull REST fonctionne
@@ -3607,7 +3845,7 @@ app.on('before-quit', () => {
 
 const SNAPSHOT_TABLES = [
   'products','product_variants','stock_mouvements',
-  'caderno_motivos','caderno_trabalhadores','caderno_produtos',
+  'caderno_motivos','caderno_trabalhadores','caderno_produtos','caderno_entries',
   'users','clients','empresas','shifts',
   'settings',  // globaux seulement (filtre appliqué côté envoi)
   'ventes','vente_items',  // 30 derniers jours
@@ -3703,7 +3941,22 @@ ipcMain.handle('setup-complete', (_, { shop, machine, admin, sync }) => {
     const newMachineId = require('crypto').randomBytes(4).toString('hex').toUpperCase();
     db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('machine_id',?)").run(newMachineId);
     db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('machine_label',?)").run(machine.label || 'Caixa Principal');
-    if (machine.networkKey) db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('network_key',?)").run(machine.networkKey);
+    // Clé réseau : utiliser celle saisie par l'utilisateur, ou en générer une automatiquement
+    {
+      const nkToSave = machine.networkKey && machine.networkKey.trim()
+        ? machine.networkKey.trim()
+        : (() => {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            const bytes = require('crypto').randomBytes(8);
+            let nk = 'CKB-';
+            for (let i = 0; i < 4; i++) nk += chars[bytes[i] % chars.length];
+            nk += '-';
+            for (let i = 4; i < 8; i++) nk += chars[bytes[i] % chars.length];
+            return nk;
+          })();
+      db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('network_key',?)").run(nkToSave);
+      console.log('[SETUP] network_key:', nkToSave);
+    }
     if (machine.ticketSize) {
       db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('ticket_size_mm',?)").run(machine.ticketSize);
       const microns = { 52: 1500000, 60: 1700000, 72: 2050000, 80: 2270000 }[parseInt(machine.ticketSize)] || 2050000;
@@ -3736,22 +3989,114 @@ ipcMain.handle('setup-complete', (_, { shop, machine, admin, sync }) => {
 });
 
 // ── IPC : scan LAN pour snapshot ────────────────────────────
-ipcMain.handle('lan-scan-for-snapshot', () => {
+ipcMain.handle('lan-scan-for-snapshot', async () => {
   try {
-    const peers = db.prepare('SELECT * FROM network_peers ORDER BY last_seen DESC').all()
+    // 1. Pairs déjà connus (DB + mémoire)
+    const knownPeers = db.prepare('SELECT * FROM network_peers ORDER BY last_seen DESC').all()
       .map(p => ({ ...p, online: peersMap.has(p.machine_id) }));
-    // Aussi inclure les pairs en mémoire non encore en DB
     for (const [id, peer] of peersMap.entries()) {
-      if (!peers.find(p => p.machine_id === id)) {
-        peers.push({ machine_id: id, machine_label: peer.machine_label || id.slice(0,8), ip: peer.ip, online: true });
+      if (!knownPeers.find(p => p.machine_id === id)) {
+        knownPeers.push({ machine_id: id, machine_label: peer.machine_label || id.slice(0,8), ip: peer.ip, online: true });
       }
     }
-    return { success: true, data: peers };
+
+    // 2. Broadcast UDP actif — double écoute: port aléatoire + port 41235
+    const discovered = await new Promise((resolve) => {
+      const found = new Map();
+      const dgram = require('dgram');
+      let finished = false;
+
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        try { recvSock.close(); } catch(_e) {}
+        try { recvSock2.close(); } catch(_e) {}
+        if (udpSocket) try { udpSocket.removeListener('message', handleMsg); } catch(_e) {}
+        resolve([...found.values()]);
+      };
+      const timer = setTimeout(finish, 4000);
+
+      const handleMsg = (buf, rinfo) => {
+        try {
+          const msg = JSON.parse(buf.toString());
+          if ((msg.type === 'CKBPOS_DISCOVERY' || msg.type === 'CKBPOS_DISCOVER_REPLY' || msg.type === 'CKBPOS_DISCOVER') 
+              && msg.machine_id && msg.machine_id !== MACHINE_ID) {
+            found.set(msg.machine_id, {
+              machine_id: msg.machine_id,
+              machine_label: msg.machine_label || msg.machine_id.slice(0,8),
+              ip: rinfo.address, online: true,
+            });
+          }
+        } catch(_e) {}
+      };
+
+      // Socket 1: port aléatoire pour recevoir les réponses unicast
+      const recvSock = dgram.createSocket('udp4');
+      recvSock.on('error', () => {});
+      recvSock.on('message', handleMsg);
+
+      // Socket 2: écouter aussi sur 41235 pour les broadcasts de réponse
+      const recvSock2 = dgram.createSocket({ type:'udp4', reuseAddr:true });
+      recvSock2.on('error', () => {});
+      recvSock2.on('message', handleMsg);
+
+      // Socket 3: écouter sur udpSocket principal (réponses broadcast de NLANDU etc.)
+      if (udpSocket) udpSocket.on('message', handleMsg);
+
+      recvSock.bind(0, () => {
+        const recvPort = recvSock.address().port;
+
+        // Tenter de binder sur 41235 aussi
+        try {
+          recvSock2.bind(41236, () => {}); // port alternatif pour réponses
+        } catch(_e) {}
+
+        const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
+        const nkRow = db.prepare("SELECT value FROM settings WHERE key='network_key'").get();
+        const discover = Buffer.from(JSON.stringify({
+          type: 'CKBPOS_DISCOVER',
+          machine_id: MACHINE_ID,
+          machine_label: labelRow?.value || 'CKBPOS',
+          port: WS_PORT,
+          reply_port: recvPort,  // \u2190 port où recevoir les réponses
+          setup_mode: true,
+          network_key: nkRow?.value || '',
+        }));
+
+        const sendSock = dgram.createSocket('udp4');
+        sendSock.on('error', () => {});
+        sendSock.bind(0, () => {
+          sendSock.setBroadcast(true);
+          // Envoyer plusieurs fois avec délai pour maximiser les chances
+          const targets = ['255.255.255.255','10.55.173.255','10.55.255.255','192.168.1.255','192.168.0.255','192.168.43.255','192.168.137.255'];
+          const doSend = () => targets.forEach(addr => {
+            sendSock.send(discover, 41235, addr, () => {});
+          });
+          doSend();
+          setTimeout(doSend, 1000); // Renvoyer après 1s
+          setTimeout(doSend, 2000); // Et après 2s
+          setTimeout(() => { try { sendSock.close(); } catch(_e) {} }, 2500);
+        });
+      });
+    });
+
+    // 3. Fusionner + persister IPs en DB
+    const merged = [...knownPeers];
+    for (const d of discovered) {
+      if (!merged.find(p => p.machine_id === d.machine_id)) merged.push(d);
+      try {
+        db.prepare(`INSERT OR REPLACE INTO network_peers (machine_id, machine_label, ip, port, last_seen, actif) VALUES (?,?,?,?,datetime('now'),1)`)
+          .run(d.machine_id, d.machine_label, d.ip, 41234);
+      } catch(_e) {}
+    }
+
+    console.log('[SETUP] lan-scan: known=' + knownPeers.length + ' discovered=' + discovered.length + ' total=' + merged.length);
+    return { success: true, data: merged };
   } catch(e) { return { success: false, data: [], error: e.message }; }
 });
 
 // ── Code invitation (6 chiffres, TTL 5 min) ─────────────────
-const _inviteCodes = new Map(); // code → { machine_id, expires }
+const _inviteCodes = new Map(); // code \u2192 { machine_id, expires }
 
 ipcMain.handle('generate-invite-code', () => {
   try {
@@ -3801,7 +4146,8 @@ function handleSnapshotRequest(ws, msg) {
       } catch(_e) { snapshot[table] = []; }
     }
     // Envoyer en chunks de 500KB pour éviter les gros messages WS
-    const json = JSON.stringify({ type: 'SNAPSHOT_DATA', snapshot });
+    // Inclure la network_key explicitement (exclue de LOCAL_SETTINGS, transmise séparément)
+    const json = JSON.stringify({ type: 'SNAPSHOT_DATA', snapshot, network_key: getNetworkKey() });
     const CHUNK = 480 * 1024;
     if (json.length <= CHUNK) {
       ws.send(json);
@@ -3825,7 +4171,7 @@ let _snapshotTotal  = 0;
 
 function handleSnapshotData(data) {
   try {
-    applySnapshot(data.snapshot);
+    applySnapshot(data.snapshot, data.network_key);
   } catch(e) { console.error('[SETUP] handleSnapshotData:', e.message); }
 }
 
@@ -3838,13 +4184,22 @@ function handleSnapshotChunk(msg) {
     try {
       const full = JSON.parse(_snapshotChunks.join(''));
       _snapshotChunks = [];
-      applySnapshot(full.snapshot);
+      applySnapshot(full.snapshot, full.network_key);
     } catch(e) { console.error('[SETUP] handleSnapshotChunk assemble:', e.message); }
   }
 }
 
-function applySnapshot(snapshot) {
+function applySnapshot(snapshot, receivedNetworkKey) {
   console.log('[SETUP] Application snapshot...');
+  // Cache PRAGMA pour tolérance aux différences de schéma entre machines
+  const _snapColCache = new Map();
+  const snapKnownCols = (tbl) => {
+    if (!_snapColCache.has(tbl)) {
+      try { _snapColCache.set(tbl, new Set(db.prepare('PRAGMA table_info("'+tbl+'")').all().map(c=>c.name))); }
+      catch(_) { _snapColCache.set(tbl, new Set()); }
+    }
+    return _snapColCache.get(tbl);
+  };
   db.transaction(() => {
     db.prepare("UPDATE settings SET value='1' WHERE key='sync_applying'").run();
     try {
@@ -3857,13 +4212,21 @@ function applySnapshot(snapshot) {
             }
           }
         } else {
+          let snapOk = 0, snapSkip = 0;
           for (const row of rows) {
             try {
-              const cols = Object.keys(row).map(c => '"' + c + '"').join(',');
-              const phs  = Object.keys(row).map(() => '?').join(',');
-              db.prepare('INSERT OR IGNORE INTO "' + table + '" (' + cols + ') VALUES (' + phs + ')').run(...Object.values(row));
-            } catch(_e) {}
+              // Filtrer les colonnes inconnues (tolérance schéma)
+              const known = snapKnownCols(table);
+              const rowKeys = Object.keys(row).filter(k => known.has(k));
+              if (rowKeys.length === 0) { snapSkip++; continue; }
+              const cols = rowKeys.map(c => '"' + c + '"').join(',');
+              const phs  = rowKeys.map(() => '?').join(',');
+              const vals = rowKeys.map(k => row[k]);
+              db.prepare('INSERT OR IGNORE INTO "' + table + '" (' + cols + ') VALUES (' + phs + ')').run(...vals);
+              snapOk++;
+            } catch(_e) { snapSkip++; }
           }
+          console.log('[SETUP] ' + table + ': ' + snapOk + ' ok, ' + snapSkip + ' skip / ' + rows.length + ' total');
         }
       }
     } finally {
@@ -3872,18 +4235,50 @@ function applySnapshot(snapshot) {
   })();
   console.log('[SETUP] Snapshot appliqué');
   db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('setup_done','1')").run();
+  // Synchroniser la network_key de la machine émettrice
+  if (receivedNetworkKey && receivedNetworkKey.trim()) {
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('network_key',?)").run(receivedNetworkKey.trim());
+    console.log('[SETUP] network_key synchronisée depuis snapshot:', receivedNetworkKey.trim());
+    // Re-annoncer la présence avec la nouvelle clé (getNetworkKey() lit depuis DB)
+    setImmediate(() => {
+      sendDiscoveryBroadcast();
+      console.log('[SETUP] Présence re-annoncée avec la nouvelle clé réseau');
+    });
+  }
   if (mainWindow && !mainWindow.isDestroyed()) {
     try { mainWindow.webContents.send('snapshot-done', { success: true }); } catch(_e) {}
   }
 }
 
 // ── IPC : demander snapshot à une machine ───────────────────
-ipcMain.handle('request-snapshot', (_, { machine_id, invite_code, network_key }) => {
+ipcMain.handle('request-snapshot', async (_, { machine_id, invite_code, network_key }) => {
   try {
-    const peer = peersMap.get(machine_id);
+    let peer = peersMap.get(machine_id);
+
+    // Si la machine n'est pas dans peersMap, tenter connexion directe via IP connue
     if (!peer || peer.ws?.readyState !== WebSocket.OPEN) {
-      return { success: false, error: 'Machine hors ligne' };
+      const info = db.prepare('SELECT ip, port FROM network_peers WHERE machine_id=?').get(machine_id);
+      if (info?.ip) {
+        console.log('[SETUP] Machine hors peersMap — tentative connexion directe: ' + info.ip);
+        connectToPeer(info.ip, info.port || 41234);
+        // Attendre jusqu'à 4 secondes que la connexion s'établisse
+        await new Promise(resolve => {
+          let tries = 0;
+          const check = setInterval(() => {
+            peer = peersMap.get(machine_id);
+            if ((peer && peer.ws?.readyState === WebSocket.OPEN) || ++tries >= 8) {
+              clearInterval(check); resolve();
+            }
+          }, 500);
+        });
+        peer = peersMap.get(machine_id);
+      }
     }
+
+    if (!peer || peer.ws?.readyState !== WebSocket.OPEN) {
+      return { success: false, error: 'Machine hors ligne — vérifiez que CKBPOS est ouvert sur la machine source' };
+    }
+
     _snapshotChunks = [];
     peer.ws.send(JSON.stringify({ type: 'SNAPSHOT_REQUEST', invite_code: invite_code || '', network_key: network_key || '' }));
     return { success: true };
@@ -3900,7 +4295,488 @@ ipcMain.handle('get-remember-session', () => {
   return { success: true, remember: v === '1' };
 });
 
-// ── Étendre handleSyncMessageV3 pour les messages SNAPSHOT ──
+// ============================================================
+// MESSAGERIE INTERNE — v4.1.0
+// Chat temps réel via WebSocket LAN existant
+// Table : messages (id, from_machine, from_label, to_machine, content, ts, read_at)
+// ============================================================
+
+// Migration table messages
+try {
+  db.exec(`CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_machine TEXT NOT NULL,
+    from_label TEXT NOT NULL,
+    from_user_nom TEXT,
+    to_machine TEXT DEFAULT 'all',
+    content TEXT NOT NULL,
+    msg_type TEXT DEFAULT 'text',
+    audio_data TEXT,
+    ts TEXT DEFAULT (datetime('now','utc')),
+    read_at TEXT
+  )`);
+  // Migrations messages table
+  try { db.exec("ALTER TABLE messages ADD COLUMN from_user_nom TEXT"); } catch(_e) {}
+  try { db.exec("ALTER TABLE messages ADD COLUMN msg_type TEXT DEFAULT 'text'"); } catch(_e) {}
+  try { db.exec("ALTER TABLE messages ADD COLUMN audio_data TEXT"); } catch(_e) {}
+  try { db.exec("ALTER TABLE messages ADD COLUMN client_id TEXT"); } catch(_e) {}
+  // Migration users photo
+  try { db.exec("ALTER TABLE users ADD COLUMN photo_base64 TEXT"); } catch(_e) {}
+} catch(_e) {}
+
+ipcMain.handle('chat-send', (_, { to, content, userNom, msgType, audioData }) => {
+  try {
+    const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
+    const fromLabel = labelRow?.value || 'CKBPOS';
+    const ts = new Date().toISOString().replace('T',' ').slice(0,19);
+    const type = msgType || 'text';
+    const msgContent = content || (type === 'audio' ? '[Message vocal]' : '');
+    const clientId = require('crypto').randomUUID();
+    // Persister localement
+    db.prepare('INSERT INTO messages (from_machine, from_label, from_user_nom, to_machine, content, msg_type, audio_data, ts, client_id) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(MACHINE_ID, fromLabel, userNom || null, to || 'all', msgContent, type, audioData || null, ts, clientId);
+    // Diffuser via WS
+    const wsMsg = JSON.stringify({ type: 'CHAT_MESSAGE', from: MACHINE_ID, fromLabel, fromUserNom: userNom || null, to: to || 'all', content: msgContent, msgType: type, audioData: audioData || null, ts, clientId });
+    if (to === 'all' || !to) {
+      for (const peer of peersMap.values()) {
+        if (peer.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(wsMsg); } catch(_e) {}
+      }
+    } else {
+      const peer = peersMap.get(to);
+      if (peer?.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(wsMsg); } catch(_e) {}
+    }
+    return { success: true, clientId };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('chat-history', (_, { to, limit }) => {
+  try {
+    const lim = limit || 100;
+    let rows;
+    if (!to || to === 'all') {
+      rows = db.prepare("SELECT * FROM messages WHERE to_machine='all' ORDER BY id DESC LIMIT ?").all(lim);
+    } else {
+      rows = db.prepare(
+        "SELECT * FROM messages WHERE (from_machine=? AND to_machine=?) OR (from_machine=? AND to_machine=?) OR to_machine='all' ORDER BY id DESC LIMIT ?"
+      ).all(MACHINE_ID, to, to, MACHINE_ID, lim);
+    }
+    return { success: true, data: rows.reverse() };
+  } catch(e) { return { success: false, data: [] }; }
+});
+
+ipcMain.handle('chat-mark-read', (_, { ids }) => {
+  try {
+    const upd = db.prepare("UPDATE messages SET read_at=datetime('now','utc') WHERE id=? AND read_at IS NULL");
+    for (const id of (ids || [])) upd.run(id);
+    return { success: true };
+  } catch(e) { return { success: false }; }
+});
+
+ipcMain.handle('chat-unread-count', () => {
+  try {
+    const c = db.prepare("SELECT COUNT(*) as c FROM messages WHERE from_machine!=? AND read_at IS NULL").get(MACHINE_ID)?.c || 0;
+    return { success: true, count: c };
+  } catch(e) { return { success: false, count: 0 }; }
+});
+
+// ── v4.10.0 — Suppression message / conversation ────────────────
+ipcMain.handle('chat-delete-message', (_, { client_id, scope }) => {
+  try {
+    if (!client_id) return { success: false, error: 'client_id manquant' };
+    const row = db.prepare('SELECT * FROM messages WHERE client_id=?').get(client_id);
+    if (!row) return { success: false, error: 'not_found' };
+    db.prepare('DELETE FROM messages WHERE client_id=?').run(client_id);
+    if (scope === 'all' && row.from_machine === MACHINE_ID) {
+      const wsMsg = JSON.stringify({ type: 'CHAT_DELETE', clientId: client_id });
+      if (row.to_machine === 'all' || !row.to_machine) {
+        for (const peer of peersMap.values()) {
+          if (peer.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(wsMsg); } catch(_e) {}
+        }
+      } else {
+        const peer = peersMap.get(row.to_machine);
+        if (peer?.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(wsMsg); } catch(_e) {}
+      }
+    }
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('chat-delete-conversation', (_, { peerId, scope }) => {
+  try {
+    if (!peerId) return { success: false, error: 'peerId manquant' };
+    if (peerId === 'all') {
+      db.prepare("DELETE FROM messages WHERE to_machine='all'").run();
+      return { success: true };
+    }
+    db.prepare('DELETE FROM messages WHERE (from_machine=? AND to_machine=?) OR (from_machine=? AND to_machine=?)')
+      .run(peerId, MACHINE_ID, MACHINE_ID, peerId);
+    if (scope === 'all') {
+      const peer = peersMap.get(peerId);
+      if (peer?.ws?.readyState === WebSocket.OPEN) {
+        try { peer.ws.send(JSON.stringify({ type: 'CHAT_DELETE_CONV', from: MACHINE_ID })); } catch(_e) {}
+      }
+    }
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+// Réception messages chat via WS — injecté dans handleSyncMessage
+function handleChatMessage(msg) {
+  try {
+    const { from, fromLabel, fromUserNom, to, content, msgType, audioData, ts, clientId } = msg;
+    if (!from || (!content && !audioData)) return;
+    const msgContent = content || '[Message vocal]';
+    const type = msgType || 'text';
+    db.prepare('INSERT OR IGNORE INTO messages (from_machine, from_label, from_user_nom, to_machine, content, msg_type, audio_data, ts, client_id) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(from, fromLabel || from.slice(0,8), fromUserNom || null, to || 'all', msgContent, type, audioData || null, ts || new Date().toISOString().replace('T',' ').slice(0,19), clientId || null);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('chat-message', { from, fromLabel, fromUserNom, to, content: msgContent, msgType: type, audioData: audioData || null, ts, clientId }); } catch(_e) {}
+    }
+  } catch(e) { console.error('[CHAT]', e.message); }
+}
+
+// Réception suppression message/conversation distante (v4.10.0)
+function handleChatDelete(msg) {
+  try {
+    if (msg.clientId) db.prepare('DELETE FROM messages WHERE client_id=?').run(msg.clientId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('chat-deleted', { clientId: msg.clientId }); } catch(_e) {}
+    }
+  } catch(e) { console.error('[CHAT] delete:', e.message); }
+}
+
+function handleChatDeleteConv(msg) {
+  try {
+    const from = msg.from;
+    if (!from) return;
+    db.prepare('DELETE FROM messages WHERE (from_machine=? AND to_machine=?) OR (from_machine=? AND to_machine=?)')
+      .run(from, MACHINE_ID, MACHINE_ID, from);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('chat-conv-deleted', { peerId: from }); } catch(_e) {}
+    }
+  } catch(e) { console.error('[CHAT] deleteConv:', e.message); }
+}
+
+// Notification connexion/déconnexion dans le chat
+function chatNotifyPeer(label, event) {
+  try {
+    const ts = new Date().toISOString().replace('T',' ').slice(0,19);
+    const content = `__system__:${event}:${label}`;
+    db.prepare("INSERT INTO messages (from_machine, from_label, to_machine, content, ts) VALUES ('system','system','all',?,?)").run(content, ts);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('chat-message', { from: 'system', fromLabel: 'system', to: 'all', content, ts }); } catch(_e) {}
+    }
+  } catch(_e) {}
+}
+
+// ============================================================
+// AUDIT LOG — v4.2.0
+// Journal centralisé de toutes les actions
+// ============================================================
+
+try {
+  db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    user_nom TEXT,
+    action TEXT NOT NULL,
+    details TEXT,
+    machine_id TEXT,
+    machine_label TEXT,
+    ts TEXT DEFAULT (datetime('now','utc'))
+  )`);
+} catch(_e) {}
+
+function insertAuditLog(user_id, user_nom, action, details) {
+  try {
+    const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
+    const ml = labelRow?.value || 'CKBPOS';
+    db.prepare('INSERT INTO audit_log (user_id, user_nom, action, details, machine_id, machine_label) VALUES (?,?,?,?,?,?)')
+      .run(user_id || null, user_nom || 'system', action, details || null, MACHINE_ID, ml);
+  } catch(_e) {}
+}
+global._ckbAuditLog = insertAuditLog;
+
+ipcMain.handle('audit-list', (_, { limit, offset, user_id, action, date_from, date_to }) => {
+  try {
+    let sql = 'SELECT * FROM audit_log WHERE 1=1';
+    const params = [];
+    if (user_id) { sql += ' AND user_id=?'; params.push(user_id); }
+    if (action)  { sql += ' AND action=?';  params.push(action); }
+    if (date_from) { sql += ' AND ts >= ?'; params.push(date_from + ' 00:00:00'); }
+    if (date_to)   { sql += ' AND ts <= ?'; params.push(date_to + ' 23:59:59'); }
+    sql += ' ORDER BY id DESC LIMIT ? OFFSET ?';
+    params.push(limit || 100, offset || 0);
+    const data = db.prepare(sql).all(...params);
+    const total = db.prepare('SELECT COUNT(*) as c FROM audit_log WHERE 1=1' +
+      (user_id ? ' AND user_id=?' : '') +
+      (action  ? ' AND action=?'  : '') +
+      (date_from ? ' AND ts >= ?' : '') +
+      (date_to   ? ' AND ts <= ?' : '')
+    ).get(...params.slice(0, -2))?.c || 0;
+    return { success: true, data, total };
+  } catch(e) { return { success: false, data: [], total: 0 }; }
+});
+
+ipcMain.handle('audit-actions', () => {
+  try {
+    const rows = db.prepare('SELECT DISTINCT action FROM audit_log ORDER BY action').all();
+    return { success: true, data: rows.map(r => r.action) };
+  } catch(e) { return { success: false, data: [] }; }
+});
+
+// ============================================================
+// RAPPORT EMAIL — v4.3.0
+// nodemailer + Gmail SMTP
+// ============================================================
+
+ipcMain.handle('email-report-send', async (_, { to, subject, html }) => {
+  try {
+    let nodemailer;
+    try { nodemailer = require('nodemailer'); } catch(_e) {
+      return { success: false, error: 'nodemailer non installé — npm install nodemailer' };
+    }
+    const gmailUser = db.prepare("SELECT value FROM settings WHERE key='email_gmail_user'").get()?.value;
+    const gmailPass = db.prepare("SELECT value FROM settings WHERE key='email_gmail_pass'").get()?.value;
+    if (!gmailUser || !gmailPass) return { success: false, error: 'Gmail SMTP non configuré' };
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: gmailUser, pass: gmailPass },
+    });
+    await transporter.sendMail({
+      from: `"CKBPOS" <${gmailUser}>`,
+      to: to || gmailUser,
+      subject: subject || 'Rapport journalier CKBPOS',
+      html: html || '<p>Rapport CKBPOS</p>',
+    });
+    console.log('[EMAIL] Rapport envoyé à', to);
+    return { success: true };
+  } catch(e) { console.error('[EMAIL]', e.message); return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('email-config-get', () => {
+  try {
+    const user = db.prepare("SELECT value FROM settings WHERE key='email_gmail_user'").get()?.value || '';
+    const configured = !!user && !!db.prepare("SELECT value FROM settings WHERE key='email_gmail_pass'").get()?.value;
+    return { success: true, email: user, configured };
+  } catch(e) { return { success: false, email: '', configured: false }; }
+});
+
+ipcMain.handle('email-config-set', (_, { gmailUser, gmailPass }) => {
+  try {
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('email_gmail_user',?)").run(gmailUser || '');
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('email_gmail_pass',?)").run(gmailPass || '');
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+// Générer HTML rapport journalier
+ipcMain.handle('email-report-build', (_, { date }) => {
+  try {
+    const d = date || new Date().toISOString().slice(0,10);
+    const shop = db.prepare("SELECT value FROM settings WHERE key='shop_name'").get()?.value || 'CKBPOS';
+    const currency = db.prepare("SELECT value FROM settings WHERE key='currency'").get()?.value || 'Kz';
+    const ventes = db.prepare("SELECT COUNT(*) as cnt, COALESCE(SUM(total),0) as tot FROM ventes WHERE date(date_vente)=? AND statut!='annule'").get(d) || { cnt:0, tot:0 };
+    const annule = db.prepare("SELECT COUNT(*) as cnt FROM ventes WHERE date(date_vente)=? AND statut='annule'").get(d)?.cnt || 0;
+    const topProds = db.prepare(`
+      SELECT p.nom, SUM(vi.quantite) as qte, SUM(vi.sous_total) as total
+      FROM vente_items vi JOIN ventes v ON vi.vente_id=v.id JOIN products p ON vi.product_id=p.id
+      WHERE date(v.date_vente)=? AND v.statut!='annule'
+      GROUP BY p.id ORDER BY total DESC LIMIT 5`).all(d);
+    const stockAlerte = db.prepare("SELECT nom, stock_cartons FROM products WHERE actif=1 AND stock_cartons<=COALESCE(stock_alerte,2) ORDER BY stock_cartons ASC LIMIT 10").all();
+    const rows = topProds.map(p => `<tr><td>${p.nom}</td><td>${Math.round(p.qte*100)/100}</td><td><strong>${Number(p.total).toLocaleString('fr-FR')} ${currency}</strong></td></tr>`).join('');
+    const alertRows = stockAlerte.map(p => `<tr style="color:#cc0000"><td>${p.nom}</td><td>${Math.round(p.stock_cartons*100)/100} cx</td></tr>`).join('');
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#333">
+<h1 style="color:#e8c547;border-bottom:2px solid #e8c547;padding-bottom:8px">${shop}</h1>
+<h2 style="color:#555">Rapport journalier — ${d}</h2>
+<div style="display:flex;gap:20px;margin:20px 0">
+  <div style="flex:1;background:#f5f5f5;padding:16px;border-radius:8px;text-align:center">
+    <div style="font-size:28px;font-weight:bold;color:#22c55e">${ventes.cnt}</div>
+    <div style="font-size:12px;color:#666">Ventes confirmées</div>
+  </div>
+  <div style="flex:1;background:#f5f5f5;padding:16px;border-radius:8px;text-align:center">
+    <div style="font-size:28px;font-weight:bold;color:#e8c547">${Number(ventes.tot).toLocaleString('fr-FR')} ${currency}</div>
+    <div style="font-size:12px;color:#666">Chiffre d'affaires</div>
+  </div>
+  <div style="flex:1;background:#f5f5f5;padding:16px;border-radius:8px;text-align:center">
+    <div style="font-size:28px;font-weight:bold;color:#ef4444">${annule}</div>
+    <div style="font-size:12px;color:#666">Annulées</div>
+  </div>
+</div>
+${topProds.length ? `<h3>Top Produits</h3><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#333;color:#fff"><th style="padding:8px;text-align:left">Produit</th><th style="padding:8px;text-align:left">Qté</th><th style="padding:8px;text-align:left">Total</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
+${stockAlerte.length ? `<h3 style="color:#cc0000">\u26A0\uFE0F Stock en alerte</h3><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#cc0000;color:#fff"><th style="padding:8px;text-align:left">Produit</th><th style="padding:8px;text-align:left">Stock</th></tr></thead><tbody>${alertRows}</tbody></table>` : ''}
+<p style="color:#999;font-size:11px;margin-top:30px;border-top:1px solid #eee;padding-top:10px">CKBPOS v${APP_VERSION} — Rapport généré automatiquement</p>
+</body></html>`;
+    return { success: true, html, subject: `Rapport CKBPOS — ${shop} — ${d}` };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ============================================================
+// EXPORT EXCEL — v4.5.0
+// xlsx via sheetjs (xlsx package)
+// ============================================================
+
+ipcMain.handle('excel-export-sales', async (_, { date_from, date_to, user_id }) => {
+  try {
+    let XLSX;
+    try { XLSX = require('xlsx'); } catch(_e) {
+      return { success: false, error: 'xlsx non installé — npm install xlsx' };
+    }
+    let sql = `SELECT v.id, v.date_vente, u.nom as vendeur, v.client_nom, v.client_nif,
+      v.total, v.mode_paiement, v.montant_dinheiro, v.montant_express, v.statut, v.facture_num, v.machine_id
+      FROM ventes v LEFT JOIN users u ON v.user_id=u.id WHERE 1=1`;
+    const params = [];
+    if (date_from) { sql += ' AND date(v.date_vente)>=?'; params.push(date_from); }
+    if (date_to)   { sql += ' AND date(v.date_vente)<=?'; params.push(date_to); }
+    if (user_id)   { sql += ' AND v.user_id=?'; params.push(user_id); }
+    sql += ' ORDER BY v.id DESC LIMIT 10000';
+    const rows = db.prepare(sql).all(...params);
+    const wsData = [
+      ['#','Data','Vendedor','Cliente','NIF','Total','Pagamento','Numerário','Express','Status','Factura','Máquina'],
+      ...rows.map(r => [r.id, r.date_vente, r.vendeur||'', r.client_nom||'', r.client_nif||'', r.total, r.mode_paiement||'', r.montant_dinheiro||0, r.montant_express||0, r.statut||'', r.facture_num||'', r.machine_id||''])
+    ];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [5,16,14,20,16,10,12,10,10,10,20,14].map(w => ({ wch: w }));
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendas');
+    const fileName = `ckbpos_vendas_${date_from||'all'}_${Date.now()}.xlsx`;
+    const savePath = path.join(app.getPath('downloads'), fileName);
+    XLSX.writeFile(wb, savePath);
+    try { require('electron').shell.openPath(path.dirname(savePath)); } catch(_e) {}
+    return { success: true, path: savePath, count: rows.length };
+  } catch(e) { console.error('[EXCEL]', e.message); return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('excel-export-stock', async () => {
+  try {
+    let XLSX;
+    try { XLSX = require('xlsx'); } catch(_e) {
+      return { success: false, error: 'xlsx non installé — npm install xlsx' };
+    }
+    const products = db.prepare(`
+      SELECT p.nom, p.stock_cartons, COALESCE(p.unites,1) as unites,
+        p.prix_vente, p.prix_demi, p.prix_unite,
+        p.stock_alerte, p.actif,
+        COALESCE((SELECT SUM(r.qty_reserved) FROM stock_reservations r WHERE r.product_id=p.id AND r.status='active'),0) as reserved
+      FROM products p WHERE p.actif=1 ORDER BY p.nom`).all();
+    const wsData = [
+      ['Produto','Stock (cartons)','Unidades/Caixa','Reservado','Disponível','Preço venda','Preço demi','Preço unitário','Alerta'],
+      ...products.map(p => {
+        const dispo = (p.stock_cartons||0) - (p.reserved||0);
+        return [p.nom, p.stock_cartons||0, p.unites||1, p.reserved||0, Math.max(0,dispo), p.prix_vente||0, p.prix_demi||0, p.prix_unite||0, p.stock_alerte||2];
+      })
+    ];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [22,14,14,10,10,12,12,12,8].map(w => ({ wch: w }));
+    XLSX.utils.book_append_sheet(wb, ws, 'Stock');
+    const fileName = `ckbpos_stock_${new Date().toISOString().slice(0,10)}.xlsx`;
+    const savePath = path.join(app.getPath('downloads'), fileName);
+    XLSX.writeFile(wb, savePath);
+    try { require('electron').shell.openPath(path.dirname(savePath)); } catch(_e) {}
+    return { success: true, path: savePath, count: products.length };
+  } catch(e) { console.error('[EXCEL]', e.message); return { success: false, error: e.message }; }
+});
+
+// Étendre handleSyncMessage pour les messages chat
+const _v4HandlerBase = global._ckbSyncHandlers.handleSyncMessage;
+global._ckbSyncHandlers.handleSyncMessage = (ws, msg, peerMachineId) => {
+  if (msg.type === 'CHAT_MESSAGE') handleChatMessage(msg);
+  else if (msg.type === 'CHAT_DELETE') handleChatDelete(msg);
+  else if (msg.type === 'CHAT_DELETE_CONV') handleChatDeleteConv(msg);
+  else _v4HandlerBase(ws, msg, peerMachineId);
+};
+
+// Notifier chat à la connexion/déconnexion d'un pair
+const _v4OnPeerReg = global._ckbSyncHandlers.onPeerRegistered;
+global._ckbSyncHandlers.onPeerRegistered = (peerMachineId) => {
+  _v4OnPeerReg(peerMachineId);
+  const peer = peersMap.get(peerMachineId) || db.prepare('SELECT machine_label FROM network_peers WHERE machine_id=?').get(peerMachineId);
+  const label = peer?.machine_label || peerMachineId.slice(0,8);
+  setTimeout(() => chatNotifyPeer(label, 'connected'), 800);
+};
+
+// ── Audit login/logout (v4.2.0) ─────────────────────────────
+ipcMain.handle('audit-login', (_, { user_id, user_nom, action, details }) => {
+  try {
+    insertAuditLog(user_id || null, user_nom || 'unknown', action || 'LOGIN', details || null);
+    return { success: true };
+  } catch(e) { return { success: false }; }
+});
+
+
+ipcMain.handle('print-audit-pdf', async (_, { html, filename }) => {
+  try {
+    const tmpFile = path.join(os.tmpdir(), 'ckbpos_audit_' + Date.now() + '.html');
+    fs.writeFileSync(tmpFile, html, 'utf8');
+    const win2 = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true } });
+    await new Promise(res => {
+      win2.loadURL('file:///' + tmpFile.replace(/\\/g, '/'));
+      win2.webContents.on('did-finish-load', res);
+    });
+    const pdfBuffer = await win2.webContents.printToPDF({
+      printBackground: true,
+      pageSize: 'A4',
+      landscape: true,
+      margins: { marginType: 'default' },
+    });
+    win2.close();
+    try { fs.unlinkSync(tmpFile); } catch(_e) {}
+    const result = await dialog.showSaveDialog({
+      title: 'Salvar Audit PDF',
+      defaultPath: path.join('D:\\', filename || ('ckbpos_audit_' + Date.now() + '.pdf')),
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    });
+    if (result.canceled) return { success: true, canceled: true };
+    fs.writeFileSync(result.filePath, pdfBuffer);
+    shell.openPath(result.filePath).catch(() => {});
+    return { success: true, path: result.filePath };
+  } catch(e) {
+    console.error('[print-audit-pdf]', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+
+ipcMain.handle('coord-connected-users', () => {
+  try {
+    // Utilisateurs avec session récente (< 12h) + machine online
+    const sessions = db.prepare(`
+      SELECT us.user_id, us.machine_id, us.machine_label, us.login_at, u.nom, u.role
+      FROM user_sessions us JOIN users u ON us.user_id=u.id
+      WHERE us.login_at >= datetime('now','-12 hours')
+      ORDER BY us.login_at DESC
+    `).all();
+    // Enrichir avec statut online
+    const result = sessions.map(s => ({
+      ...s,
+      online: s.machine_id === MACHINE_ID || peersMap.has(s.machine_id),
+    }));
+    return { success: true, data: result };
+  } catch(e) { return { success: false, data: [] }; }
+});
+
+// Broadcast depuis CoordDashboard (v4.4.0)
+ipcMain.handle('coord-broadcast-msg', (_, { content, fromLabel }) => {
+  try {
+    const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
+    const fl = fromLabel || labelRow?.value || 'COORD';
+    const ts = new Date().toISOString().replace('T',' ').slice(0,19);
+    db.prepare('INSERT INTO messages (from_machine, from_label, to_machine, content, ts) VALUES (?,?,?,?,?)')
+      .run(MACHINE_ID, fl, 'all', content, ts);
+    const wsMsg = JSON.stringify({ type: 'CHAT_MESSAGE', from: MACHINE_ID, fromLabel: fl, to: 'all', content, ts });
+    for (const peer of peersMap.values()) {
+      if (peer.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(wsMsg); } catch(_e) {}
+    }
+    // Notifier localement
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('chat-message', { from: MACHINE_ID, fromLabel: fl, to: 'all', content, ts }); } catch(_e) {}
+    }
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+
 const _v3HandlerFinal = global._ckbSyncHandlers.handleSyncMessage;
 global._ckbSyncHandlers.handleSyncMessage = (ws, msg, peerMachineId) => {
   if      (msg.type === 'SNAPSHOT_REQUEST') handleSnapshotRequest(ws, msg);

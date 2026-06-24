@@ -3,12 +3,14 @@
 // \u2705 Corrige le bug focus trap : inputs bloqués après fermeture d'une popup native
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useLang } from '../utils/useLang';
 
 /* ═══════════════════════════════════════════════════════
    ALERT MODAL — remplace window.alert()
 ═══════════════════════════════════════════════════════ */
 
 export function AlertModal({ isOpen, title, message, type = 'info', onClose }) {
+  const { t } = useLang();
   const btnRef = useRef(null);
 
   // Remet le focus sur OK dès ouverture
@@ -28,7 +30,7 @@ export function AlertModal({ isOpen, title, message, type = 'info', onClose }) {
 
   if (!isOpen) return null;
 
-  const icons = { info: 'ℹ\uFE0F', error: '\u274C', success: '\u2705', warning: '\u26A0\uFE0F' };
+  const icons = { info: '\u2139\uFE0F', error: '\u274C', success: '\u2705', warning: '\u26A0\uFE0F' };
 
   return (
     <>
@@ -36,7 +38,7 @@ export function AlertModal({ isOpen, title, message, type = 'info', onClose }) {
       <div style={styles.box} role="alertdialog" aria-modal="true">
         <div style={styles.header}>
           <span style={styles.appName}>ckbpos</span>
-          <button style={styles.closeBtn} onClick={onClose} aria-label="Fermer">{'\u2715'}</button>
+          <button style={styles.closeBtn} onClick={onClose} aria-label={t('modal','close')}>{'\u2715'}</button>
         </div>
         <div style={styles.body}>
           <span style={styles.icon}>{icons[type]}</span>
@@ -46,7 +48,7 @@ export function AlertModal({ isOpen, title, message, type = 'info', onClose }) {
           </div>
         </div>
         <div style={styles.footer}>
-          <button ref={btnRef} style={styles.okBtn} onClick={onClose}>OK</button>
+          <button ref={btnRef} style={styles.okBtn} onClick={onClose}>{t('modal','ok')}</button>
         </div>
       </div>
     </>
@@ -59,6 +61,7 @@ export function AlertModal({ isOpen, title, message, type = 'info', onClose }) {
 ═══════════════════════════════════════════════════════ */
 
 export function ConfirmModal({ isOpen, title, message, type = 'warning', onConfirm, onCancel }) {
+  const { t } = useLang();
   const cancelRef = useRef(null);
 
   useEffect(() => {
@@ -77,7 +80,7 @@ export function ConfirmModal({ isOpen, title, message, type = 'warning', onConfi
 
   if (!isOpen) return null;
 
-  const icons = { info: 'ℹ\uFE0F', error: '\u274C', success: '\u2705', warning: '\u26A0\uFE0F' };
+  const icons = { info: '\u2139\uFE0F', error: '\u274C', success: '\u2705', warning: '\u26A0\uFE0F' };
 
   return (
     <>
@@ -85,7 +88,7 @@ export function ConfirmModal({ isOpen, title, message, type = 'warning', onConfi
       <div style={styles.box} role="alertdialog" aria-modal="true">
         <div style={styles.header}>
           <span style={styles.appName}>ckbpos</span>
-          <button style={styles.closeBtn} onClick={onCancel} aria-label="Fermer">{'\u2715'}</button>
+          <button style={styles.closeBtn} onClick={onCancel} aria-label={t('modal','close')}>{'\u2715'}</button>
         </div>
         <div style={styles.body}>
           <span style={styles.icon}>{icons[type]}</span>
@@ -95,8 +98,8 @@ export function ConfirmModal({ isOpen, title, message, type = 'warning', onConfi
           </div>
         </div>
         <div style={styles.footer}>
-          <button ref={cancelRef} style={styles.cancelBtn} onClick={onCancel}>Cancelar</button>
-          <button style={{...styles.okBtn, marginLeft: 8, background:'rgba(239,68,68,0.15)', borderColor:'#ef4444', color:'#ef4444'}} onClick={onConfirm}>Confirmar</button>
+          <button ref={cancelRef} style={styles.cancelBtn} onClick={onCancel}>{t('modal','cancel')}</button>
+          <button style={{...styles.okBtn, marginLeft: 8, background:'rgba(239,68,68,0.15)', borderColor:'#ef4444', color:'#ef4444'}} onClick={onConfirm}>{t('modal','confirm')}</button>
         </div>
       </div>
     </>

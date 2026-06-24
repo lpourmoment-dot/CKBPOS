@@ -12,13 +12,13 @@ const CADERNO_T = {
     motivoLabel:'Motivo', motivoSelect:'— Selecionar —',
     dinheiroLabel:'Dinheiro', notaLabel:'Nota (opcional)', notaPlaceholder:'Observação…',
     addBtn:'+ Adicionar', calcHint:'Dinheiro aceita cálculos:',
-    dirIn:'▲ Entra', dirOut:'▼ Sai', dirLost:'⚠ Perde',
+    dirIn:'\u25B2 Entra', dirOut:'\u25BC Sai', dirLost:'\u26A0 Perde',
     debts:'Dívidas', dayTotal:'Total do dia',
     colName:'Nome', colMotivo:'Motivo', colUser:'Utilizador',
     colDateHour:'Data / Hora', colNota:'Nota', colAmount:'Dinheiro', colDebit:'Débito',
-    loading:'Carregando…', noEntries:'📓 Nenhum registo para este dia',
-    paid:'✓ Pago', pending:'⏳ Pendente',
-    clearTitle:'🗑 Limpar Histórico', clearToday:'Limpar dia de hoje',
+    loading:'Carregando…', noEntries:'\u{1F4D3} Nenhum registo para este dia',
+    paid:'\u2713 Pago', pending:'\u23F3 Pendente',
+    clearTitle:'\u{1F5D1} Limpar Histórico', clearToday:'Limpar dia de hoje',
     clearWeek:'Limpar esta semana', clearAll:'Limpar todo o histórico',
     clearWeekSub:'Remove os registos dos últimos 7 dias',
     clearAllSub:'Remove todos os registos permanentemente',
@@ -26,22 +26,25 @@ const CADERNO_T = {
     alertSelMotivo:'Selecione um motivo', confirmDelete:'Remover este registo?',
     confirmPago:'Marcar como pago?',
     confirmClear:'Tem a certeza? Esta ação não pode ser desfeita.',
-    flowHint:'Nome → ↑↓ Motivo → Valor → Nota → Enter',
+    flowHint:'Nome \u2192 \u2191\u2193 Motivo \u2192 Valor \u2192 Nota \u2192 Enter',
+    periodDay:'Dia', periodWeek:'Semana', periodWeekShort:'Sem.', periodMonth:'M\u00eas', periodYear:'Ano', periodCustom:'Personalizado',
+    entriesLabel:'Entradas', exitLabel:'Sa\u00eddas', netLabel:'L\u00edquido', operationsLabel:'opera\u00e7\u00f5es',
+    printErrorTitle:'Erro ao imprimir', genericErrorTitle:'Erro',
   },
   'fr': {
-    title:'Caderno de Caixa', clearHistory:'Effacer historique', printDay:'Imprimer le jour',
     title:'Cahier de Caisse', clearHistory:'Effacer historique', printDay:'Imprimer le jour',
+    today:'Aujourd\u2019hui', yesterday:'Hier',
     nameLabel:'Nom', namePlaceholder:'Ex: Pierre, Marie…',
     motivoLabel:'Motif', motivoSelect:'— Sélectionner —',
     dinheiroLabel:'Montant', notaLabel:'Note (optionnel)', notaPlaceholder:'Observation…',
     addBtn:'+ Ajouter', calcHint:'Montant accepte des calculs:',
-    dirIn:'▲ Rentre', dirOut:'▼ Sort', dirLost:'⚠ Perd',
+    dirIn:'\u25B2 Rentre', dirOut:'\u25BC Sort', dirLost:'\u26A0 Perd',
     debts:'Dettes', dayTotal:'Total du jour',
     colName:'Nom', colMotivo:'Motif', colUser:'Utilisateur',
     colDateHour:'Date / Heure', colNota:'Note', colAmount:'Montant', colDebit:'Débit',
-    loading:'Chargement…', noEntries:'📓 Aucune saisie pour ce jour',
-    paid:'✓ Payé', pending:'⏳ En attente',
-    clearTitle:'🗑 Effacer Historique', clearToday:"Effacer aujourd'hui",
+    loading:'Chargement…', noEntries:'\u{1F4D3} Aucune saisie pour ce jour',
+    paid:'\u2713 Payé', pending:'\u23F3 En attente',
+    clearTitle:'\u{1F5D1} Effacer Historique', clearToday:"Effacer aujourd'hui",
     clearWeek:'Effacer cette semaine', clearAll:'Effacer tout',
     clearWeekSub:'Supprime les 7 derniers jours',
     clearAllSub:'Supprime tout définitivement',
@@ -49,29 +52,35 @@ const CADERNO_T = {
     alertSelMotivo:'Sélectionnez un motif', confirmDelete:'Supprimer cette saisie?',
     confirmPago:'Marquer comme payé?',
     confirmClear:'Êtes-vous sûr? Cette action est irréversible.',
-    flowHint:'Nom → ↑↓ Motif → Valeur → Note → Entrée',
+    flowHint:'Nom \u2192 \u2191\u2193 Motif \u2192 Valeur \u2192 Note \u2192 Entrée',
+    periodDay:'Jour', periodWeek:'Semaine', periodWeekShort:'Sem.', periodMonth:'Mois', periodYear:'Année', periodCustom:'Personnalisé',
+    entriesLabel:'Entrées', exitLabel:'Sorties', netLabel:'Net', operationsLabel:'opérations',
+    printErrorTitle:'Erreur d\u2019impression', genericErrorTitle:'Erreur',
   },
   'en': {
-    title:'Caderno de Caixa', clearHistory:'Clear history', printDay:'Print day',
     title:'Cash Journal', clearHistory:'Clear history', printDay:'Print day',
+    today:'Today', yesterday:'Yesterday',
     nameLabel:'Name', namePlaceholder:'Ex: John, Mary…',
     motivoLabel:'Reason', motivoSelect:'— Select —',
     dinheiroLabel:'Amount', notaLabel:'Note (optional)', notaPlaceholder:'Observation…',
     addBtn:'+ Add', calcHint:'Amount accepts calculations:',
-    dirIn:'▲ In', dirOut:'▼ Out', dirLost:'⚠ Lost',
+    dirIn:'\u25B2 In', dirOut:'\u25BC Out', dirLost:'\u26A0 Lost',
     debts:'Debts', dayTotal:'Day total',
     colName:'Name', colMotivo:'Reason', colUser:'User',
     colDateHour:'Date / Time', colNota:'Note', colAmount:'Amount', colDebit:'Debit',
-    loading:'Loading…', noEntries:'📓 No entries for this day',
-    paid:'✓ Paid', pending:'⏳ Pending',
-    clearTitle:'🗑 Clear History', clearToday:'Clear today',
+    loading:'Loading…', noEntries:'\u{1F4D3} No entries for this day',
+    paid:'\u2713 Paid', pending:'\u23F3 Pending',
+    clearTitle:'\u{1F5D1} Clear History', clearToday:'Clear today',
     clearWeek:'Clear this week', clearAll:'Clear all history',
     clearWeekSub:'Removes last 7 days', clearAllSub:'Removes all permanently',
     cancel:'Cancel', alertFillName:'Enter a name',
     alertSelMotivo:'Select a reason', confirmDelete:'Delete this entry?',
     confirmPago:'Mark as paid?',
     confirmClear:'Are you sure? This cannot be undone.',
-    flowHint:'Name → ↑↓ Reason → Value → Note → Enter',
+    flowHint:'Name \u2192 \u2191\u2193 Reason \u2192 Value \u2192 Note \u2192 Enter',
+    periodDay:'Day', periodWeek:'Week', periodWeekShort:'Wk.', periodMonth:'Month', periodYear:'Year', periodCustom:'Custom',
+    entriesLabel:'In', exitLabel:'Out', netLabel:'Net', operationsLabel:'operations',
+    printErrorTitle:'Print error', genericErrorTitle:'Error',
   },
 };
 
@@ -90,8 +99,8 @@ function calcMontant(str) {
   } catch { return 0; }
 }
 
-function fmt(n) {
-  return Math.round(n || 0).toLocaleString('fr-FR');
+function fmt(n, locale) {
+  return Math.round(n || 0).toLocaleString(locale || 'pt-BR');
 }
 
 function todayISO() {
@@ -146,6 +155,13 @@ export default function CadernoPage() {
 
   // Modal
   const [showLimpar, setShowLimpar] = useState(false);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [searchNom, setSearchNom] = useState('');
+  // v4.x — Filtres par période
+  const [filterPeriod, setFilterPeriod] = useState('day'); // 'day'|'week'|'month'|'year'|'custom'
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo]     = useState('');
+  const [filteredEntries, setFilteredEntries] = useState([]);
 
   // Refs
   const nomRef   = useRef(null);
@@ -198,6 +214,57 @@ export default function CadernoPage() {
     });
     if (r.success) setEntries(r.data || []);
     setLoading(false);
+  };
+
+  // ── Charger entrées filtrées par période ─────────────────
+  const loadFilteredEntries = useCallback(async () => {
+    if (filterPeriod === 'day') { setFilteredEntries([]); return; }
+    setLoading(true);
+    try {
+      const today = todayISO();
+      let dfrom = '', dto = today;
+      if (filterPeriod === 'week') {
+        const d = new Date(); d.setDate(d.getDate() - 6);
+        dfrom = d.toISOString().slice(0,10);
+      } else if (filterPeriod === 'month') {
+        dfrom = today.slice(0,7) + '-01';
+      } else if (filterPeriod === 'year') {
+        dfrom = today.slice(0,4) + '-01-01';
+      } else if (filterPeriod === 'custom') {
+        dfrom = filterDateFrom; dto = filterDateTo || today;
+      }
+      if (!dfrom) { setFilteredEntries([]); setLoading(false); return; }
+      // Même structure que caderno-entries-list mais avec plage de dates
+      let sql = `SELECT e.*, u.nom as user_nom
+                 FROM caderno_entries e
+                 JOIN users u ON e.user_id = u.id
+                 WHERE e.date_jour >= ? AND e.date_jour <= ?`;
+      const params = [dfrom, dto];
+      if (!isAdmin) { sql += ' AND e.user_id = ?'; params.push(user.id); }
+      sql += ' ORDER BY e.date_jour DESC, e.created_at DESC LIMIT 2000';
+      const r = await window.electron.dbQuery(sql, params);
+      setFilteredEntries(r.success ? (r.data || []) : []);
+    } catch(_e) { setFilteredEntries([]); }
+    setLoading(false);
+  }, [filterPeriod, filterDateFrom, filterDateTo, isAdmin, user.id]);
+
+  useEffect(() => { loadFilteredEntries(); }, [loadFilteredEntries]);
+
+  // ── Impression période ────────────────────────────────────
+  const handlePrintPeriod = async () => {
+    if (isPrinting) return;
+    setIsPrinting(true);
+    try {
+      const entriesToPrint = filterPeriod === 'day' ? entries : filteredEntries;
+      const label = filterPeriod === 'week' ? tc('periodWeek') : filterPeriod === 'month' ? tc('periodMonth') : filterPeriod === 'year' ? tc('periodYear') : filterPeriod === 'custom' ? `${filterDateFrom} \u2192 ${filterDateTo}` : selectedDay;
+      const r = await window.electron.printCaderno({
+        shopName, entries: entriesToPrint,
+        date_jour: filterPeriod === 'day' ? selectedDay : label,
+        currency: 'Kz', printedAt: new Date().toLocaleString(locale),
+      });
+      if (r && !r.success && r.error) showAlert(tc('printErrorTitle'), r.error, 'error');
+    } catch(e) { showAlert(tc('printErrorTitle'), e.message, 'error'); }
+    setIsPrinting(false);
   };
 
   // ── Totaux ───────────────────────────────────────────────
@@ -307,7 +374,7 @@ export default function CadernoPage() {
       loadEntries(); loadDays();
       setTimeout(() => nomRef.current?.focus(), 50);
     } else {
-      showAlert('Erro', r.error, 'error');
+      showAlert(tc('genericErrorTitle'), r.error, 'error');
     }
   };
 
@@ -337,16 +404,14 @@ export default function CadernoPage() {
 
   // ── Imprimer le jour ─────────────────────────────────────
   const handlePrintCaderno = async () => {
+    if (isPrinting) return;
+    setIsPrinting(true);
     const r = await window.electron.printCaderno({
-      shopName,
-      entries,
-      date_jour: selectedDay,
-      currency: 'Kz',
-      printedAt: new Date().toLocaleString(locale),
+      shopName, entries, date_jour: selectedDay,
+      currency: 'Kz', printedAt: new Date().toLocaleString(locale),
     });
-    if (r && !r.success && r.error) {
-      showAlert('Erro ao imprimir', r.error, 'error');
-    }
+    if (r && !r.success && r.error) showAlert(tc('printErrorTitle'), r.error, 'error');
+    setIsPrinting(false);
   };
 
   // ── Formater la date des onglets ─────────────────────────
@@ -367,7 +432,7 @@ export default function CadernoPage() {
     <div style={{ padding:24, height:'100%', overflowY:'auto', display:'flex', flexDirection:'column', gap:16 }}>
 
       {/* HEADER */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
+      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', flexShrink:0, gap:12, flexWrap:'wrap' }}>
         <div>
           <h1 style={{ fontSize:21, fontWeight:700, display:'flex', alignItems:'center', gap:8 }}>
             {tc('title')}
@@ -376,17 +441,68 @@ export default function CadernoPage() {
             {new Date().toLocaleDateString(locale, { weekday:'long', day:'numeric', month:'long', year:'numeric' })}
           </p>
         </div>
-        <div style={{ display:'flex', gap:8 }}>
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+          {/* Filtre période */}
+          <div style={{ display:'flex', gap:0, borderRadius:8, overflow:'hidden', border:'1px solid var(--border)' }}>
+            {[['day',tc('periodDay')],['week',tc('periodWeekShort')],['month',tc('periodMonth')],['year',tc('periodYear')],['custom',tc('periodCustom')]].map(([p,label]) => (
+              <button key={p} onClick={() => setFilterPeriod(p)}
+                style={{ padding:'6px 11px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer', fontFamily:'inherit',
+                  background: filterPeriod===p ? 'var(--accent)' : 'var(--bg-card)',
+                  color: filterPeriod===p ? '#000' : 'var(--text-muted)',
+                  borderRight: '1px solid var(--border)',
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Dates custom */}
+          {filterPeriod === 'custom' && (
+            <>
+              <input type="date" value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)}
+                className="form-input" style={{ fontSize:12, height:32, width:140 }} />
+              <input type="date" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)}
+                className="form-input" style={{ fontSize:12, height:32, width:140 }} />
+            </>
+          )}
+
+          {/* Bouton effacer */}
           <button onClick={() => setShowLimpar(true)}
-            style={{ background:'rgba(224,82,82,0.08)', color:'var(--danger)', border:'1px solid transparent', borderRadius:8, padding:'8px 14px', cursor:'pointer', fontSize:13, fontWeight:600, display:'flex', alignItems:'center', gap:6, fontFamily:'inherit' }}>
-            {tc('clearHistory')}
+            style={{ background:'rgba(224,82,82,0.08)', color:'var(--danger)', border:'1px solid transparent', borderRadius:8, padding:'7px 12px', cursor:'pointer', fontSize:12, fontWeight:600, display:'flex', alignItems:'center', gap:5, fontFamily:'inherit' }}>
+            {'\u{1F5D1}'} {tc('clearHistory')}
           </button>
-          <button onClick={handlePrintCaderno}
-            style={{ background:'var(--bg-card)', color:'var(--text)', border:'1px solid var(--border)', borderRadius:8, padding:'8px 14px', cursor:'pointer', fontSize:13, fontWeight:600, display:'flex', alignItems:'center', gap:6, fontFamily:'inherit' }}>
-            🖨 {tc('printDay')}
+
+          {/* Bouton imprimer — jour ou période */}
+          <button onClick={filterPeriod === 'day' ? handlePrintCaderno : handlePrintPeriod}
+            disabled={isPrinting}
+            style={{ background:'var(--bg-card)', color:'var(--text)', border:'1px solid var(--border)', borderRadius:8, padding:'7px 12px', cursor: isPrinting?'not-allowed':'pointer', fontSize:12, fontWeight:600, display:'flex', alignItems:'center', gap:5, fontFamily:'inherit', opacity: isPrinting?0.6:1 }}>
+            {isPrinting ? '…' : <>{'\u{1F5A8}'} {filterPeriod === 'day' ? tc('printDay') : `Imprimer ${filterPeriod==='week'?'semaine':filterPeriod==='month'?'mois':filterPeriod==='year'?'année':'période'}`}</>}
           </button>
         </div>
       </div>
+
+      {/* RÉSUMÉ PÉRIODE (si pas "jour") */}
+      {filterPeriod !== 'day' && (
+        <div className="card" style={{ padding:'12px 16px', display:'flex', gap:24, flexWrap:'wrap', flexShrink:0 }}>
+          {(() => {
+            const src = filteredEntries;
+            const tot = src.reduce((a,e) => {
+              if (e.direction==='entree') a.entree += e.montant;
+              else { a.sortie += e.montant; if (e.est_dette && e.statut_dette!=='pago') a.dette += e.montant; }
+              return a;
+            }, { entree:0, sortie:0, dette:0 });
+            return (
+              <>
+                <div><div style={{ fontSize:10, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:0.8 }}>{tc('entriesLabel')}</div><div style={{ fontSize:18, fontWeight:700, color:'var(--success)' }}>+{fmt(tot.entree, locale)} Kz</div></div>
+                <div><div style={{ fontSize:10, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:0.8 }}>{tc('exitLabel')}</div><div style={{ fontSize:18, fontWeight:700, color:'var(--danger)' }}>-{fmt(tot.sortie, locale)} Kz</div></div>
+                <div><div style={{ fontSize:10, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:0.8 }}>{tc('netLabel')}</div><div style={{ fontSize:18, fontWeight:700, color: tot.entree-tot.sortie>=0?'var(--accent)':'var(--danger)' }}>{fmt(tot.entree-tot.sortie, locale)} Kz</div></div>
+                <div><div style={{ fontSize:10, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:0.8 }}>{tc('debts')}</div><div style={{ fontSize:18, fontWeight:700, color:'var(--warning)' }}>{fmt(tot.dette, locale)} Kz</div></div>
+                <div><div style={{ fontSize:10, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:0.8 }}>{tc('entriesLabel')}</div><div style={{ fontSize:13, color:'var(--text-muted)' }}>{src.length} {tc('operationsLabel')}</div></div>
+              </>
+            );
+          })()}
+        </div>
+      )}
 
       {/* DATE TABS */}
       <div style={{ display:'flex', gap:5, flexShrink:0, flexWrap:'wrap' }}>
@@ -439,7 +555,7 @@ export default function CadernoPage() {
                       color:i===suggIdx?'var(--accent)':'var(--text)', borderBottom:'1px solid var(--border)',
                       display:'flex', alignItems:'center', justifyContent:'space-between' }}>
                     <span>{s.nom}</span>
-                    {s._src && <span style={{ fontSize:10, color:'var(--text-muted)', background:'var(--bg-hover)', borderRadius:4, padding:'1px 6px' }}>{s._src === 'prod' ? '📦' : '👤'}</span>}
+                    {s._src && <span style={{ fontSize:10, color:'var(--text-muted)', background:'var(--bg-hover)', borderRadius:4, padding:'1px 6px' }}>{s._src === 'prod' ? '\u{1F4E6}' : '\u{1F464}'}</span>}
                   </div>
                 ))}
               </div>
@@ -453,7 +569,7 @@ export default function CadernoPage() {
               style={{ background:'var(--bg)', border:`1px solid ${focusZone==='motivo'?'var(--accent)':'var(--border)'}`, borderRadius:8, padding:'9px 11px', cursor:'pointer', fontSize:13,
                 color:fMotivo?'var(--text)':'var(--text-muted)', display:'flex', alignItems:'center', justifyContent:'space-between', userSelect:'none' }}>
               <span>{fMotivo ? `${fMotivo.icone} ${fMotivo.label}` : tc('motivoSelect')}</span>
-              <span style={{ color:'var(--text-muted)', fontSize:10 }}>▼</span>
+              <span style={{ color:'var(--text-muted)', fontSize:10 }}>{'\u25BC'}</span>
             </div>
             {showMotivoDrop && (
               <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:8, zIndex:50, marginTop:4, overflow:'hidden', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
@@ -493,7 +609,7 @@ export default function CadernoPage() {
                     onFocus={() => setFocusZone('valor')} placeholder="1"
                     style={{ background:'var(--bg)', border:'1px solid var(--accent)', borderRadius:8, padding:'9px 11px', color:'var(--accent)', fontSize:13, fontFamily:'monospace', fontWeight:700, outline:'none', width:'100%' }}/>
                 </div>
-                {fPrix && fQtd && <div style={{ fontSize:10, color:'var(--success)', marginTop:3, fontFamily:'monospace' }}>= {Math.round(parseFloat(fPrix||0)*parseFloat(fQtd||0)).toLocaleString('fr-FR')} Kz</div>}
+                {fPrix && fQtd && <div style={{ fontSize:10, color:'var(--success)', marginTop:3, fontFamily:'monospace' }}>= {Math.round(parseFloat(fPrix||0)*parseFloat(fQtd||0)).toLocaleString(locale)} Kz</div>}
               </div>
             </div>
           ) : (
@@ -544,25 +660,43 @@ export default function CadernoPage() {
         <div style={{ display:'flex', alignItems:'center', gap:16 }}>
           <div style={{ textAlign:'right' }}>
             <div style={{ fontSize:10, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.5px' }}>{tc('debts')}</div>
-            <div style={{ fontFamily:'monospace', fontSize:13, fontWeight:700, color:'var(--danger)' }}>− {fmt(totaux.dette)} Kz</div>
+            <div style={{ fontFamily:'monospace', fontSize:13, fontWeight:700, color:'var(--danger)' }}>− {fmt(totaux.dette, locale)} Kz</div>
           </div>
           <div style={{ width:1, height:30, background:'var(--border)' }}/>
           <div style={{ textAlign:'right' }}>
             <div style={{ fontSize:10, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.5px' }}>TOTAL +</div>
-            <div style={{ fontFamily:'monospace', fontSize:15, fontWeight:700, color:'var(--success)' }}>+ {fmt(totaux.entree)} Kz</div>
+            <div style={{ fontFamily:'monospace', fontSize:15, fontWeight:700, color:'var(--success)' }}>+ {fmt(totaux.entree, locale)} Kz</div>
           </div>
           <div style={{ width:1, height:30, background:'var(--border)' }}/>
           <div style={{ textAlign:'right' }}>
             <div style={{ fontSize:10, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.5px' }}>TOTAL −</div>
-            <div style={{ fontFamily:'monospace', fontSize:15, fontWeight:700, color:'var(--danger)' }}>− {fmt(totaux.sortie)} Kz</div>
+            <div style={{ fontFamily:'monospace', fontSize:15, fontWeight:700, color:'var(--danger)' }}>− {fmt(totaux.sortie, locale)} Kz</div>
           </div>
           <div style={{ width:1, height:30, background:'var(--border)' }}/>
           <div style={{ textAlign:'right' }}>
             <div style={{ fontSize:10, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.5px' }}>{tc('dayTotal')}</div>
             <div style={{ fontFamily:'monospace', fontSize:15, fontWeight:700, color:totalNet>=0?'var(--accent)':'var(--danger)' }}>
-              {totalNet>=0?'+':''}{fmt(totalNet)} Kz
+              {totalNet>=0?'+':''}{fmt(totalNet, locale)} Kz
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* BARRE RECHERCHE PAR NOM */}
+      <div style={{ flexShrink:0, padding:'0 0 8px 0' }}>
+        <div style={{ position:'relative' }}>
+          <span style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', color:'var(--text-muted)', fontSize:14 }}>{'\u{1F50D}'}</span>
+          <input
+            value={searchNom}
+            onChange={e => setSearchNom(e.target.value)}
+            placeholder="Filtrar por nome..."
+            className="form-input"
+            style={{ paddingLeft:32, fontSize:13, width:'100%', boxSizing:'border-box' }}
+          />
+          {searchNom && (
+            <button onClick={() => setSearchNom('')}
+              style={{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', fontSize:16, lineHeight:1 }}>×</button>
+          )}
         </div>
       </div>
 
@@ -582,11 +716,21 @@ export default function CadernoPage() {
             <tbody>
               {loading ? (
                 <tr><td colSpan={9} style={{ textAlign:'center', padding:40, color:'var(--text-muted)' }}>{tc('loading')}</td></tr>
-              ) : entries.length === 0 ? (
+              ) : (filterPeriod === 'day' ? entries : filteredEntries).length === 0 ? (
                 <tr><td colSpan={9} style={{ textAlign:'center', padding:50, color:'var(--text-muted)', fontSize:14 }}>
                   {tc('noEntries')}
                 </td></tr>
-              ) : entries.map((e,i) => {
+              ) : (() => {
+                const src = filterPeriod === 'day' ? entries : filteredEntries;
+                const displaySrc = searchNom.trim()
+                  ? src.filter(e => (e.nom||'').toLowerCase().includes(searchNom.trim().toLowerCase()))
+                  : src;
+                if (displaySrc.length === 0) return (
+                  <tr><td colSpan={9} style={{ textAlign:'center', padding:50, color:'var(--text-muted)', fontSize:14 }}>
+                    {searchNom ? `Aucun résultat pour "${searchNom}"` : tc('noEntries')}
+                  </td></tr>
+                );
+                return displaySrc.map((e,i) => {
                 const rowBg = e.est_dette ? 'rgba(224,82,82,0.04)' : 'transparent';
                 return (
                   <tr key={e.id} style={{ borderBottom:'1px solid var(--border)', background:rowBg, transition:'background 0.1s' }}
@@ -616,7 +760,7 @@ export default function CadernoPage() {
                     </td>
                     <td style={{ padding:'11px 14px', fontFamily:'monospace', fontSize:14, fontWeight:700, textAlign:'right', whiteSpace:'nowrap',
                       color:e.direction==='entree'?'var(--success)':'var(--danger)' }}>
-                      {e.direction==='entree'?'+':'−'} {fmt(e.montant)} Kz
+                      {e.direction==='entree'?'+':'−'} {fmt(e.montant, locale)} Kz
                     </td>
                     <td style={{ padding:'11px 14px', textAlign:'right' }}>
                       {e.est_dette ? (
@@ -631,12 +775,13 @@ export default function CadernoPage() {
                     <td style={{ padding:'11px 14px', textAlign:'center' }}>
                       <button onClick={() => handleDelete(e.id)}
                         style={{ background:'rgba(224,82,82,0.08)', color:'var(--danger)', border:'1px solid transparent', padding:'5px 9px', borderRadius:6, cursor:'pointer', fontSize:13, lineHeight:1 }}>
-                        🗑
+                        {'\u{1F5D1}'}
                       </button>
                     </td>
                   </tr>
                 );
-              })}
+              });
+              })()}
             </tbody>
           </table>
         </div>
@@ -648,13 +793,13 @@ export default function CadernoPage() {
           <div className="modal">
             <div className="modal-header">
               <h2 className="modal-title">{tc('clearTitle')}</h2>
-              <button onClick={() => setShowLimpar(false)} className="btn btn-icon btn-secondary" style={{ fontSize:16 }}>✕</button>
+              <button onClick={() => setShowLimpar(false)} className="btn btn-icon btn-secondary" style={{ fontSize:16 }}>{'\u2715'}</button>
             </div>
             <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
               {[
-                { mode:'today', icon:'📅', title:tc('clearToday'), sub:`${tc('clearToday')} — ${fmtTabDate(selectedDay)}` },
-                { mode:'week',  icon:'📆', title:tc('clearWeek'),  sub:tc('clearWeekSub') },
-                { mode:'all',   icon:'⚠️', title:tc('clearAll'),   sub:tc('clearAllSub') },
+                { mode:'today', icon:'\u{1F4C5}', title:tc('clearToday'), sub:`${tc('clearToday')} — ${fmtTabDate(selectedDay)}` },
+                { mode:'week',  icon:'\u{1F4C6}', title:tc('clearWeek'),  sub:tc('clearWeekSub') },
+                { mode:'all',   icon:'\u26A0\uFE0F', title:tc('clearAll'),   sub:tc('clearAllSub') },
               ].map(opt => (
                 <div key={opt.mode} onClick={() => handleLimpar(opt.mode)}
                   style={{ display:'flex', alignItems:'center', gap:12, background:'var(--bg)', border:'1px solid var(--border)', borderRadius:8, padding:14, cursor:'pointer', transition:'all 0.15s' }}
