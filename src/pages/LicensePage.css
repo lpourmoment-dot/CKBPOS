@@ -1,0 +1,342 @@
+/* ───────────────────────────────────────────────────────────────────
+   LicensePage.css — CKBPOS
+   Direction : la licence est traitee comme un ticket de caisse qu'on
+   valide au comptoir. CKBPOS est avant tout une imprimante de recus —
+   cette page reprend ce vocabulaire : papier perfore, ligne de
+   dechirure, tampon d'authenticite qui s'imprime, bandeau code-barres.
+   ─────────────────────────────────────────────────────────────────── */
+
+.license-page {
+  --void: #0a0a0a;
+  --paper: #131211;
+  --paper-edge: #1c1a17;
+  --gold: #e8c547;
+  --gold-dim: rgba(232, 197, 71, 0.14);
+  --gold-soft: rgba(232, 197, 71, 0.4);
+  --ink: #efe9da;
+  --ink-muted: rgba(239, 233, 218, 0.46);
+  --ink-faint: rgba(239, 233, 218, 0.16);
+  --danger: #e2574c;
+  --danger-dim: rgba(226, 87, 76, 0.14);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 100vh;
+  padding: 40px 20px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(232, 197, 71, 0.05), transparent 55%),
+    var(--void);
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+}
+
+/* ── Le ticket ─────────────────────────────────────────────────── */
+
+.ticket {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  background: var(--paper);
+  box-shadow:
+    0 40px 80px -30px rgba(0, 0, 0, 0.8),
+    0 0 0 1px var(--paper-edge);
+  animation: ticket-rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes ticket-rise {
+  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Bord perfore haut/bas — encoches circulaires decoupees dans le papier */
+.ticket-perf {
+  height: 14px;
+  background-image: radial-gradient(circle at 7px 7px, var(--void) 7px, transparent 7.5px);
+  background-size: 14px 14px;
+  background-repeat: repeat-x;
+  background-position: -7px center;
+}
+.ticket-perf--top { margin-bottom: -1px; }
+.ticket-perf--bottom { margin-top: -1px; transform: scaleY(-1); }
+
+.ticket-body {
+  padding: 36px 32px 28px;
+}
+
+.ticket-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--gold);
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.ticket-subtitle {
+  font-size: 13px;
+  color: var(--ink-muted);
+  text-align: center;
+  line-height: 1.5;
+  margin: 0 0 4px;
+}
+
+.ticket-divider {
+  border-top: 1px dashed var(--ink-faint);
+  margin: 22px 0;
+}
+
+/* ── Le tampon — element signature de la page ────────────────────── */
+
+.stamp-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0 4px;
+}
+
+.stamp {
+  --stamp-color: var(--ink-muted);
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border: 3px double var(--stamp-color);
+  color: var(--stamp-color);
+  transform: rotate(-7deg);
+  animation: stamp-hit 0.5s cubic-bezier(0.18, 1.4, 0.4, 1) both;
+  animation-delay: 0.15s;
+}
+
+.stamp-word {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  line-height: 1.35;
+  padding: 0 14px;
+}
+
+@keyframes stamp-hit {
+  0%   { opacity: 0; transform: rotate(-7deg) scale(1.7); }
+  60%  { opacity: 1; transform: rotate(-7deg) scale(0.94); }
+  100% { opacity: 1; transform: rotate(-7deg) scale(1); }
+}
+
+.stamp--pending {
+  --stamp-color: var(--ink-faint);
+  border-style: dashed;
+}
+
+.stamp--valid {
+  --stamp-color: var(--gold);
+  background: var(--gold-dim);
+  box-shadow: 0 0 0 1px var(--gold-soft) inset, 0 8px 24px -8px rgba(232, 197, 71, 0.45);
+}
+
+.stamp--trial {
+  --stamp-color: var(--gold-soft);
+  border-style: dashed;
+}
+
+.stamp--danger {
+  --stamp-color: var(--danger);
+  background: var(--danger-dim);
+}
+
+.stamp--listening {
+  --stamp-color: var(--gold);
+  border-style: dashed;
+  animation:
+    stamp-hit 0.5s cubic-bezier(0.18, 1.4, 0.4, 1) both,
+    stamp-pulse 1.8s ease-in-out infinite;
+  animation-delay: 0.15s, 0.65s;
+}
+
+@keyframes stamp-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--gold-dim); }
+  50%      { box-shadow: 0 0 0 10px transparent; }
+}
+
+.stamp-meta {
+  font-size: 12px;
+  color: var(--ink-muted);
+  letter-spacing: 0.2px;
+}
+
+/* ── Tabs ───────────────────────────────────────────────────────── */
+
+.license-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+.license-tabs button {
+  flex: 1;
+  padding: 9px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--ink-faint);
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  letter-spacing: 0.2px;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.license-tabs button:hover { color: var(--ink); }
+.license-tabs button.active {
+  background: var(--gold-dim);
+  color: var(--gold);
+  border-color: var(--gold-soft);
+}
+.license-tabs button:focus-visible,
+.license-tab-content button:focus-visible,
+.license-tab-content input:focus-visible,
+.license-tab-content textarea:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* ── Contenu des onglets ──────────────────────────────────────────── */
+
+.license-tab-content label {
+  display: block;
+  font-size: 11px;
+  color: var(--ink-muted);
+  margin-bottom: 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  font-weight: 600;
+}
+
+.license-tab-content textarea,
+.license-tab-content input {
+  width: 100%;
+  background: var(--void);
+  border: 1px solid var(--ink-faint);
+  border-radius: 8px;
+  padding: 11px 13px;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  margin-bottom: 14px;
+  transition: border-color 0.15s ease;
+}
+.license-tab-content textarea::placeholder,
+.license-tab-content input::placeholder {
+  color: var(--ink-faint);
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+}
+.license-tab-content textarea:focus,
+.license-tab-content input:focus {
+  outline: none;
+  border-color: var(--gold-soft);
+}
+.license-tab-content textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+.license-tab-content input[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.license-tab-content .btn-primary {
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  border: none;
+  background: var(--gold);
+  color: #0a0a0a;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.3px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+.license-tab-content .btn-primary:hover { filter: brightness(1.08); }
+.license-tab-content .btn-primary:active { transform: scale(0.985); }
+
+.license-tab-content .btn-secondary {
+  width: 100%;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--ink-faint);
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.license-tab-content .btn-secondary:hover { border-color: var(--ink-muted); }
+
+.license-listening {
+  font-size: 12.5px;
+  color: var(--gold);
+  margin-bottom: 12px;
+  text-align: center;
+}
+.license-listening::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gold);
+  margin-right: 8px;
+  animation: dot-blink 1.4s ease-in-out infinite;
+}
+@keyframes dot-blink {
+  0%, 100% { opacity: 0.25; }
+  50%      { opacity: 1; }
+}
+
+.license-error {
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--danger);
+  text-align: center;
+}
+
+/* ── Code-barres decoratif en pied de ticket ─────────────────────── */
+
+.ticket-barcode {
+  height: 30px;
+  margin: 0 32px 26px;
+  opacity: 0.5;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--ink) 0 2px, transparent 2px 5px,
+    var(--ink) 5px 6px, transparent 6px 10px,
+    var(--ink) 10px 13px, transparent 13px 16px,
+    var(--ink) 16px 17px, transparent 17px 22px,
+    var(--ink) 22px 25px, transparent 25px 27px
+  );
+}
+
+/* ── Accessibilite / mouvement reduit ─────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .ticket,
+  .stamp,
+  .license-listening::before {
+    animation: none !important;
+  }
+}
+
+/* ── Mobile ────────────────────────────────────────────────────────── */
+
+@media (max-width: 420px) {
+  .ticket-body { padding: 28px 22px 22px; }
+  .ticket-barcode { margin: 0 22px 22px; }
+  .stamp { width: 112px; height: 112px; }
+}

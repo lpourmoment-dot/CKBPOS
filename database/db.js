@@ -258,7 +258,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS caderno_motivos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     label TEXT NOT NULL UNIQUE,
-    icone TEXT DEFAULT '📌',
+    icone TEXT DEFAULT '\u{1F4CC}',
     direction TEXT NOT NULL CHECK(direction IN ('entree','sortie','perte')),
     est_dette INTEGER DEFAULT 0,
     role TEXT DEFAULT 'Geral' CHECK(role IN ('Geral','Admin')),
@@ -269,11 +269,11 @@ db.exec(`
 
 // ── Motivos par défaut (INSERT OR IGNORE = safe) ──
 [
-  ['🍽', 'Almoço',                 'sortie', 0, 'Geral'],
-  ['💸', 'Kilape',                 'sortie', 1, 'Geral'],
-  ['📦', 'Produto não registrado', 'entree', 0, 'Geral'],
-  ['🔻', 'Retirada de caixa',      'sortie', 0, 'Admin'],
-  ['⚠',  'Sem pagar',             'perte',  1, 'Geral'],
+  ['\u{1F37D}', 'Almoço',                 'sortie', 0, 'Geral'],
+  ['\u{1F4B8}', 'Kilape',                 'sortie', 1, 'Geral'],
+  ['\u{1F4E6}', 'Produto não registrado', 'entree', 0, 'Geral'],
+  ['\u{1F53B}', 'Retirada de caixa',      'sortie', 0, 'Admin'],
+  ['\u26A0',  'Sem pagar',             'perte',  1, 'Geral'],
 ].forEach(([icone, label, direction, est_dette, role]) => {
   db.prepare('INSERT OR IGNORE INTO caderno_motivos (icone,label,direction,est_dette,role) VALUES (?,?,?,?,?)')
     .run(icone, label, direction, est_dette, role);
@@ -292,11 +292,11 @@ db.exec(`
   "ALTER TABLE reservations ADD COLUMN created_at TEXT DEFAULT (datetime('now','utc'))",
 ].forEach(sql => { try { db.exec(sql); } catch(e){} });
 
-// ✅ Fix v1.1.7 — corriger les réservations créées avec statut='active' (bug)
-// reservation-list filtre sur statut='pendente' → les anciennes réservations étaient invisibles
+// \u2705 Fix v1.1.7 — corriger les réservations créées avec statut='active' (bug)
+// reservation-list filtre sur statut='pendente' \u2192 les anciennes réservations étaient invisibles
 try {
   const fixed = db.prepare("UPDATE reservations SET statut='pendente' WHERE statut='active'").run();
-  if (fixed.changes > 0) console.log(`[CKBPOS] ${fixed.changes} réservations 'active' → 'pendente' corrigées`);
+  if (fixed.changes > 0) console.log(`[CKBPOS] ${fixed.changes} réservations 'active' \u2192 'pendente' corrigées`);
 } catch(e) {}
 
 // Admin par defaut
@@ -340,20 +340,7 @@ if (!machineIdRow || !machineIdRow.value || machineIdRow.value.trim() === '') {
   console.log('[CKBPOS] Nouveau machine_id généré:', newId);
 }
 
-// ── Générer network_key si absente (CKB-XXXX-XXXX) ───────
-// Clé partagée entre toutes les machines d'un même commerce.
-// Machines avec des clés différentes s'ignorent mutuellement sur le LAN.
-const nkRow = db.prepare("SELECT value FROM settings WHERE key='network_key'").get();
-if (!nkRow || !nkRow.value || nkRow.value.trim() === '') {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // pas de 0/O ni 1/I
-  const bytes = crypto.randomBytes(8);
-  let nk = 'CKB-';
-  for (let i = 0; i < 4; i++) nk += chars[bytes[i] % chars.length];
-  nk += '-';
-  for (let i = 4; i < 8; i++) nk += chars[bytes[i] % chars.length];
-  db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('network_key',?)").run(nk);
-  console.log('[CKBPOS] Nouvelle network_key générée:', nk);
-}
+// network_key générée lors du setup-complete (pas auto-générée au démarrage)
 
 // ── Tables réseau v1.4.0 ─────────────────────────────────────
 db.exec(`

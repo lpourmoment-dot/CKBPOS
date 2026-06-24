@@ -1,6 +1,6 @@
 {
   "name": "ckbpos",
-  "version": "4.9.3",
+  "version": "4.9.6",
   "description": "CKBPOS - Application Point de Vente Professionnelle",
   "main": "main.js",
   "author": "CKB",
@@ -60,7 +60,7 @@
     }
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.43.0",
+    "@supabase/supabase-js": "^2.108.2",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^9.4.3",
     "date-fns": "^3.3.1",
@@ -68,6 +68,7 @@
     "electron-updater": "^6.3.4",
     "framer-motion": "^11.18.2",
     "googleapis": "^140.0.0",
+    "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.344.0",
     "nodemailer": "^8.0.10",
     "qrcode": "^1.5.3",

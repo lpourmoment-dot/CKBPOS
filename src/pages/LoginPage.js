@@ -159,6 +159,13 @@ export default function LoginPage() {
         "INSERT INTO user_sessions (user_id, machine_id, machine_label, login_at) VALUES (?, ?, ?, datetime('now'))",
         [pendingUser.id, machineId, machineLabel]
       );
+      // v4.2.0 — Audit login
+      await window.electron.auditLogin({
+        user_id: pendingUser.id,
+        user_nom: pendingUser.nom,
+        action: 'LOGIN',
+        details: `Connexion · Machine: ${machineLabel}`,
+      });
     } catch(_e) {}
     await login(pendingUser);
     navigate('/');
@@ -169,7 +176,7 @@ export default function LoginPage() {
       {/* Titlebar */}
       <div style={{ position:'fixed', top:0, left:0, right:0, height:38, WebkitAppRegion:'drag', display:'flex', alignItems:'center', justifyContent:'flex-end', padding:'0 8px' }}>
         <div style={{ WebkitAppRegion:'no-drag', display:'flex', gap:6 }}>
-          {[{l:'–',a:()=>window.electron.minimize(),h:'var(--bg-hover)'},{l:'□',a:()=>window.electron.maximize(),h:'var(--bg-hover)'},{l:'✕',a:()=>window.electron.close(),h:'var(--danger)'}].map((b,i)=>(
+          {[{l:'–',a:()=>window.electron.minimize(),h:'var(--bg-hover)'},{l:'\u25A1',a:()=>window.electron.maximize(),h:'var(--bg-hover)'},{l:'\u2715',a:()=>window.electron.close(),h:'var(--danger)'}].map((b,i)=>(
             <button key={i} onClick={b.a} style={{ width:28,height:28,borderRadius:6,border:'none',background:'transparent',cursor:'pointer',color:'var(--text-muted)',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center' }}
               onMouseEnter={e=>{e.currentTarget.style.background=b.h;e.currentTarget.style.color='white';}}
               onMouseLeave={e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.color='var(--text-muted)';}}>
@@ -189,7 +196,7 @@ export default function LoginPage() {
 
         {/* Mode tabs */}
         <div style={{ display:'flex', background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:10, padding:4, marginBottom:24, gap:4 }}>
-          {[{key:'password',label:'📧 Email / Senha'},{key:'pin',label:'🔢 PIN Rápido'}].map(m=>(
+          {[{key:'password',label:'\u{1F4E7} Email / Senha'},{key:'pin',label:'\u{1F522} PIN Rápido'}].map(m=>(
             <button key={m.key} onClick={()=>{setMode(m.key);setError('');setPin('');}}
               style={{ flex:1, padding:'8px', borderRadius:8, border:'none', cursor:'pointer', background:mode===m.key?'var(--accent)':'transparent', color:mode===m.key?'#000':'var(--text-secondary)', fontWeight:600, fontSize:13, fontFamily:'inherit', transition:'all 0.15s ease' }}>
               {m.label}
@@ -201,7 +208,7 @@ export default function LoginPage() {
           {mode === 'password' ? (
             <form onSubmit={handleLogin} style={{ display:'flex', flexDirection:'column', gap:16 }}>
               <div className="form-group">
-                <label className="form-label">Email</label>
+                <label className="form-label">{t('login','emailLabel')}</label>
                 <div style={{ position:'relative' }}>
                   <Mail size={16} style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:'var(--text-muted)' }}/>
                   <input type="email" className="form-input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="admin@ckbpos.com" style={{ paddingLeft:36 }} required autoFocus/>
@@ -225,7 +232,7 @@ export default function LoginPage() {
               {tentativas >= 3 && (
                 <button type="button" onClick={()=>setShowReset(true)}
                   style={{ background:'none', border:'none', color:'var(--accent)', cursor:'pointer', fontSize:13, textDecoration:'underline', fontFamily:'inherit' }}>
-                  <KeyRound size={14} style={{ display:'inline', marginRight:4 }}/>Esqueci minha senha
+                  <KeyRound size={14} style={{ display:'inline', marginRight:4 }}/>{t('login','forgotPassword')}
                 </button>
               )}
               <button type="submit" className="btn btn-primary btn-lg w-full" disabled={loading} style={{ justifyContent:'center' }}>
@@ -276,7 +283,7 @@ export default function LoginPage() {
           <div className="modal" style={{ maxWidth:420 }}>
             <div className="modal-header">
               <h2 className="modal-title"><KeyRound size={18} style={{ display:'inline', marginRight:8 }}/>{t('login','resetPassword')}</h2>
-              <button onClick={()=>{setShowReset(false);setResetStep(1);setResetMsg('');}} className="btn btn-icon btn-secondary">✕</button>
+              <button onClick={()=>{setShowReset(false);setResetStep(1);setResetMsg('');}} className="btn btn-icon btn-secondary">{'\u2715'}</button>
             </div>
 
             {resetStep === 1 && (
@@ -314,12 +321,12 @@ export default function LoginPage() {
 
             {resetStep === 3 && (
               <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
-                <p style={{ fontSize:13, color:'var(--success)' }}>✅ Identidade verificada! Digite sua nova senha.</p>
+                <p style={{ fontSize:13, color:'var(--success)' }}>{'\u2705'} Identidade verificada! Digite sua nova senha.</p>
                 <div className="form-group">
                   <label className="form-label">{t('login','newPasswordLabel')}</label>
                   <input type="password" className="form-input" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="••••••••" autoFocus/>
                 </div>
-                {resetMsg && <div style={{ color:resetMsg.includes('✅')?'var(--success)':'var(--danger)', fontSize:13 }}>{resetMsg}</div>}
+                {resetMsg && <div style={{ color:resetMsg.includes('\u2705')?'var(--success)':'var(--danger)', fontSize:13 }}>{resetMsg}</div>}
                 <button onClick={handleResetStep3} className="btn btn-primary" style={{ justifyContent:'center' }}>
                   Redefinir Senha
                 </button>
@@ -334,7 +341,7 @@ export default function LoginPage() {
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}>
           <div style={{ width:'100%', maxWidth:400, background:'var(--bg-secondary)', border:'1px solid var(--accent)', borderRadius:14, padding:28, margin:'0 16px', boxShadow:'0 0 40px rgba(232,197,71,0.12)' }}>
             <div style={{ textAlign:'center', marginBottom:20 }}>
-              <div style={{ fontSize:32, marginBottom:8 }}>💰</div>
+              <div style={{ fontSize:32, marginBottom:8 }}>{'\u{1F4B0}'}</div>
               <div style={{ fontSize:18, fontWeight:700, color:'var(--text-primary)', marginBottom:4 }}>
                 Fundo de Caixa
               </div>
@@ -344,7 +351,7 @@ export default function LoginPage() {
               </div>
             </div>
             <div style={{ marginBottom:20 }}>
-              <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:6, textTransform:'uppercase', letterSpacing:1 }}>Valor inicial (AOA)</div>
+              <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:6, textTransform:'uppercase', letterSpacing:1 }}>{t('login','initialValueLabel')}</div>
               <div style={{ position:'relative' }}>
                 <span style={{ position:'absolute', left:14, top:'50%', transform:'translateY(-50%)', fontSize:16, color:'var(--accent)', fontWeight:700 }}>Kz</span>
                 <input

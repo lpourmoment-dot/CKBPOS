@@ -14,6 +14,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Signal, Monitor, Wifi, Star, AlertTriangle, Check, Loader, ChevronRight, RefreshCw, X } from 'lucide-react';
+import { useLang } from '../utils/useLang';
 
 const Gold   = '#e8c547';
 const Dim    = 'rgba(232,197,71,0.12)';
@@ -21,6 +22,7 @@ const Border = 'rgba(232,197,71,0.25)';
 
 // ── Remember session ─────────────────────────────────────────
 export function RememberSession() {
+  const { t } = useLang();
   const [remember, setRemember] = useState(false);
   const [loaded, setLoaded]     = useState(false);
 
@@ -49,7 +51,7 @@ export function RememberSession() {
         {remember && <Check size={11} color='#0a0a0a'/>}
       </div>
       <span style={{ fontSize:12, color:'rgba(255,255,255,0.45)', userSelect:'none' }}>
-        Lembrar esta sessão (não pedir senha ao reiniciar)
+        {t('login','rememberSession')}
       </span>
     </div>
   );
@@ -57,6 +59,7 @@ export function RememberSession() {
 
 // ── Panneau sync LAN ─────────────────────────────────────────
 export function SyncLanPanel({ onSynced }) {
+  const { t } = useLang();
   const [open, setOpen]         = useState(false);
   const [phase, setPhase]       = useState('scan'); // scan | auth | syncing
   const [peers, setPeers]       = useState([]);
@@ -73,7 +76,7 @@ export function SyncLanPanel({ onSynced }) {
     if (!open) return;
     const c1 = window.electron.onSnapshotProgress(({ received, total }) => setProgress(Math.round((received/total)*90)));
     const c2 = window.electron.onSnapshotDone(() => { setProgress(100); setTimeout(() => onSynced?.(), 1200); });
-    const c3 = window.electron.onSnapshotDenied(() => { setErr('Autenticação recusada — verifique o código ou a chave.'); setPhase('auth'); });
+    const c3 = window.electron.onSnapshotDenied(() => { setErr(t('login','authRefused')); setPhase('auth'); });
     return () => { c1(); c2(); c3(); };
   }, [open]);
 
@@ -89,15 +92,15 @@ export function SyncLanPanel({ onSynced }) {
   const openPanel = () => { setOpen(true); setPhase('scan'); setErr(''); setPeers([]); scan(); };
 
   const requestSync = async () => {
-    if (!selected) { setErr('Selecione uma máquina'); return; }
+    if (!selected) { setErr(t('login','selectMachineErr')); return; }
     const code = authMode === 'invite' ? inviteCode.trim() : '';
     const key  = authMode === 'key'    ? networkKey.trim() : '';
-    if (authMode === 'invite' && code.length !== 6) { setErr('Código deve ter 6 dígitos'); return; }
-    if (authMode === 'key' && !key) { setErr('Insira a chave de rede'); return; }
+    if (authMode === 'invite' && code.length !== 6) { setErr(t('login','codeMustBe6')); return; }
+    if (authMode === 'key' && !key) { setErr(t('login','enterNetworkKey')); return; }
     setErr(''); setPhase('syncing'); setProgress(5);
     try {
       const res = await window.electron.requestSnapshot({ machine_id: selected, invite_code: code, network_key: key });
-      if (!res.success) { setErr(res.error || 'Erro'); setPhase('auth'); }
+      if (!res.success) { setErr(res.error || t('login','syncGenericError')); setPhase('auth'); }
     } catch(e) { setErr(e.message); setPhase('auth'); }
   };
 
@@ -129,7 +132,7 @@ export function SyncLanPanel({ onSynced }) {
         onMouseEnter={e => { e.target.style.borderColor = Border; e.target.style.color = Gold; }}
         onMouseLeave={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; e.target.style.color = 'rgba(255,255,255,0.4)'; }}
       >
-        <Signal size={13}/> Sincronizar com máquina ativa
+        <Signal size={13}/> {t('login','syncButton')}
       </button>
 
       {/* Panneau modal */}
@@ -145,8 +148,8 @@ export function SyncLanPanel({ onSynced }) {
               {/* Header */}
               <div style={{ padding:'20px 24px 16px', borderBottom:'1px solid rgba(255,255,255,0.07)', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
                 <div>
-                  <div style={{ fontSize:14, color:'#fff', fontWeight:700, letterSpacing:1 }}>Sincronizar com máquina ativa</div>
-                  <div style={{ fontSize:11, color:'rgba(255,255,255,0.35)', marginTop:2 }}>Importa dados de uma máquina online no LAN</div>
+                  <div style={{ fontSize:14, color:'#fff', fontWeight:700, letterSpacing:1 }}>{t('login','syncButton')}</div>
+                  <div style={{ fontSize:11, color:'rgba(255,255,255,0.35)', marginTop:2 }}>{t('login','syncSubtitle')}</div>
                 </div>
                 <button onClick={() => setOpen(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'rgba(255,255,255,0.4)', padding:4 }}>
                   <X size={16}/>
@@ -164,21 +167,21 @@ export function SyncLanPanel({ onSynced }) {
                 {phase === 'scan' && (
                   <>
                     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
-                      <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', letterSpacing:2 }}>MÁQUINAS ONLINE</div>
+                      <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', letterSpacing:2 }}>{t('login','onlineMachines')}</div>
                       <button onClick={scan} disabled={scanning} style={{ background:'transparent', border:`1px solid ${Border}`, borderRadius:6, padding:'5px 10px', color:Gold, fontSize:11, cursor:'pointer', display:'flex', alignItems:'center', gap:5, fontFamily:'inherit' }}>
                         <RefreshCw size={11} style={{ animation: scanning ? 'spin 1s linear infinite' : 'none' }}/>
-                        {scanning ? 'A pesquisar...' : 'Atualizar'}
+                        {scanning ? t('login','searching') : t('login','refresh')}
                       </button>
                     </div>
                     {scanning && !peers.length
                       ? <div style={{ textAlign:'center', padding:'20px 0', color:'rgba(255,255,255,0.3)', fontSize:12 }}>
                           <Loader size={20} style={{ animation:'spin 1s linear infinite', display:'block', margin:'0 auto 10px' }}/>
-                          A pesquisar na rede LAN...
+                          {t('login','searchingLan')}
                         </div>
                       : peers.length === 0
                         ? <div style={{ textAlign:'center', padding:'20px 0', color:'rgba(255,255,255,0.3)', fontSize:12 }}>
                             <Signal size={28} style={{ display:'block', margin:'0 auto 10px', opacity:0.3 }}/>
-                            Nenhuma máquina encontrada
+                            {t('login','noMachineFound')}
                           </div>
                         : peers.map(p => (
                             <div key={p.machine_id} onClick={() => { setSelected(p.machine_id); setMachLabel(p.machine_label||p.machine_id.slice(0,8)); }}
@@ -199,9 +202,9 @@ export function SyncLanPanel({ onSynced }) {
                           ))
                     }
                     <div style={{ display:'flex', justifyContent:'flex-end', marginTop:14 }}>
-                      <button onClick={() => { if (!selected) { setErr('Selecione uma máquina'); return; } setErr(''); setPhase('auth'); }}
+                      <button onClick={() => { if (!selected) { setErr(t('login','selectMachineErr')); return; } setErr(''); setPhase('auth'); }}
                         style={{ background:Gold, color:'#0a0a0a', border:'none', borderRadius:8, padding:'9px 20px', fontWeight:700, fontSize:12, cursor:'pointer', display:'flex', alignItems:'center', gap:6, fontFamily:'inherit' }}>
-                        Continuar <ChevronRight size={13}/>
+                        {t('login','continueBtn')} <ChevronRight size={13}/>
                       </button>
                     </div>
                   </>
@@ -211,27 +214,27 @@ export function SyncLanPanel({ onSynced }) {
                 {phase === 'auth' && (
                   <>
                     <div style={{ marginBottom:14, fontSize:12, color:'rgba(255,255,255,0.4)' }}>
-                      Máquina: <span style={{ color:Gold }}>{machLabel}</span>
+                      {t('login','machineLabel')} <span style={{ color:Gold }}>{machLabel}</span>
                     </div>
                     <div style={{ display:'flex', gap:8, marginBottom:16 }}>
-                      <button onClick={() => setAuthMode('invite')} style={chipStyle(authMode==='invite')}><Star size={12}/>Código convite</button>
-                      <button onClick={() => setAuthMode('key')} style={chipStyle(authMode==='key')}><Wifi size={12}/>Chave de rede</button>
+                      <button onClick={() => setAuthMode('invite')} style={chipStyle(authMode==='invite')}><Star size={12}/>{t('login','inviteCodeTab')}</button>
+                      <button onClick={() => setAuthMode('key')} style={chipStyle(authMode==='key')}><Wifi size={12}/>{t('login','networkKeyTab')}</button>
                     </div>
                     {authMode === 'invite'
                       ? <>
                           <div style={{ fontSize:11, color:'rgba(255,255,255,0.35)', marginBottom:10, lineHeight:1.7 }}>
-                            Na máquina origem: <span style={{ color:Gold }}>Configurações → Rede → Gerar código convite</span>
+                            {t('login','inviteHintPrefix')} <span style={{ color:Gold }}>{t('login','inviteHintPath')}</span>
                           </div>
-                          <input value={inviteCode} onChange={e=>setInviteCode(e.target.value)} placeholder="Código de 6 dígitos" maxLength={6} style={{ ...inputStyle, fontSize:20, textAlign:'center', letterSpacing:8 }}/>
+                          <input value={inviteCode} onChange={e=>setInviteCode(e.target.value)} placeholder={t('login','inviteCodePlaceholder')} maxLength={6} style={{ ...inputStyle, fontSize:20, textAlign:'center', letterSpacing:8 }}/>
                         </>
-                      : <input value={networkKey} onChange={e=>setNetworkKey(e.target.value)} placeholder="Chave de rede LAN" style={inputStyle}/>
+                      : <input value={networkKey} onChange={e=>setNetworkKey(e.target.value)} placeholder={t('login','networkKeyPlaceholder')} style={inputStyle}/>
                     }
                     <div style={{ display:'flex', gap:10, justifyContent:'space-between' }}>
                       <button onClick={() => { setErr(''); setPhase('scan'); }} style={{ background:'transparent', border:'1px solid rgba(255,255,255,0.1)', borderRadius:8, padding:'9px 16px', color:'rgba(255,255,255,0.4)', fontSize:12, cursor:'pointer', fontFamily:'inherit' }}>
-                        Voltar
+                        {t('login','backBtn')}
                       </button>
                       <button onClick={requestSync} style={{ background:Gold, color:'#0a0a0a', border:'none', borderRadius:8, padding:'9px 20px', fontWeight:700, fontSize:12, cursor:'pointer', fontFamily:'inherit', display:'flex', alignItems:'center', gap:6 }}>
-                        Importar <ChevronRight size={13}/>
+                        {t('login','importBtn')} <ChevronRight size={13}/>
                       </button>
                     </div>
                   </>
@@ -247,10 +250,10 @@ export function SyncLanPanel({ onSynced }) {
                       }
                     </div>
                     <div style={{ fontSize:14, color:'#fff', fontWeight:600, marginBottom:4 }}>
-                      {progress < 100 ? 'A importar dados...' : 'Concluído!'}
+                      {progress < 100 ? t('login','importingData') : t('login','importDone')}
                     </div>
                     <div style={{ fontSize:11, color:'rgba(255,255,255,0.35)', marginBottom:16 }}>
-                      Produtos · Ventes · Utilizadores · Configurações
+                      {t('login','dataTypesList')}
                     </div>
                     <div style={{ height:4, background:'rgba(255,255,255,0.08)', borderRadius:2, overflow:'hidden', marginBottom:8 }}>
                       <motion.div animate={{ width:progress+'%' }} style={{ height:'100%', background:Gold, borderRadius:2 }} transition={{ duration:0.4 }}/>

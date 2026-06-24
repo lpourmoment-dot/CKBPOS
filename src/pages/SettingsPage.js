@@ -1,11 +1,11 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTheme } from '../App';
 import { useLang } from '../utils/useLang';
 import { useAuth } from '../App';
-import { Settings, Cloud, CloudOff, Save, ExternalLink, KeyRound, Download, Trash2, AlertTriangle, MapPin, Phone, Hash, Printer, Plus, Minus, ChevronDown, ChevronRight, Ticket } from 'lucide-react';
+import { Settings, Cloud, CloudOff, Save, ExternalLink, KeyRound, Download, Trash2, AlertTriangle, MapPin, Phone, Hash, Printer, Plus, Minus, ChevronDown, ChevronRight, Ticket, Share2, RefreshCw, CheckCircle, XCircle, Wifi, Users, Database } from 'lucide-react';
 import { useAlert, useConfirm } from '../components/AlertModal';
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Composant accordÃ©on rÃ©utilisable Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// -—€-—€ Composant accordéon réutilisable -—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€-—€
 function Accordion({ id, icon, title, color, openSections, toggleSection, children, defaultOpen=false }) {
   const isOpen = openSections.has(id);
   return (
@@ -42,13 +42,140 @@ function Accordion({ id, icon, title, color, openSections, toggleSection, childr
   );
 }
 
+// -- Composant Partage de Données LAN -------------------------
+function DataSharingSection() {
+  const [peers, setPeers]           = useState([]);
+  const [scanning, setScanning]     = useState(false);
+  const [syncing, setSyncing]       = useState(false);
+  const [syncResults, setSyncResults] = useState([]);
+  const [msg, setMsg]               = useState('');
+  const [requesting, setRequesting] = useState(null);
+
+  const loadPeers = async () => {
+    setScanning(true); setMsg('');
+    try {
+      const [peersRes, idRes] = await Promise.all([
+        window.electron.networkPeersList(),
+        window.electron.getMachineId(),
+      ]);
+      const myId = idRes?.machine_id || '';
+      setPeers((peersRes?.data || []).filter(p => p.machine_id !== myId));
+    } catch(_e) {}
+    setScanning(false);
+  };
+
+  useEffect(() => { loadPeers(); }, []);
+
+  const handleForceSync = async () => {
+    setSyncing(true); setMsg('');
+    try {
+      const res = await window.electron.syncForce();
+      setMsg(res?.success !== false ? '\u2705 Sync LAN lancé' : '┌ Erreur sync');
+    } catch(e) { setMsg('┌ ' + e.message); }
+    setSyncing(false);
+    setTimeout(() => setMsg(''), 4000);
+  };
+
+  const handleRequestSnapshot = async (peer) => {
+    setRequesting(peer.machine_id);
+    setMsg('');
+    try {
+      const nk = await window.electron.getNetworkKey();
+      const res = await window.electron.requestSnapshot({ machine_id: peer.machine_id, network_key: nk?.key || '' });
+      if (res?.success) {
+        setMsg(`\u2705 Demande envoyée à ${peer.machine_label} – attente des données...`);
+      } else {
+        setMsg(`┌ ${res?.error || 'Échec connexion'}`);
+      }
+    } catch(e) { setMsg('┌ ' + e.message); }
+    setRequesting(null);
+    setTimeout(() => setMsg(''), 6000);
+  };
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+      <p style={{ fontSize:12, color:'var(--text-muted)', margin:0 }}>
+        Synchroniser ou importer la base de données complète depuis une autre machine CKBPOS sur le même réseau LAN.
+      </p>
+
+      {/* Machines connectées */}
+      <div>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+          <span style={{ fontSize:12, fontWeight:700, color:'var(--text-secondary)', textTransform:'uppercase', letterSpacing:0.8 }}>
+            Machines détectées
+          </span>
+          <button onClick={loadPeers} disabled={scanning}
+            style={{ background:'none', border:'none', cursor:'pointer', color:'var(--accent)', fontSize:12, display:'flex', alignItems:'center', gap:4, padding:0, fontFamily:'inherit' }}>
+            <RefreshCw size={12} style={{ animation: scanning ? 'spin 1s linear infinite' : 'none' }}/> {scanning ? 'Scan...' : 'Actualiser'}
+          </button>
+        </div>
+
+        {peers.length === 0 ? (
+          <div style={{ padding:'12px 14px', borderRadius:8, background:'var(--bg-hover)', border:'1px solid var(--border)', fontSize:12, color:'var(--text-muted)', textAlign:'center' }}>
+            {scanning ? 'Recherche en cours...' : 'Aucune machine détectée – assurez-vous que les autres machines sont connectées au même réseau'}
+          </div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            {peers.map(peer => (
+              <div key={peer.machine_id} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 14px', borderRadius:8, background:'var(--bg-hover)', border:'1px solid var(--border)' }}>
+                <span style={{ width:8, height:8, borderRadius:'50%', background: peer.status==='online' || peer.actif ? '#22c55e' : '#6b7280', flexShrink:0 }}/>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:13, fontWeight:600 }}>{peer.machine_label || peer.machine_id?.slice(0,8)}</div>
+                  <div style={{ fontSize:10, color:'var(--text-muted)', fontFamily:'monospace' }}>{peer.ip || '–'}</div>
+                </div>
+                <span style={{ fontSize:10, padding:'2px 8px', borderRadius:10,
+                  background: peer.status==='online'||peer.actif ? 'rgba(34,197,94,0.12)' : 'rgba(107,114,128,0.12)',
+                  color: peer.status==='online'||peer.actif ? '#22c55e' : '#6b7280' }}>
+                  {peer.status==='online'||peer.actif ? 'En ligne' : 'Hors ligne'}
+                </span>
+                <button onClick={() => handleRequestSnapshot(peer)} disabled={!!requesting}
+                  style={{ padding:'5px 12px', borderRadius:7, border:'1px solid var(--accent)', background:'rgba(232,197,71,0.08)', color:'var(--accent)', fontSize:11, fontWeight:600, cursor: requesting ? 'not-allowed' : 'pointer', fontFamily:'inherit', whiteSpace:'nowrap', opacity: requesting ? 0.6 : 1 }}>
+                  {requesting===peer.machine_id ? '\u23F3 Import...' : '\u2B07 Importer DB'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Sync LAN */}
+      <div style={{ paddingTop:12, borderTop:'1px solid var(--border)' }}>
+        <div style={{ fontSize:12, fontWeight:700, color:'var(--text-secondary)', textTransform:'uppercase', letterSpacing:0.8, marginBottom:8 }}>
+          Synchronisation delta LAN
+        </div>
+        <p style={{ fontSize:11, color:'var(--text-muted)', margin:'0 0 10px' }}>
+          Envoie les modifications récentes à toutes les machines connectées (ventes, produits, stock, utilisateurs).
+        </p>
+        <button onClick={handleForceSync} disabled={syncing}
+          style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 16px', borderRadius:8,
+            border:'1px solid #22c55e', background:'rgba(34,197,94,0.08)', color:'#22c55e',
+            fontWeight:700, fontSize:12, cursor: syncing ? 'not-allowed' : 'pointer', fontFamily:'inherit', opacity: syncing ? 0.7 : 1 }}>
+          <RefreshCw size={14} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }}/>
+          {syncing ? 'Synchronisation...' : '\u{1F504} Forcer Sync LAN'}
+        </button>
+      </div>
+
+      {msg && (
+        <div style={{ padding:'8px 12px', borderRadius:8, fontSize:12, fontWeight:600,
+          background: msg.includes('\u2705') ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+          color: msg.includes('\u2705') ? '#22c55e' : '#ef4444',
+          border: `1px solid ${msg.includes('\u2705') ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}` }}>
+          {msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { theme, toggleTheme } = useTheme();
   const { t, lang, currency, changeLang, changeCurrency } = useLang();
+  const intlLocale = lang === 'fr' ? 'fr-FR' : lang === 'en' ? 'en-US' : 'pt-BR';
   const { user } = useAuth();
 
   const { showAlert, AlertModalComponent } = useAlert();
   const { showConfirm, ConfirmModalComponent } = useConfirm();
+  const [updateCheckState, setUpdateCheckState] = useState('idle'); // idle | checking | up-to-date | available | error
 
   // Loja
   const [shopName, setShopName]       = useState('');
@@ -63,7 +190,7 @@ export default function SettingsPage() {
   const [connecting, setConnecting] = useState(false);
   const [lastSync, setLastSync] = useState('');
 
-  // â”€â”€ v1.7.0 Supabase Cloud â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- v1.7.0 Supabase Cloud ------------------------------
   const [supaUrl, setSupaUrl]           = useState('');
   const [supaKey, setSupaKey]           = useState('');
   const [supaStatus, setSupaStatus]     = useState({ status: 'disconnected' });
@@ -102,14 +229,14 @@ export default function SettingsPage() {
   const [copiesShift, setCopiesShift]   = useState(1);
   const [ticketSizeMm, setTicketSizeMm] = useState(72);
   const [printerSaved, setPrinterSaved] = useState(false);
-  // â”€â”€ v1.9.1 Impression partagÃ©e â”€â”€
+  // -- v1.9.1 Impression partagée --
   const [printerModeVal, setPrinterModeVal]     = useState('local');
   const [printerMachines, setPrinterMachines]   = useState([]);
   const [printerTargetId, setPrinterTargetId]   = useState('');
   const [printerModeSaved, setPrinterModeSaved] = useState(false);
 
-  // âœ… AccordÃ©ons â€” sections ouvertes par dÃ©faut : Loja + Impressora
-  // â”€â”€ Caderno de Caixa v1.2.7 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // \u2705 Accordéons –" sections ouvertes par défaut : Loja + Impressora
+  // -- Caderno de Caixa v1.2.7 -----------------------------
   const [cMotivos, setCMotivos]     = useState([]);
   const [cTrabalhadores, setCTrab]  = useState([]);
   const [cProdutos, setCProdutos]   = useState([]);
@@ -131,7 +258,7 @@ export default function SettingsPage() {
     });
   };
 
-  // âœ… Personnalisation ticket
+  // \u2705 Personnalisation ticket
   const [ticketFlags, setTicketFlags] = useState({
     showQr:        true,
     showAddress:   true,
@@ -144,7 +271,7 @@ export default function SettingsPage() {
     showObrigado:  true,
     showVersion:   true,
     showSecondaVia: true,
-    showMentionLegal: true, // âœ… Mention lÃ©gale Angola â€” sÃ©parÃ©e de l'adresse
+    showMentionLegal: true, // \u2705 Mention légale Angola –" séparée de l'adresse
   });
   const [ticketFlagsSaved, setTicketFlagsSaved] = useState(false);
 
@@ -153,9 +280,25 @@ export default function SettingsPage() {
     window.electron?.appVersion?.().then(v => {
       if (v) window.__CKBPOS_VERSION__ = v;
     }).catch(() => {});
-    // Abonnement statut cloud en temps rÃ©el
+    // Abonnement statut cloud en temps réel
     const cleanup = window.electron.onCloudStatus?.((data) => setSupaStatus(data));
-    return () => { if (typeof cleanup === 'function') cleanup(); };
+    // Abonnement statut auto-update (feedback bouton "Vérifier les mises à jour")
+    const cleanupUpdate = window.electron.onUpdateStatus?.((data) => {
+      if (!data?.status) return;
+      if (data.status === 'checking') setUpdateCheckState('checking');
+      else if (data.status === 'not-available') {
+        setUpdateCheckState('up-to-date');
+        setTimeout(() => setUpdateCheckState((s) => s === 'up-to-date' ? 'idle' : s), 4000);
+      } else if (data.status === 'available' || data.status === 'downloading' || data.status === 'downloaded') {
+        setUpdateCheckState('available');
+      } else if (data.status === 'error') {
+        setUpdateCheckState('error');
+      }
+    });
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+      if (typeof cleanupUpdate === 'function') cleanupUpdate();
+    };
   }, []);
 
   const loadTicketFlags = async () => {
@@ -174,7 +317,7 @@ export default function SettingsPage() {
     setTimeout(() => setTicketFlagsSaved(false), 2000);
   };
 
-  // â”€â”€ v1.7.0 Supabase â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- v1.7.0 Supabase -------------------------------------
   const loadSupabase = async () => {
     try {
       const [urlRes, keyRes, statusRes] = await Promise.all([
@@ -202,16 +345,16 @@ export default function SettingsPage() {
         const realStatus = res.status || { status: 'connected' };
         setSupaStatus(realStatus);
         if (realStatus.status === 'connected' || realStatus.status === 'synced') {
-          setSupaMsg('âœ… Supabase conectado com sucesso!');
+          setSupaMsg('\u2705 Supabase conectado com sucesso!');
         } else if (realStatus.status === 'error') {
-          setSupaMsg('âŒ Erro: ' + (realStatus.error || 'Falha na conexÃ£o â€” verifica a Anon Key (formato eyJhbGci...)'));
+          setSupaMsg('’ Erro: ' + (realStatus.error || 'Falha na conexão –" verifica a Anon Key (formato eyJhbGci...)'));
         } else {
-          setSupaMsg('â³ Conectando em segundo plano...');
+          setSupaMsg('\u23F3 Conectando em segundo plano...');
         }
       } else {
-        setSupaMsg('âŒ ' + (res?.error || 'Falha na conexÃ£o'));
+        setSupaMsg('’ ' + (res?.error || 'Falha na conexão'));
       }
-    } catch(e) { setSupaMsg('âŒ Erro: ' + e.message); }
+    } catch(e) { setSupaMsg('’ Erro: ' + e.message); }
     setSupaConnecting(false);
   };
 
@@ -301,7 +444,7 @@ export default function SettingsPage() {
     if (pCopT.data?.value !== undefined) setCopiesTicket(parseInt(pCopT.data.value) || 2);
     if (pCopS.data?.value !== undefined) setCopiesShift(parseInt(pCopS.data.value) || 1);
     if (pSize.data?.value !== undefined) setTicketSizeMm(parseInt(pSize.data.value) || 72);
-    // v1.9.1 â€” charger mode impression partagÃ©e
+    // v1.9.1 –" charger mode impression partagée
     try {
       const modeRes = await window.electron.getPrinterMode();
       if (modeRes?.success) {
@@ -363,7 +506,7 @@ export default function SettingsPage() {
   };
 
   const saveSecurity = async () => {
-    if (!question || !resposta) { setSecMsg('âŒ Preencha a pergunta e a resposta'); return; }
+    if (!question || !resposta) { setSecMsg('’ Preencha a pergunta e a resposta'); return; }
     await window.electron.dbQuery(
       "UPDATE users SET question_secreta=?, resposta_secreta=? WHERE id=?",
       [question, resposta.toLowerCase().trim(), user.id]
@@ -376,7 +519,7 @@ export default function SettingsPage() {
   const loadMachineId = async () => {
     const res = await window.electron.getMachineId();
     if (res.success) { setMachineInfo(res); setMachineLabel(res.machine_label || 'Caixa Principal'); }
-    // Charger la clÃ© rÃ©seau LAN
+    // Charger la clé réseau LAN
     const nkRes = await window.electron.getNetworkKey?.();
     if (nkRes?.success) { setNetworkKey(nkRes.key || ''); setNetworkKeyInput(nkRes.key || ''); }
   };
@@ -385,7 +528,7 @@ export default function SettingsPage() {
     setSavingLabel(true);
     await window.electron.setMachineLabel(machineLabel);
     setSavingLabel(false);
-    setMigrateMsg('âœ… Nome da mÃ¡quina salvo!');
+    setMigrateMsg('\u2705 Nome da máquina salvo!');
     setTimeout(() => setMigrateMsg(''), 2000);
   };
 
@@ -393,8 +536,8 @@ export default function SettingsPage() {
     setMigrating(true); setMigrateMsg('');
     try {
       const res = await window.electron.forceMigration();
-      setMigrateMsg(res.success ? 'âœ… ' + res.message : 'âŒ Erro: ' + res.error);
-    } catch(e) { setMigrateMsg('âŒ Erro: ' + e.message); }
+      setMigrateMsg(res.success ? '\u2705 ' + res.message : '’ Erro: ' + res.error);
+    } catch(e) { setMigrateMsg('’ Erro: ' + e.message); }
     finally { setMigrating(false); }
   };
 
@@ -404,34 +547,34 @@ export default function SettingsPage() {
       await window.electron.syncForce();
       await window.electron.cloudPush();
       await window.electron.cloudPull();
-      setSyncMsg('âœ… SincronizaÃ§Ã£o forÃ§ada com sucesso!');
-    } catch(e) { setSyncMsg('âŒ Erro: ' + e.message); }
+      setSyncMsg('\u2705 Sincronização forçada com sucesso!');
+    } catch(e) { setSyncMsg('’ Erro: ' + e.message); }
     finally { setSyncingNow(false); setTimeout(() => setSyncMsg(''), 3000); }
   };
 
   const handleBackupLocal = async () => {
     const res = await window.electron.backupLocal();
-    setMsg(res.success ? `âœ… Backup salvo em: ${res.path}` : 'âŒ Erro no backup: ' + res.error);
+    setMsg(res.success ? `\u2705 Backup salvo em: ${res.path}` : '’ Erro no backup: ' + res.error);
     setTimeout(() => setMsg(''), 5000);
   };
 
   const handleRestoreBackup = async () => {
-    const ok = await showConfirm('âš ï¸ Restaurar Backup', 'Isso substituirÃ¡ TODOS os dados atuais pelo backup selecionado.\nUm backup de seguranÃ§a serÃ¡ criado automaticamente antes.\n\nDeseja continuar?', 'warning');
+    const ok = await showConfirm('\u26A0\uFE0F Restaurar Backup', 'Isso substituirá TODOS os dados atuais pelo backup selecionado.\nUm backup de segurança será criado automaticamente antes.\n\nDeseja continuar?', 'warning');
     if (!ok) return;
     const res = await window.electron.backupRestore();
     if (res.canceled) return;
     if (!res.success) { showAlert('Erro ao restaurar', res.error, 'error'); return; }
-    showAlert('âœ… Backup restaurado!', 'O aplicativo serÃ¡ reiniciado agora...', 'success');
+    showAlert('\u2705 Backup restaurado!', 'O aplicativo será reiniciado agora...', 'success');
   };
 
   const handleBackupDrive = async () => {
     setConnecting(true);
     const res = await window.electron.driveSync();
     if (res.success) {
-      setMsg('âœ… Backup enviado ao Google Drive!');
+      setMsg('\u2705 Backup enviado ao Google Drive!');
       const syncRes = await window.electron.storeGet('last_sync');
       if (syncRes) setLastSync(syncRes);
-    } else { setMsg('âŒ Erro: ' + res.error); }
+    } else { setMsg('’ Erro: ' + res.error); }
     setTimeout(() => setMsg(''), 4000);
     setConnecting(false);
   };
@@ -446,7 +589,7 @@ export default function SettingsPage() {
     setConnecting(true);
     const res = await window.electron.driveAuth();
     if (res.success) { setAuthUrl(res.url); }
-    else { setMsg('âŒ Erreur: ' + res.error); setTimeout(() => setMsg(''), 4000); }
+    else { setMsg('’ Erreur: ' + res.error); setTimeout(() => setMsg(''), 4000); }
     setConnecting(false);
   };
 
@@ -454,8 +597,8 @@ export default function SettingsPage() {
     if (!authCode.trim()) return;
     setConnecting(true);
     const res = await window.electron.driveToken(authCode.trim());
-    if (res.success) { setDriveConnected(true); setAuthUrl(''); setAuthCode(''); setMsg('âœ… Google Drive conectado!'); }
-    else { setMsg('âŒ CÃ³digo invÃ¡lido: ' + res.error); }
+    if (res.success) { setDriveConnected(true); setAuthUrl(''); setAuthCode(''); setMsg('\u2705 Google Drive conectado!'); }
+    else { setMsg('’ Código inválido: ' + res.error); }
     setTimeout(() => setMsg(''), 4000);
     setConnecting(false);
   };
@@ -464,23 +607,23 @@ export default function SettingsPage() {
     await window.electron.storeDelete('google_token');
     await window.electron.storeDelete('drive_connected');
     setDriveConnected(false); setAuthUrl(''); setAuthCode('');
-    setMsg('âœ… Google Drive dÃ©connectÃ©.');
+    setMsg('\u2705 Google Drive déconnecté.');
     setTimeout(() => setMsg(''), 3000);
   };
 
   const currencies = ['AOA','CDF','XAF','XOF','MZN','NGN','GHS','KES','ZAR','TZS','UGX','RWF','ETB','USD','EUR','GBP'];
   const languages  = ['pt-BR','fr','en'];
-  const langLabels = { 'pt-BR':'ðŸ‡§ðŸ‡· PortuguÃªs', 'fr':'ðŸ‡«ðŸ‡· FranÃ§ais', 'en':'ðŸ‡¬ðŸ‡§ English' };
+  const langLabels = { 'pt-BR':'\u{1F1E7}\u{1F1F7} Português', 'fr':'\u{1F1EB}\u{1F1F7} Français', 'en':'\u{1F1EC}\u{1F1E7} English' };
   const predefinedQuestions = [
-    'Qual Ã© o nome do seu primeiro animal de estimaÃ§Ã£o?',
-    'Qual Ã© o nome da cidade onde vocÃª nasceu?',
-    'Qual Ã© o nome da sua escola primÃ¡ria?',
-    'Qual Ã© o nome do seu melhor amigo de infÃ¢ncia?',
-    'Qual Ã© o apelido da sua mÃ£e?',
+    'Qual é o nome do seu primeiro animal de estimação?',
+    'Qual é o nome da cidade onde você nasceu?',
+    'Qual é o nome da sua escola primária?',
+    'Qual é o nome do seu melhor amigo de infância?',
+    'Qual é o apelido da sua mãe?',
     'Qual era o modelo do seu primeiro carro?',
   ];
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Composant toggle ticket Ã¢â€â‚¬Ã¢â€â‚¬
+  // -—€-—€ Composant toggle ticket -—€-—€
   const TicketToggle = ({ flag, label, icon }) => (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid var(--border)' }}>
       <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:13 }}>
@@ -505,6 +648,7 @@ export default function SettingsPage() {
 
   return (
     <div style={{ padding:24, height:'100%', overflowY:'auto', maxWidth:700 }}>
+      <style>{'@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}'}</style>
       <div style={{ marginBottom:20 }}>
         <h1 style={{ fontSize:22, fontWeight:700, display:'flex', alignItems:'center', gap:10 }}>
           <Settings size={22} color="var(--accent)"/> {t('settings','pageTitle')}
@@ -513,15 +657,15 @@ export default function SettingsPage() {
 
       {msg && (
         <div style={{ padding:'12px 16px', borderRadius:10, marginBottom:16, fontSize:14,
-          background:msg.includes('âœ…')?'rgba(34,197,94,0.1)':'rgba(239,68,68,0.1)',
-          border:`1px solid ${msg.includes('âœ…')?'rgba(34,197,94,0.3)':'rgba(239,68,68,0.3)'}`,
-          color:msg.includes('âœ…')?'var(--success)':'var(--danger)' }}>
+          background:msg.includes('\u2705')?'rgba(34,197,94,0.1)':'rgba(239,68,68,0.1)',
+          border:`1px solid ${msg.includes('\u2705')?'rgba(34,197,94,0.3)':'rgba(239,68,68,0.3)'}`,
+          color:msg.includes('\u2705')?'var(--success)':'var(--danger)' }}>
           {msg}
         </div>
       )}
 
       {/* ===== APPARENCE ===== */}
-      <Accordion id="aparencia" icon={<span>ðŸŽ¨</span>} title={t('settings','accAppearance')} openSections={openSections} toggleSection={toggleSection}>
+      <Accordion id="aparencia" icon={<span>{'\u{1F3A8}'}</span>} title={t('settings','accAppearance')} openSections={openSections} toggleSection={toggleSection}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
           <div>
             <div style={{ fontWeight:600, fontSize:14 }}>{t('settings','themeLabel')}</div>
@@ -550,7 +694,7 @@ export default function SettingsPage() {
       </Accordion>
 
       {/* ===== LOJA ===== */}
-      <Accordion id="loja" icon={<span>ðŸª</span>} title={t('settings','accShop')} openSections={openSections} toggleSection={toggleSection}>
+      <Accordion id="loja" icon={<span>{'\u{1F3EA}'}</span>} title={t('settings','accShop')} openSections={openSections} toggleSection={toggleSection}>
         <p style={{ fontSize:12, color:'var(--text-muted)', marginBottom:14 }}>
           {t('settings','ticketSubtitle')}
         </p>
@@ -582,44 +726,44 @@ export default function SettingsPage() {
       {/* ===== TICKET ===== */}
       <Accordion id="ticket" icon={<Ticket size={16}/>} title={t('settings','accTicket')} openSections={openSections} toggleSection={toggleSection}>
         <p style={{ fontSize:12, color:'var(--text-muted)', marginBottom:14 }}>
-          Choisissez ce qui s'affiche sur chaque ticket imprimÃ©.
+          Choisissez ce qui s'affiche sur chaque ticket imprimé.
         </p>
         <TicketToggle flag="showQr"           {...{label: t('settings','ticketQr')}}                     icon="QR"/>
-        <TicketToggle flag="showAddress"      {...{label: t('settings','ticketAddress')}}           icon="ðŸ“"/>
-        <TicketToggle flag="showPhone"        {...{label: t('settings','ticketPhone')}}         icon="ðŸ“ž"/>
+        <TicketToggle flag="showAddress"      {...{label: t('settings','ticketAddress')}}           icon="\u{1F50D}"/>
+        <TicketToggle flag="showPhone"        {...{label: t('settings','ticketPhone')}}         icon="\u{1F4DE}"/>
         <TicketToggle flag="showNif"          {...{label: t('settings','ticketNif')}}           icon="NIF"/>
-        <TicketToggle flag="showFactureNum"   {...{label: t('settings','ticketFacture')}}            icon="ðŸ”¢"/>
-        <TicketToggle flag="showClientNom"    {...{label: t('settings','ticketClientNom')}}                icon="ðŸ‘¤"/>
+        <TicketToggle flag="showFactureNum"   {...{label: t('settings','ticketFacture')}}            icon="\u{1F4E2}"/>
+        <TicketToggle flag="showClientNom"    {...{label: t('settings','ticketClientNom')}}                icon="\u{1F464}"/>
         <TicketToggle flag="showClientNif"    {...{label: t('settings','ticketClientNif')}}                icon="ID"/>
-        <TicketToggle flag="showSeller"       {...{label: t('settings','ticketSeller')}}               icon="ðŸ‘¤"/>
-        <TicketToggle flag="showMentionLegal" {...{label: t('settings','ticketLegal')}} icon="ðŸ“‹"/>
-        <TicketToggle flag="showObrigado"     label={t('settings','ticketObrigado')}   icon="ðŸ™Œ"/>
+        <TicketToggle flag="showSeller"       {...{label: t('settings','ticketSeller')}}               icon="\u{1F464}"/>
+        <TicketToggle flag="showMentionLegal" {...{label: t('settings','ticketLegal')}} icon="\u{1F4CB}"/>
+        <TicketToggle flag="showObrigado"     label={t('settings','ticketObrigado')}   icon="\u{1F64C}"/>
         <TicketToggle flag="showVersion"      {...{label: t('settings','ticketVersion')}}               icon="v"/>
-        <TicketToggle flag="showSecondaVia"   {...{label: t('settings','ticketSecondVia')}}      icon="ðŸ“„"/>
+        <TicketToggle flag="showSecondaVia"   {...{label: t('settings','ticketSecondVia')}}      icon="\u{1F504}"/>
         <div style={{ marginTop:16 }}>
           <button onClick={saveTicketFlags} className="btn btn-primary">
-            <Save size={14}/> {ticketFlagsSaved ? 'âœ… ' + t('settings','saved2') : t('settings','saveConfig')}
+            <Save size={14}/> {ticketFlagsSaved ? '\u2705 ' + t('settings','saved2') : t('settings','saveConfig')}
           </button>
         </div>
       </Accordion>
 
-      {/* ===== SEGURANÃ‡A ===== */}
+      {/* ===== SEGURANÇA ===== */}
       <Accordion id="seguranca" icon={<KeyRound size={16}/>} title={t('settings','accSecurity')} openSections={openSections} toggleSection={toggleSection}>
         <p style={{ fontSize:12, color:'var(--text-muted)', marginBottom:14 }}>
-          Configure uma pergunta secreta para recuperar sua senha caso esqueÃ§a.
+          {t('settings','secIntro')}
         </p>
         <div className="form-group" style={{ marginBottom:12 }}>
-          <label className="form-label">Pergunta de SeguranÃ§a</label>
+          <label className="form-label">{t('settings','secQuestionLabel')}</label>
           <select className="form-input" value={question} onChange={e=>setQuestion(e.target.value)}>
             <option value="">{t('settings','secSelect')}</option>
             {predefinedQuestions.map((q,i) => <option key={i} value={q}>{q}</option>)}
           </select>
         </div>
         <div className="form-group" style={{ marginBottom:12 }}>
-          <label className="form-label">Resposta</label>
+          <label className="form-label">{t('settings','secAnswerLabel')}</label>
           <input type="password" className="form-input" value={resposta} onChange={e=>setResposta(e.target.value)} {...{placeholder: t('settings','secAnswerPh')}}/>
         </div>
-        {secMsg && <div style={{ fontSize:12, color:secMsg.includes('âœ…')?'var(--success)':'var(--danger)', marginBottom:8 }}>{secMsg}</div>}
+        {secMsg && <div style={{ fontSize:12, color:secMsg.includes('\u2705')?'var(--success)':'var(--danger)', marginBottom:8 }}>{secMsg}</div>}
         <button onClick={saveSecurity} className="btn btn-primary"><Save size={14}/> {t('settings','secSaveBtn')}</button>
       </Accordion>
 
@@ -630,7 +774,7 @@ export default function SettingsPage() {
             <Save size={14}/> {t('settings','backupLocal')}
           </button>
           <button onClick={handleRestoreBackup} className="btn" style={{ justifyContent:'flex-start', gap:8, background:'rgba(245,200,66,0.1)', border:'1px solid var(--accent)', color:'var(--accent)' }}>
-            <Download size={14}/> ðŸ“¥ {t('settings','backupRestore')}
+            <Download size={14}/>  {t('settings','backupRestore')}
           </button>
         </div>
       </Accordion>
@@ -642,7 +786,7 @@ export default function SettingsPage() {
           <span style={{ fontSize:13, fontWeight:600, color:driveConnected?'var(--success)':'var(--text-muted)' }}>
             {driveConnected ? t('settings','connected') : t('settings','notConnected')}
           </span>
-          {lastSync && <span style={{ fontSize:11, color:'var(--text-muted)' }}>Â· {t('settings','lastSync')} {lastSync}</span>}
+          {lastSync && <span style={{ fontSize:11, color:'var(--text-muted)' }}>· {t('settings','lastSync')} {lastSync}</span>}
         </div>
         {driveConnected ? (
           <div style={{ display:'flex', gap:10 }}>
@@ -662,13 +806,13 @@ export default function SettingsPage() {
             ) : (
               <>
                 <div style={{ fontSize:12, color:'var(--success)', padding:'8px 12px', background:'rgba(34,197,94,0.1)', borderRadius:8 }}>
-                  âœ… Page Google ouverte. Autorisez puis copiez le code ici.
+                  {'\u2705'} Page Google ouverte. Autorisez puis copiez le code ici.
                 </div>
                 <button onClick={() => window.open(authUrl,'_blank')} className="btn btn-secondary" style={{ gap:8 }}>
                   <ExternalLink size={14}/> {t('settings','driveReopen')}
                 </button>
                 <div style={{ display:'flex', gap:8 }}>
-                  <input type="text" className="form-input" value={authCode} onChange={e=>setAuthCode(e.target.value)} placeholder="Cole o cÃ³digo aqui..."/>
+                  <input type="text" className="form-input" value={authCode} onChange={e=>setAuthCode(e.target.value)} placeholder="Cole o código aqui..."/>
                   <button onClick={submitCode} className="btn btn-primary" disabled={connecting || !authCode.trim()}>
                     {connecting ? '...' : 'OK'}
                   </button>
@@ -696,22 +840,22 @@ export default function SettingsPage() {
             supaStatus.status==='connecting'   ? '#60a5fa' :
             supaStatus.status==='error'        ? 'var(--danger)' : 'var(--text-muted)'
           }}>
-          {supaStatus.status==='connected'  ? 'âœ… Conectado' :
-             supaStatus.status==='syncing'    ? 'â³ Sincronizando...' :
-             supaStatus.status==='connecting' ? 'â³ Conectando...' :
-             supaStatus.status==='error'      ? ('âŒ Erro: ' + (supaStatus.error||'')) :
-             'NÃ£o configurado'}
+          {supaStatus.status==='connected'  ? '\u2705 Conectado' :
+             supaStatus.status==='syncing'    ? '\u23F3 Sincronizando...' :
+             supaStatus.status==='connecting' ? '\u23F3 Conectando...' :
+             supaStatus.status==='error'      ? ('’ Erro: ' + (supaStatus.error||'')) :
+             'Não configurado'}
           </span>
           {supaStatus.lastSync && (
             <span style={{ fontSize:11, color:'var(--text-muted)' }}>
-              Â· Ãºltimo sync: {new Date(supaStatus.lastSync).toLocaleTimeString('fr-FR')}
+              · último sync: {new Date(supaStatus.lastSync).toLocaleTimeString(intlLocale)}
             </span>
           )}
         </div>
 
         {/* Project URL */}
         <div style={{ marginBottom:10 }}>
-          <label className="form-label">Project URL</label>
+          <label className="form-label">{t('settings','supaUrlLabel')}</label>
           <input type="text" className="form-input" value={supaUrl}
             onChange={e => setSupaUrl(e.target.value)}
             placeholder="https://xxxxxxxxxx.supabase.co"
@@ -721,7 +865,7 @@ export default function SettingsPage() {
 
         {/* Anon Key */}
         <div style={{ marginBottom:14 }}>
-          <label className="form-label">Anon Key (public)</label>
+          <label className="form-label">{t('settings','supaKeyLabel')}</label>
           <input type="password" className="form-input" value={supaKey}
             onChange={e => setSupaKey(e.target.value)}
             placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
@@ -741,10 +885,10 @@ export default function SettingsPage() {
           ) : (
             <>
               <button onClick={handleSupaPush} className="btn btn-primary" style={{ flex:1, justifyContent:'center' }}>
-                {'â¬†'} Push agora
+                {'\u2B06'} Push agora
               </button>
               <button onClick={handleSupaPull} className="btn btn-secondary" style={{ justifyContent:'center' }}>
-                {'â¬‡'} Pull
+                {'\u2B07'} Pull
               </button>
               <button onClick={handleSupabaseDisconnect} className="btn btn-secondary">
                 <CloudOff size={14}/> Desconectar
@@ -764,10 +908,10 @@ export default function SettingsPage() {
 
         {/* Info migration SQL */}
         <div style={{ fontSize:11, color:'var(--text-muted)', lineHeight:1.8, background:'var(--bg-hover)', padding:'10px 12px', borderRadius:6, marginTop:6 }}>
-          <div style={{ fontWeight:700, marginBottom:4, color:'var(--text-secondary)' }}>ðŸ“ Setup requis sur supabase.com</div>
-          <div>1. CrÃ©er un projet sur <strong>supabase.com</strong></div>
-          <div>2. Project Settings â†’ API â†’ copier URL + anon key</div>
-          <div>3. Onglet SQL Editor â†’ exÃ©cuter :</div>
+          <div style={{ fontWeight:700, marginBottom:4, color:'var(--text-secondary)' }}> Setup requis sur supabase.com</div>
+          <div>1. Créer un projet sur <strong>supabase.com</strong></div>
+          <div>2. Project Settings {'\u2192'} API {'\u2192'} copier URL + anon key</div>
+          <div>3. Onglet SQL Editor {'\u2192'} exécuter :</div>
           <pre style={{ fontSize:10, background:'#111', padding:'6px 8px', borderRadius:4, marginTop:6, overflowX:'auto', color:'#22c55e' }}>{`CREATE TABLE cloud_sync_log (
   id                BIGSERIAL PRIMARY KEY,
   source_machine_id TEXT NOT NULL,
@@ -785,6 +929,11 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
       </Accordion>
 
       {/* ===== IMPRESSORA ===== */}
+      {/* -- Partage de données LAN -- */}
+      <Accordion id="partage" icon={<Share2 size={16}/>} title="Partage de Données LAN" color="#a78bfa" openSections={openSections} toggleSection={toggleSection}>
+        <DataSharingSection />
+      </Accordion>
+
       <Accordion id="impressora" icon={<Printer size={16}/>} title={t('settings','accPrinter')} openSections={openSections} toggleSection={toggleSection}>
         <div style={{ marginBottom:14 }}>
           <label className="form-label">{t('settings','printerLabel')}</label>
@@ -801,15 +950,15 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
           </p>
         </div>
         <div style={{ marginBottom:14 }}>
-          <label className="form-label">Largeur ticket thermique</label>
+          <label className="form-label">{t('settings','ticketWidthLabel')}</label>
           <select className="form-input" value={ticketSizeMm} onChange={e=>setTicketSizeMm(parseInt(e.target.value))}>
             <option value={52}>52mm</option>
             <option value={60}>60mm</option>
-            <option value={72}>72mm â€” POS-80C (actuel)</option>
+            <option value={72}>72mm –" POS-80C (actuel)</option>
             <option value={80}>80mm</option>
           </select>
           <p style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>
-            Adapte la largeur du ticket Ã  votre imprimante thermique. Actuel : {ticketSizeMm}mm.
+            Adapte la largeur du ticket   votre imprimante thermique. Actuel : {ticketSizeMm}mm.
           </p>
         </div>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
@@ -833,13 +982,13 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
           </div>
         </div>
         <button onClick={savePrinterSettings} className="btn btn-primary">
-          <Save size={14}/> {printerSaved ? 'âœ… ' + t('settings','saved2') : t('settings','printerSave')}
+          <Save size={14}/> {printerSaved ? '\u2705 ' + t('settings','saved2') : t('settings','printerSave')}
         </button>
 
-        {/* â”€â”€ v1.9.1 Impression partagÃ©e â”€â”€ */}
+        {/* -- v1.9.1 Impression partagée -- */}
         <div style={{ marginTop:20, paddingTop:16, borderTop:'1px solid var(--border)' }}>
           <label className="form-label" style={{ fontSize:13, fontWeight:700, marginBottom:10, display:'block' }}>
-            ðŸ–¨ï¸ Modo de ImpressÃ£o Partilhada
+             Modo de Impressão Partilhada
           </label>
           <div style={{ display:'flex', gap:10, marginBottom:12 }}>
             <button
@@ -847,74 +996,74 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
               className={'btn ' + (printerModeVal === 'local' ? 'btn-primary' : 'btn-secondary')}
               style={{ flex:1 }}
             >
-              Local (esta mÃ¡quina)
+              Local (esta máquina)
             </button>
             <button
               onClick={() => { setPrinterModeVal('shared'); window.electron.getPrinterMachines().then(r => { if (r?.success) setPrinterMachines(r.data||[]); }); }}
               className={'btn ' + (printerModeVal === 'shared' ? 'btn-primary' : 'btn-secondary')}
               style={{ flex:1 }}
             >
-              Partilhada (outra mÃ¡quina)
+              Partilhada (outra máquina)
             </button>
           </div>
           {printerModeVal === 'shared' && (
             <div style={{ marginBottom:12 }}>
-              <label className="form-label" style={{ fontSize:12 }}>MÃ¡quina com a impressora</label>
+              <label className="form-label" style={{ fontSize:12 }}>{t('settings','printerMachineLabel')}</label>
               <select
                 className="form-input"
                 value={printerTargetId}
                 onChange={e => setPrinterTargetId(e.target.value)}
               >
-                <option value="">Selecionar mÃ¡quina...</option>
+                <option value="">{t('settings','selectMachinePh')}</option>
                 {printerMachines.filter(m => !m.isLocal).map(m => (
                   <option key={m.machine_id} value={m.machine_id} disabled={m.status === 'offline'}>
-                    {m.status === 'online' ? 'ðŸŸ¢ ' : 'ðŸ”´ '}{m.machine_label || m.machine_id.slice(0,8)}
+                    {m.status === 'online' ? ' ' : ' '}{m.machine_label || m.machine_id.slice(0,8)}
                     {m.status === 'offline' ? ' (offline)' : ''}
                   </option>
                 ))}
               </select>
               <p style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>
-                Os jobs de impressÃ£o serÃ£o enviados via LAN para esta mÃ¡quina. Se ficar offline, o fallback Ã© local.
+                Os jobs de impressão serão enviados via LAN para esta máquina. Se ficar offline, o fallback é local.
               </p>
             </div>
           )}
           <button onClick={savePrinterMode} className="btn btn-primary" disabled={printerModeVal === 'shared' && !printerTargetId}>
-            <Save size={14}/> {printerModeSaved ? 'âœ… Guardado!' : 'Guardar modo de impressÃ£o'}
+            <Save size={14}/> {printerModeSaved ? '\u2705 Guardado!' : 'Guardar modo de impressão'}
           </button>
         </div>
       </Accordion>
 
-      {/* ===== MANUTENÃ‡ÃƒO ===== */}
-      <Accordion id="manutencao" icon={<span>ðŸ”§</span>} title={t('settings','accMaint')} color="#60a5fa" openSections={openSections} toggleSection={toggleSection}>
+      {/* ===== MANUTENÇãO ===== */}
+      <Accordion id="manutencao" icon={<span>{'\u{1F527}'}</span>} title={t('settings','accMaint')} color="#60a5fa" openSections={openSections} toggleSection={toggleSection}>
         <p style={{ fontSize:13, color:'var(--text-muted)', marginBottom:14 }}>
-          Se o aplicativo apresentar erros como <strong>"no such table"</strong> ou <strong>"no column named"</strong>, clique aqui para aplicar todas as atualizaÃ§Ãµes do banco de dados sem perder dados existentes.
+          Se o aplicativo apresentar erros como <strong>"no such table"</strong> ou <strong>"no column named"</strong>, clique aqui para aplicar todas as atualizações do banco de dados sem perder dados existentes.
         </p>
         <button onClick={handleForceMigration} disabled={migrating} className="btn btn-secondary" style={{ gap:8 }}>
-          ðŸ”§ {migrating ? t('settings','saving') : t('settings','migrateBtn')}
+           {migrating ? t('settings','saving') : t('settings','migrateBtn')}
         </button>
         {migrateMsg && (
-          <div style={{ marginTop:10, fontSize:12, color:migrateMsg.includes('âœ…')?'var(--success)':'var(--danger)' }}>
+          <div style={{ marginTop:10, fontSize:12, color:migrateMsg.includes('\u2705')?'var(--success)':'var(--danger)' }}>
             {migrateMsg}
           </div>
         )}
 
-        {/* â”€â”€ v1.8.1 ForÃ§ar Sync LAN + Cloud â”€â”€ */}
+        {/* -- v1.8.1 Forçar Sync LAN + Cloud -- */}
         <button onClick={handleForceSync} disabled={syncingNow}
           style={{ marginTop:12, display:'flex', alignItems:'center', gap:8,
             padding:'8px 16px', borderRadius:8, border:'1px solid #22c55e',
             background:'rgba(34,197,94,0.1)', color:'#22c55e',
             fontWeight:700, fontSize:13, cursor:'pointer', fontFamily:'inherit' }}>
-          ðŸ”„ {syncingNow ? 'Sincronizando...' : 'ForÃ§ar Sync (LAN + Cloud)'}
+           {syncingNow ? 'Sincronizando...' : 'Forçar Sync (LAN + Cloud)'}
         </button>
         {syncMsg && (
-          <div style={{ marginTop:8, fontSize:12, color:syncMsg.includes('âœ…')?'var(--success)':'var(--danger)' }}>
+          <div style={{ marginTop:8, fontSize:12, color:syncMsg.includes('\u2705')?'var(--success)':'var(--danger)' }}>
             {syncMsg}
           </div>
         )}
         {machineInfo && (
           <div style={{ marginTop:16, borderTop:'1px solid var(--border)', paddingTop:14 }}>
             <div style={{ fontWeight:600, fontSize:13, marginBottom:8, color:'var(--text-secondary)', display:'flex', alignItems:'center', gap:8 }}>
-              ðŸ–¥ï¸ {t('settings','machineLabel2')}
+               {t('settings','machineLabel2')}
               <span style={{ padding:'2px 8px', borderRadius:10, background:'rgba(240,192,64,0.15)', color:'var(--accent)', fontSize:10, fontWeight:700 }}>
                 ID: {machineInfo.short_id}
               </span>
@@ -932,31 +1081,31 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
               </button>
             </div>
             <div style={{ marginTop:6, fontSize:11, color:'var(--text-muted)' }}>
-              â„¹ï¸ {t('settings','machineIDNote')}
+              ℹ{'\uFE0F'} {t('settings','machineIDNote')}
             </div>
 
-            {/* â”€â”€ v1.8.0 ClÃ© rÃ©seau LAN â”€â”€ */}
+            {/* -- v1.8.0 Clé réseau LAN -- */}
             <div style={{ marginTop:18, paddingTop:14, borderTop:'1px solid var(--border)' }}>
               <div style={{ fontWeight:600, fontSize:13, marginBottom:8, color:'var(--text-secondary)', display:'flex', alignItems:'center', gap:8 }}>
-                ðŸ”‘ ClÃ© rÃ©seau LAN
+                 Clé réseau LAN
                 <span style={{ padding:'2px 8px', borderRadius:10, background:'rgba(34,197,94,0.12)', color:'#22c55e', fontSize:10, fontWeight:700 }}>
                   v1.8.0
                 </span>
               </div>
 
-              {/* ClÃ© actuelle */}
+              {/* Clé actuelle */}
               <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
                 <div style={{ flex:1, padding:'7px 12px', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', fontFamily:'monospace', fontSize:14, fontWeight:700, color:'var(--accent)', letterSpacing:2 }}>
-                  {networkKey || 'â€”'}
+                  {networkKey || '–"'}
                 </div>
                 <button
-                  onClick={() => { navigator.clipboard.writeText(networkKey); setNetKeyMsg('âœ… CopiÃ©e !'); setTimeout(() => setNetKeyMsg(''), 2000); }}
+                  onClick={() => { navigator.clipboard.writeText(networkKey); setNetKeyMsg('\u2705 Copiée !'); setTimeout(() => setNetKeyMsg(''), 2000); }}
                   style={{ padding:'7px 12px', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', color:'var(--text-secondary)', fontSize:12, cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap' }}>
-                  ðŸ“‹ Copier
+                   Copier
                 </button>
               </div>
 
-              {/* Changer la clÃ© */}
+              {/* Changer la clé */}
               <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:6 }}>
                 <input
                   type="text"
@@ -972,8 +1121,8 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
                     const res = await window.electron.setNetworkKey?.(networkKeyInput.trim());
                     if (res?.success) {
                       setNetworkKey(networkKeyInput.trim());
-                      setNetKeyMsg('âœ… ClÃ© enregistrÃ©e â€” redÃ©marre pour appliquer');
-                    } else { setNetKeyMsg('âŒ Erreur'); }
+                      setNetKeyMsg('\u2705 Clé enregistrée –" redémarre pour appliquer');
+                    } else { setNetKeyMsg('’ Erreur'); }
                     setSavingNetKey(false);
                   }}
                   style={{ padding:'6px 14px', borderRadius:8, border:'1px solid var(--accent)', background:'rgba(240,192,64,0.1)', color:'var(--accent)', fontWeight:700, fontSize:12, cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap' }}>
@@ -981,21 +1130,21 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
                 </button>
               </div>
 
-              {netKeyMsg && <div style={{ fontSize:11, color: netKeyMsg.startsWith('âœ…') ? 'var(--success)' : 'var(--danger)', marginBottom:6 }}>{netKeyMsg}</div>}
+              {netKeyMsg && <div style={{ fontSize:11, color: netKeyMsg.startsWith('\u2705') ? 'var(--success)' : 'var(--danger)', marginBottom:6 }}>{netKeyMsg}</div>}
 
               <div style={{ fontSize:11, color:'var(--text-muted)', lineHeight:1.7, background:'var(--bg-hover)', padding:'8px 12px', borderRadius:6 }}>
-                ðŸª <strong>Mesmo chave em todas as mÃ¡quinas do mesmo comÃ©rcio.</strong><br/>
-                MÃ¡quinas com chaves diferentes ignoram-se mutuellement â€” mesmo que estejam no mesmo WiFi.
+                 <strong>{t('settings','sameNetKeyNote')}</strong><br/>
+                {t('settings','diffNetKeyNote')}
               </div>
 
-              {/* â”€â”€ v3.4 CÃ³digo de convite â”€â”€ */}
+              {/* -- v3.4 Código de convite -- */}
               <div style={{ marginTop:16, paddingTop:14, borderTop:'1px solid var(--border)' }}>
                 <div style={{ fontWeight:600, fontSize:13, marginBottom:6, color:'var(--text-secondary)', display:'flex', alignItems:'center', gap:8 }}>
-                  â­ CÃ³digo de Convite
+                  {'\u2B50'} Código de Convite
                   <span style={{ padding:'2px 8px', borderRadius:10, background:'rgba(99,179,237,0.12)', color:'#63b3ed', fontSize:10, fontWeight:700 }}>v3.4</span>
                 </div>
                 <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:10, lineHeight:1.6 }}>
-                  Gera um cÃ³digo temporÃ¡rio (5 min) para uma nova mÃ¡quina se juntar Ã  rede sem partilhar a chave LAN em voz alta.
+                  Gera um código temporário (5 min) para uma nova máquina se juntar   rede sem partilhar a chave LAN em voz alta.
                 </div>
                 {inviteCode ? (
                   <div>
@@ -1004,11 +1153,11 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
                         {inviteCode}
                       </div>
                       <button onClick={() => { navigator.clipboard.writeText(inviteCode); }} style={{ padding:'10px 14px', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', color:'var(--text-secondary)', cursor:'pointer', fontFamily:'inherit', fontSize:12 }}>
-                        ðŸ“‹
+                        {'\u{1F4CB}'} Copiar
                       </button>
                     </div>
                     <div style={{ fontSize:11, color:'var(--text-muted)', textAlign:'center' }}>
-                      â± Expira em 5 minutos Â· Uso Ãºnico
+                      {'\u23F3'} Expira em 5 minutos · Uso único
                     </div>
                     <button onClick={() => setInviteCode('')} style={{ width:'100%', marginTop:8, padding:'7px', borderRadius:8, border:'1px solid var(--border)', background:'transparent', color:'var(--text-muted)', fontSize:11, cursor:'pointer', fontFamily:'inherit' }}>
                       Fechar
@@ -1025,7 +1174,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
                     }}
                     style={{ width:'100%', padding:'9px', borderRadius:8, border:'1px solid var(--accent)', background:'rgba(232,197,71,0.08)', color:'var(--accent)', fontWeight:700, fontSize:13, cursor:'pointer', fontFamily:'inherit', display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}
                   >
-                    â­ Gerar cÃ³digo de convite
+                    {'\u2B50'} Gerar código de convite
                   </button>
                 )}
               </div>
@@ -1035,12 +1184,12 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
       </Accordion>
 
       {/* ===== CADERNO DE CAIXA ===== */}
-      <Accordion id="caderno" icon={<span>ðŸ““</span>} title={t('settings','accCaderno')} color="#e8c547" openSections={openSections} toggleSection={toggleSection}>
+      <Accordion id="caderno" icon={<span>{'\u{1F4D3}'}</span>} title={t('settings','accCaderno')} color="#e8c547" openSections={openSections} toggleSection={toggleSection}>
 
-        {/* â”€â”€ Motivos â”€â”€ */}
+        {/* -- Motivos -- */}
         <div style={{ marginBottom:20 }}>
           <div style={{ fontWeight:700, fontSize:13, marginBottom:12, color:'var(--accent)', display:'flex', alignItems:'center', gap:6 }}>
-            ðŸ· Motivos
+             Motivos
           </div>
 
           {/* Lista de motivos */}
@@ -1052,17 +1201,17 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
                 <span style={{ fontSize:11, padding:'2px 8px', borderRadius:4,
                   background: m.direction==='entree'?'rgba(76,175,125,0.12)':m.direction==='perte'?'rgba(245,158,11,0.12)':'rgba(224,82,82,0.12)',
                   color: m.direction==='entree'?'var(--success)':m.direction==='perte'?'var(--warning)':'var(--danger)' }}>
-                  {m.direction==='entree'?'â–² Entra':m.direction==='perte'?'âš  Perde':'â–¼ Sai'}
+                  {m.direction==='entree'?t('settings','directionIn'):m.direction==='perte'?t('settings','directionLoss'):t('settings','directionOut')}
                 </span>
-                {m.est_dette ? <span style={{ fontSize:10, padding:'2px 7px', borderRadius:4, background:'rgba(224,82,82,0.1)', color:'var(--danger)', border:'1px solid rgba(224,82,82,0.2)' }}>DÃ­vida</span> : null}
+                {m.est_dette ? <span style={{ fontSize:10, padding:'2px 7px', borderRadius:4, background:'rgba(224,82,82,0.1)', color:'var(--danger)', border:'1px solid rgba(224,82,82,0.2)' }}>{t('settings','debtBadge')}</span> : null}
                 <span style={{ fontSize:10, color:'var(--text-muted)', background:'var(--bg-hover)', border:'1px solid var(--border)', borderRadius:4, padding:'2px 7px' }}>{m.role}</span>
                 <button onClick={() => handleDeleteMotivo(m.id)}
-                  style={{ background:'rgba(224,82,82,0.08)', color:'var(--danger)', border:'1px solid transparent', padding:'4px 8px', borderRadius:6, cursor:'pointer', fontSize:12 }}>ðŸ—‘</button>
+                  style={{ background:'rgba(224,82,82,0.08)', color:'var(--danger)', border:'1px solid transparent', padding:'4px 8px', borderRadius:6, cursor:'pointer', fontSize:12 }}>{'\u{1F5D1}'}{'\uFE0F'}</button>
               </div>
             ))}
           </div>
 
-          {/* Ajouter un motivo â€” v3.4 redesign */}
+          {/* Ajouter un motivo –" v3.4 redesign */}
           <div style={{ background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:10, padding:16 }}>
             <div style={{ fontSize:12, color:'var(--accent)', marginBottom:14, fontWeight:700, textTransform:'uppercase', letterSpacing:1, display:'flex', alignItems:'center', gap:6 }}>
               + Novo Motivo
@@ -1070,7 +1219,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
             <div style={{ marginBottom:12 }}>
               <div style={{ fontSize:10, color:'var(--text-muted)', marginBottom:6, textTransform:'uppercase', letterSpacing:1 }}>{t('settings','cadernoIcon')}</div>
               <div style={{ display:'flex', flexWrap:'wrap', gap:4, padding:'8px', background:'var(--bg)', border:'1px solid var(--border)', borderRadius:8, marginBottom:8 }}>
-                {['ðŸ“Œ','ðŸ’¸','ðŸ½','ðŸ¥¤','ðŸº','ðŸŽ','ðŸ“¦','ðŸ”»','âš ï¸','ðŸ’°','ðŸ ','ðŸš—','ðŸŽ®','ðŸ“±','ðŸ’Š','ðŸ›’','ðŸŽµ','ðŸ§´','ðŸ§¹','ðŸ”§','ðŸ”‘','ðŸ“','ðŸ’¡','ðŸŽ¯','ðŸš€','â­','ðŸ†','ðŸŽª','ðŸŽ¨','ðŸŒŸ'].map(em => (
+                {['\u{1F4CC}','\u{1F4B8}','\u{1F37D}\uFE0F','\u{1F964}','\u{1F37A}','\u{1F381}','\u{1F4E6}','\u{1F53B}','\u26A0\uFE0F','\u{1F4B0}','\u{1F3E0}','\u{1F697}','\u{1F3AE}','\u{1F4F1}','\u{1F48A}','\u{1F6D1}','\u{1F3B5}','\u{1F9F4}','\u{1F9F9}','\u{1F527}','\u{1F511}','\u{1F514}','\u{1F4A1}','\u{1F3AF}','\u{1F680}','\u2B50','\u{1F3C6}','\u{1F3AA}','\u{1F3A8}','\u{1F31F}'].map(em => (
                   <button key={em} type="button" onClick={() => setNewMIcon(em)}
                     style={{ fontSize:18, background:newMIcon===em?'var(--accent-dim)':'transparent', border:newMIcon===em?'1.5px solid var(--accent)':'1.5px solid transparent', borderRadius:6, width:34, height:34, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.1s' }}>
                     {em}
@@ -1079,24 +1228,24 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
               </div>
               <div style={{ display:'flex', gap:8, alignItems:'center' }}>
                 <div style={{ width:36, height:36, borderRadius:8, background:'var(--bg)', border:'1px solid var(--accent)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, flexShrink:0 }}>
-                  {newMIcon || 'ðŸ“Œ'}
+                  {newMIcon || '\u{1F4CC}'}
                 </div>
                 <input className="form-input" value={newMIcon} onChange={e=>setNewMIcon(e.target.value)}
-                  placeholder="Ou digita emojiâ€¦" style={{ fontSize:13, flex:1 }}/>
+                  placeholder="Ou digita emoji–…" style={{ fontSize:13, flex:1 }}/>
               </div>
             </div>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:12 }}>
               <div>
-                <div style={{ fontSize:10, color:'var(--text-muted)', marginBottom:4, textTransform:'uppercase', letterSpacing:1 }}>Nome *</div>
+                <div style={{ fontSize:10, color:'var(--text-muted)', marginBottom:4, textTransform:'uppercase', letterSpacing:1 }}>{t('settings','nameLabel')}</div>
                 <input className="form-input" value={newMLabel} onChange={e=>setNewMLabel(e.target.value)}
                   placeholder="Nome do motivo" onKeyDown={e=>e.key==='Enter'&&handleAddMotivo()} style={{ fontSize:13 }}/>
               </div>
               <div>
                 <div style={{ fontSize:10, color:'var(--text-muted)', marginBottom:4, textTransform:'uppercase', letterSpacing:1 }}>{t('settings','cadernoDirection')}</div>
                 <select className="form-input" value={newMDir} onChange={e=>setNewMDir(e.target.value)} style={{ fontSize:13 }}>
-                  <option value="sortie">â–¼ SaÃ­da</option>
-                  <option value="entree">â–² Entrada</option>
-                  <option value="perte">âš  Perda</option>
+                  <option value="sortie">- Saída</option>
+                  <option value="entree">- Entrada</option>
+                  <option value="perte">{'\u26A0'} Perda</option>
                 </select>
               </div>
               <div>
@@ -1111,7 +1260,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
               <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer' }}>
                 <input type="checkbox" checked={newMDette} onChange={e=>setNewMDette(e.target.checked)}
                   style={{ accentColor:'var(--danger)', width:15, height:15 }}/>
-                <span style={{ fontSize:13, color:'var(--text-secondary)' }}>{t('settings','cadernoMotiveDead')} â€” {t('settings','cadernoMotiveSim')}</span>
+                <span style={{ fontSize:13, color:'var(--text-secondary)' }}>{t('settings','cadernoMotiveDead')} –" {t('settings','cadernoMotiveSim')}</span>
               </label>
               <button onClick={handleAddMotivo} className="btn btn-primary" style={{ padding:'8px 20px', fontSize:13, display:'flex', alignItems:'center', gap:6 }}>
                 + Adicionar
@@ -1120,17 +1269,17 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
           </div>
         </div>
 
-        {/* â”€â”€ Trabalhadores â”€â”€ */}
+        {/* -- Trabalhadores -- */}
         <div style={{ marginBottom:20, borderTop:'1px solid var(--border)', paddingTop:16 }}>
           <div style={{ fontWeight:700, fontSize:13, marginBottom:12, color:'var(--info)', display:'flex', alignItems:'center', gap:6 }}>
-            ðŸ‘· Trabalhadores
+             Trabalhadores
           </div>
           <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:10 }}>
             {cTrabalhadores.map(t => (
               <div key={t.id} style={{ display:'flex', alignItems:'center', gap:6, background:'var(--bg)', border:'1px solid var(--border)', borderRadius:20, padding:'4px 10px 4px 12px', fontSize:12 }}>
                 <span>{t.nom}</span>
                 <button onClick={() => handleDeleteTrab(t.id)}
-                  style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', fontSize:13, padding:'0 2px', lineHeight:1 }}>âœ•</button>
+                  style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', fontSize:13, padding:'0 2px', lineHeight:1 }}>•</button>
               </div>
             ))}
             {cTrabalhadores.length === 0 && <span style={{ fontSize:12, color:'var(--text-muted)' }}>{t('settings','cadernoTrabNone')}</span>}
@@ -1143,18 +1292,18 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
           </div>
         </div>
 
-        {/* â”€â”€ Produtos nÃ£o registrados â”€â”€ */}
+        {/* -- Produtos não registrados -- */}
         <div style={{ borderTop:'1px solid var(--border)', paddingTop:16 }}>
           <div style={{ fontWeight:700, fontSize:13, marginBottom:12, color:'var(--success)', display:'flex', alignItems:'center', gap:6 }}>
-            ðŸ“¦ Produtos nÃ£o registrados
+             Produtos não registrados
           </div>
           <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:10 }}>
             {cProdutos.map(p => (
               <div key={p.id} style={{ display:'flex', alignItems:'center', gap:6, background:'var(--bg)', border:'1px solid var(--border)', borderRadius:20, padding:'4px 10px 4px 12px', fontSize:12 }}>
                 <span>{p.nom}</span>
-                {p.prix > 0 && <span style={{ color:'var(--accent)', fontFamily:'monospace', fontSize:10, marginLeft:4 }}>{Number(p.prix).toLocaleString('fr-FR')} Kz</span>}
+                {p.prix > 0 && <span style={{ color:'var(--accent)', fontFamily:'monospace', fontSize:10, marginLeft:4 }}>{Number(p.prix).toLocaleString(intlLocale)} Kz</span>}
                 <button onClick={() => handleDeleteProd(p.id)}
-                  style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', fontSize:13, padding:'0 2px', lineHeight:1 }}>âœ•</button>
+                  style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', fontSize:13, padding:'0 2px', lineHeight:1 }}>•</button>
               </div>
             ))}
             {cProdutos.length === 0 && <span style={{ fontSize:12, color:'var(--text-muted)' }}>{t('settings','cadernoProdNone')}</span>}
@@ -1178,7 +1327,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
       {/* ===== ZONA DE PERIGO ===== */}
       <Accordion id="perigo" icon={<AlertTriangle size={16}/>} title={t('settings','accDanger')} color="var(--danger)" openSections={openSections} toggleSection={toggleSection}>
         <p style={{ fontSize:13, color:'var(--text-muted)', marginBottom:14 }}>
-          Resetar o aplicativo apagarÃ¡ TODOS os dados (produtos, vendas, usuÃ¡rios). Esta aÃ§Ã£o nÃ£o pode ser desfeita!
+          Resetar o aplicativo apagará TODOS os dados (produtos, vendas, usuários). Esta ação não pode ser desfeita!
         </p>
         {!showReset ? (
           <button onClick={()=>setShowReset(true)} className="btn btn-danger" style={{ gap:8 }}>
@@ -1202,14 +1351,42 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
         )}
       </Accordion>
 
-      {/* ===== INFORMAÃ‡Ã•ES DO SISTEMA ===== */}
-      <Accordion id="sistema" icon={<span>â„¹ï¸</span>} title={t('settings','accSystem')} openSections={openSections} toggleSection={toggleSection}>
+      {/* ===== INFORMAÇÕES DO SISTEMA ===== */}
+      <Accordion id="sistema" icon={<span>ℹ{'\uFE0F'}</span>} title={t('settings','accSystem')} openSections={openSections} toggleSection={toggleSection}>
         <div style={{ fontSize:13, color:'var(--text-secondary)', lineHeight:1.8 }}>
-          <div>VersÃ£o: <strong style={{color:'var(--accent)'}}>CKBPOS v{window.__CKBPOS_VERSION__ || '1.2.3'}</strong></div>
+          <div>{t('settings','versionLabel')} <strong style={{color:'var(--accent)'}}>CKBPOS v{window.__CKBPOS_VERSION__ || '1.2.3'}</strong></div>
           <div>{t('settings','sysDb')}</div>
-          <div>{t('settings','sysLang')}: {lang} Â· {t('settings','sysCurrency')}: {currency}</div>
+          <div>{t('settings','sysLang')}: {lang} · {t('settings','sysCurrency')}: {currency}</div>
+        </div>
+        <div style={{ marginTop:14, display:'flex', alignItems:'center', gap:10 }}>
+          <button
+            onClick={async () => {
+              setUpdateCheckState('checking');
+              try {
+                const res = await window.electron.updateCheck();
+                if (!res?.success) setUpdateCheckState('error');
+                // Le résultat final (up-to-date / available / error) arrive via onUpdateStatus
+              } catch(e) { setUpdateCheckState('error'); }
+            }}
+            disabled={updateCheckState === 'checking'}
+            className="btn btn-secondary"
+            style={{ gap:8 }}
+          >
+            <RefreshCw size={14} style={{ animation: updateCheckState === 'checking' ? 'spin 1s linear infinite' : 'none' }}/>
+            {updateCheckState === 'checking' ? t('updates','checking') : t('settings','checkUpdatesBtn')}
+          </button>
+          {updateCheckState === 'up-to-date' && (
+            <span style={{ fontSize:12, color:'var(--success)' }}>{t('settings','upToDate')}</span>
+          )}
+          {updateCheckState === 'available' && (
+            <span style={{ fontSize:12, color:'var(--accent)' }}>{t('updates','available')}</span>
+          )}
+          {updateCheckState === 'error' && (
+            <span style={{ fontSize:12, color:'var(--danger)' }}>{t('updates','error')}</span>
+          )}
         </div>
       </Accordion>
+
 
       {AlertModalComponent}
       {ConfirmModalComponent}
