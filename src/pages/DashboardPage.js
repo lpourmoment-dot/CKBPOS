@@ -1,19 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../App';
 import { useLang } from '../utils/useLang';
-import { TrendingUp, BarChart2, Clock, Monitor, Activity } from 'lucide-react';
+import { TrendingUp, BarChart2, Clock, Monitor, Activity, Trash2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function DashboardPage() {
   const { user } = useAuth();
-  const { t, fmt } = useLang();
+  const { t, fmt, lang } = useLang();
+  const intlLocale = lang === 'fr' ? 'fr-FR' : lang === 'en' ? 'en-US' : 'pt-BR';
   const isAdmin = user?.role === 'admin';
   const [stats, setStats] = useState({});
   const [topProducts, setTopProducts] = useState([]);
   const [weekData, setWeekData] = useState([]);
   const [recentSales, setRecentSales] = useState([]);
   const [networkPeers, setNetworkPeers] = useState([]);
-  const [machineLabel, setMachineLabel] = useState('Esta m\u00e1quina');
+  const [machineLabel, setMachineLabel] = useState(t('dashboard','thisMachine'));
   const [machinesData, setMachinesData] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -35,7 +36,7 @@ export default function DashboardPage() {
       if (typeof removePeers === 'function') removePeers();
       if (typeof removeSync  === 'function') removeSync();
     };
-  }, []);
+  }, [lang]);
 
   const loadNetworkPeers = async () => {
     try {
@@ -52,6 +53,15 @@ export default function DashboardPage() {
     try {
       const res = await window.electron.machinesStats();
       if (res?.success) setMachinesData(res.data || []);
+    } catch(_e) {}
+  };
+
+  const handleRemoveMachine = async (machineId, label) => {
+    const msg = (t('dashboard','removeMachineConfirm') || 'Supprimer la machine "{label}" de la liste ? Elle réapparaîtra si elle se reconnecte au réseau.').replace('{label}', label || '');
+    if (!window.confirm(msg)) return;
+    try {
+      const res = await window.electron.networkPeerRemove(machineId);
+      if (res?.success) { loadMachinesData(); loadNetworkPeers(); }
     } catch(_e) {}
   };
 
@@ -112,7 +122,7 @@ export default function DashboardPage() {
            GROUP BY date(date_vente) ORDER BY day`, []
         );
         setWeekData((weekRes.data || []).map(d => ({
-          day: new Date(d.day).toLocaleDateString('fr-FR', { weekday: 'short' }),
+          day: new Date(d.day).toLocaleDateString(intlLocale, { weekday: 'short' }),
           total: d.total,
           count: d.count
         })));
@@ -156,10 +166,10 @@ export default function DashboardPage() {
     <div style={{ padding:24, height:'100%', overflowY:'auto' }}>
       <div style={{ marginBottom:24 }}>
         <h1 style={{ fontSize:22, fontWeight:700, marginBottom:4 }}>
-          {t('dashboard','greeting')}, {user?.nom} 👋
+          {t('dashboard','greeting')}, {user?.nom} {'\u{1F44B}'}
         </h1>
         <p style={{ color:'var(--text-secondary)', fontSize:14 }}>
-          {new Date().toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long', year:'numeric' })}
+          {new Date().toLocaleDateString(intlLocale, { weekday:'long', day:'numeric', month:'long', year:'numeric' })}
         </p>
       </div>
 
@@ -249,32 +259,32 @@ export default function DashboardPage() {
       {(stats.caderno_plus > 0 || stats.caderno_moins > 0) && (
         <div style={{ marginBottom:24 }}>
           <div style={{ fontSize:12, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:10 }}>
-            📓 Caderno de Caixa — Hoje
+            {'\u{1F4D3}'} {t('dashboard','cadernoToday')}
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12 }}>
             <div className="stat-card" style={{ borderLeft:'3px solid var(--success)' }}>
-              <div className="stat-label">TOTAL +</div>
+              <div className="stat-label">{t('dashboard','cadernoTotalPlus')}</div>
               <div className="stat-value" style={{ color:'var(--success)', fontSize:16 }}>+{fmt(stats.caderno_plus)}</div>
-              <div className="stat-sub">Entradas hoje</div>
+              <div className="stat-sub">{t('dashboard','cadernoEntriesToday')}</div>
             </div>
             <div className="stat-card" style={{ borderLeft:'3px solid var(--danger)' }}>
-              <div className="stat-label">TOTAL −</div>
+              <div className="stat-label">{t('dashboard','cadernoTotalMinus')}</div>
               <div className="stat-value" style={{ color:'var(--danger)', fontSize:16 }}>−{fmt(stats.caderno_moins)}</div>
-              <div className="stat-sub">Saídas hoje</div>
+              <div className="stat-sub">{t('dashboard','cadernoExitsToday')}</div>
             </div>
             <div className="stat-card" style={{ borderLeft:'3px solid var(--warning)' }}>
-              <div className="stat-label">Dívidas</div>
+              <div className="stat-label">{t('dashboard','cadernoDebts')}</div>
               <div className="stat-value" style={{ color:stats.caderno_dettes>0?'var(--danger)':'var(--text-muted)', fontSize:16 }}>
                 {stats.caderno_dettes > 0 ? `\u2212${fmt(stats.caderno_dettes)}` : '\u2014'}
               </div>
-              <div className="stat-sub">Pendentes</div>
+              <div className="stat-sub">{t('dashboard','cadernoPending')}</div>
             </div>
             <div className="stat-card" style={{ borderLeft:'3px solid var(--accent)' }}>
-              <div className="stat-label">Net caderno</div>
+              <div className="stat-label">{t('dashboard','cadernoNet')}</div>
               <div className="stat-value" style={{ color:(stats.caderno_net||0)>=0?'var(--success)':'var(--danger)', fontSize:16 }}>
                 {(stats.caderno_net||0)>=0?'+':'\u2212'}{fmt(Math.abs(stats.caderno_net||0))}
               </div>
-              <div className="stat-sub">Balanço do dia</div>
+              <div className="stat-sub">{t('dashboard','cadernoDayBalance')}</div>
             </div>
           </div>
         </div>
@@ -285,9 +295,9 @@ export default function DashboardPage() {
         <div style={{ marginBottom:24 }}>
           <div style={{ fontSize:12, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:12, display:'flex', alignItems:'center', gap:8 }}>
             <Activity size={13} color="var(--text-muted)"/>
-            Painel Multi-Máquinas
+            {t('dashboard','multiMachinePanel')}
             <span style={{ fontSize:10, color:'var(--text-muted)', fontWeight:400, letterSpacing:0, background:'var(--bg-hover)', padding:'1px 7px', borderRadius:10 }}>
-              {machinesData.filter(m => m.status==='online').length}/{machinesData.length} online
+              {machinesData.filter(m => m.status==='online').length}/{machinesData.length} {t('dashboard','online')}
             </span>
           </div>
 
@@ -306,12 +316,21 @@ export default function DashboardPage() {
                   <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:10 }}>
                     <span style={{ width:7, height:7, borderRadius:'50%', background:dotC, flexShrink:0, animation:isOnline?'pulse 2s infinite':'none' }}/>
                     <span style={{ fontSize:10, fontWeight:700, letterSpacing:'0.6px', color:dotC }}>
-                      {m.isLocal ? 'LOCAL' : isOnline ? 'ONLINE' : 'OFFLINE'}
+                      {m.isLocal ? t('dashboard','local') : isOnline ? t('dashboard','onlineBadge') : t('dashboard','offline')}
                     </span>
                     {m.isLocal && (
                       <span style={{ fontSize:9, background:'var(--accent)22', color:'var(--accent)', border:'1px solid var(--accent)44', borderRadius:3, padding:'1px 5px', fontWeight:700 }}>
-                        ESTA
+                        {t('dashboard','thisOne')}
                       </span>
+                    )}
+                    {!m.isLocal && (
+                      <button onClick={() => handleRemoveMachine(m.machine_id, m.machine_label)}
+                        title={t('dashboard','removeMachine') || 'Nettoyer cette machine'}
+                        style={{ marginLeft:'auto', background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', padding:2, display:'flex', alignItems:'center' }}
+                        onMouseEnter={e => e.currentTarget.style.color='#ef4444'}
+                        onMouseLeave={e => e.currentTarget.style.color='var(--text-muted)'}>
+                        <Trash2 size={13}/>
+                      </button>
                     )}
                   </div>
 
@@ -320,20 +339,20 @@ export default function DashboardPage() {
                     {m.machine_label || 'CKBPOS'}
                   </div>
                   <div style={{ fontSize:10, fontFamily:'monospace', color:'var(--text-muted)', marginBottom:12 }}>
-                    {m.isLocal ? 'Esta m\u00e1quina' : m.ip || '\u2014'}
+                    {m.isLocal ? t('dashboard','thisMachine') : m.ip || '\u2014'}
                   </div>
 
                   {/* Stats hoje */}
                   <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10 }}>
                     <div>
-                      <div style={{ fontSize:9, color:'var(--text-muted)', marginBottom:2 }}>HOJE</div>
+                      <div style={{ fontSize:9, color:'var(--text-muted)', marginBottom:2 }}>{t('dashboard','todayCaps')}</div>
                       <div style={{ fontSize:16, fontWeight:700, color:'var(--accent)', fontFamily:'monospace' }}>{fmt(m.today_total)}</div>
-                      <div style={{ fontSize:10, color:'var(--text-secondary)' }}>{m.today_count} venda{m.today_count!==1?'s':''}</div>
+                      <div style={{ fontSize:10, color:'var(--text-secondary)' }}>{m.today_count} {m.today_count!==1?t('dashboard','salesPlural'):t('dashboard','salesSingular')}</div>
                     </div>
                     <div>
-                      <div style={{ fontSize:9, color:'var(--text-muted)', marginBottom:2 }}>7 DIAS</div>
+                      <div style={{ fontSize:9, color:'var(--text-muted)', marginBottom:2 }}>{t('dashboard','last7Days')}</div>
                       <div style={{ fontSize:13, fontWeight:600, fontFamily:'monospace' }}>{fmt(m.week_total)}</div>
-                      <div style={{ fontSize:9, color:'var(--text-muted)' }}>este mês: {fmt(m.month_total)}</div>
+                      <div style={{ fontSize:9, color:'var(--text-muted)' }}>{t('dashboard','thisMonth')}: {fmt(m.month_total)}</div>
                     </div>
                   </div>
 
@@ -345,7 +364,7 @@ export default function DashboardPage() {
                   {/* Top produto do dia */}
                   {m.top_product && (
                     <div style={{ fontSize:10, color:'var(--text-muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                      📈 {m.top_product}
+                      {'\u{1F4C8}'} {m.top_product}
                     </div>
                   )}
                 </div>
@@ -375,7 +394,7 @@ export default function DashboardPage() {
                   <td style={{ color:'var(--text-muted)', fontFamily:'monospace' }}>#{s.id}</td>
                   {isAdmin && <td>{s.vendeur}</td>}
                   <td style={{ color:'var(--accent)', fontWeight:600, fontFamily:'monospace' }}>{fmt(s.total)}</td>
-                  <td style={{ color:'var(--text-secondary)', fontSize:12 }}>{new Date(s.date_vente).toLocaleString('fr-FR')}</td>
+                  <td style={{ color:'var(--text-secondary)', fontSize:12 }}>{new Date(s.date_vente).toLocaleString(intlLocale)}</td>
                 </tr>
               ))}
             </tbody>

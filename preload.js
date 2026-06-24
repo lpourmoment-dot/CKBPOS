@@ -26,11 +26,11 @@ contextBridge.exposeInMainWorld('electron', {
   getMachineId:     () => ipcRenderer.invoke('get-machine-id'),
   setMachineLabel:  (label) => ipcRenderer.invoke('set-machine-label', label),
   backupLocal:    () => ipcRenderer.invoke('backup-local'),
-  backupRestore:  () => ipcRenderer.invoke('backup-restore'),  // ✅ v1.1.6 — Restaurer backup
+  backupRestore:  () => ipcRenderer.invoke('backup-restore'),  // \u2705 v1.1.6 — Restaurer backup
   resetApp:       () => ipcRenderer.invoke('reset-app'),
 
   // ── v1.1.6 ──────────────────────────────────
-  appVersion:     () => ipcRenderer.invoke('app-version'),     // ✅ Version depuis package.json
+  appVersion:     () => ipcRenderer.invoke('app-version'),     // \u2705 Version depuis package.json
 
   // Impression
   printTicket:          (data) => ipcRenderer.invoke('print-ticket', data),
@@ -87,6 +87,7 @@ contextBridge.exposeInMainWorld('electron', {
 
   // ── v1.4.0 Réseau P2P LAN ────────────────────────────────
   networkPeersList: () => ipcRenderer.invoke('network-peers-list'),
+  networkPeerRemove: (machine_id) => ipcRenderer.invoke('network-peer-remove', machine_id),
   networkStatus:    () => ipcRenderer.invoke('network-status'),
   machinesStats:    () => ipcRenderer.invoke('machines-stats'),
   // ── v1.8.0 Clé réseau LAN ──────────────────────────────
@@ -109,7 +110,6 @@ contextBridge.exposeInMainWorld('electron', {
   coordForceSync: () => ipcRenderer.invoke('coord-force-sync'),
   coordRescan:    () => ipcRenderer.invoke('coord-rescan'),
   coordClearQueue:() => ipcRenderer.invoke('coord-clear-queue'),
-  coordMetrics:   () => ipcRenderer.invoke('coord-metrics'),
   coordMetrics:   () => ipcRenderer.invoke('coord-metrics'),
   printQueueStatus: () => ipcRenderer.invoke('print-queue-status'),
   onCoordStatusChanged: (cb) => {
@@ -197,4 +197,75 @@ contextBridge.exposeInMainWorld('electron', {
 
   // ── v3.8.0 Import DB (Setup wizard) ─────────────────────────────
   importDbFile: () => ipcRenderer.invoke('import-db-file'),
+
+  // ── v4.1.0 Messagerie interne ────────────────────────────────────
+  chatSend:       (data)     => ipcRenderer.invoke('chat-send', data),  chatHistory:    (params)   => ipcRenderer.invoke('chat-history', params),
+  chatMarkRead:   (data)     => ipcRenderer.invoke('chat-mark-read', data),
+  chatUnreadCount:()         => ipcRenderer.invoke('chat-unread-count'),
+  chatDeleteMessage:      (data) => ipcRenderer.invoke('chat-delete-message', data),
+  chatDeleteConversation: (data) => ipcRenderer.invoke('chat-delete-conversation', data),
+  onChatMessage: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('chat-message', handler);
+    return () => ipcRenderer.removeListener('chat-message', handler);
+  },
+  onChatDeleted: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('chat-deleted', handler);
+    return () => ipcRenderer.removeListener('chat-deleted', handler);
+  },
+  onChatConvDeleted: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('chat-conv-deleted', handler);
+    return () => ipcRenderer.removeListener('chat-conv-deleted', handler);
+  },
+
+  // ── v4.2.0 Audit Log ─────────────────────────────────────────────
+  auditList:    (params) => ipcRenderer.invoke('audit-list', params),
+  auditActions: ()       => ipcRenderer.invoke('audit-actions'),
+  printAuditPdf:(data)   => ipcRenderer.invoke('print-audit-pdf', data),
+  auditLogin:   (data)   => ipcRenderer.invoke('audit-login', data),
+
+  // ── v4.3.0 Email rapport ─────────────────────────────────────────
+  emailReportSend:  (data) => ipcRenderer.invoke('email-report-send', data),
+  emailReportBuild: (data) => ipcRenderer.invoke('email-report-build', data),
+  emailConfigGet:   ()     => ipcRenderer.invoke('email-config-get'),
+  emailConfigSet:   (data) => ipcRenderer.invoke('email-config-set', data),
+
+  // ── v4.4.0 Coord avancé ──────────────────────────────────────────
+  coordConnectedUsers: () => ipcRenderer.invoke('coord-connected-users'),
+  coordBroadcastMsg:  (data) => ipcRenderer.invoke('coord-broadcast-msg', data),
+
+  // ── v4.5.0 Export Excel ──────────────────────────────────────────
+  excelExportSales: (params) => ipcRenderer.invoke('excel-export-sales', params),
+  excelExportStock: ()       => ipcRenderer.invoke('excel-export-stock'),
+
+  // ── v4.6.2 Console SQL debug ─────────────────────────────────────
+  devSqlQuery: (sql) => ipcRenderer.invoke('dev-sql-query', sql),
+
+  // ── v4.9.0 Auto-update ────────────────────────────────────────────
+  updateCheck:   () => ipcRenderer.invoke('update-check'),
+  updateDownload:() => ipcRenderer.invoke('update-download'),
+  updateInstall: () => ipcRenderer.invoke('update-install'),
+  onUpdateStatus: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('update-status', handler);
+    return () => ipcRenderer.removeListener('update-status', handler);
+  },
+
+  // ── Licensing ────────────────────────────────────────────────────
+  licenseActivateManual: (ckbContent) => ipcRenderer.invoke('license-activate-manual', ckbContent),
+  licenseStatus:         ()          => ipcRenderer.invoke('license-status'),
+  licenseListenRealtime: (email)     => ipcRenderer.invoke('license-listen-realtime', email),
+  licenseStopListen:     ()          => ipcRenderer.invoke('license-stop-listen'),
+  onLicenseReceived: (cb) => {
+    const handler = (_, payload) => cb(payload);
+    ipcRenderer.on('license-received', handler);
+    return () => ipcRenderer.removeListener('license-received', handler);
+  },
+  onLicenseSalesUpdated: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('license-sales-updated', handler);
+    return () => ipcRenderer.removeListener('license-sales-updated', handler);
+  },
 });

@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useTheme } from '../App';
+import { useLang } from '../utils/useLang';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Store, Monitor, Wifi, ShieldCheck, User, ChevronRight, ChevronLeft,
   Check, Loader, RefreshCw, Eye, EyeOff, Globe, Palette,
-  Printer, Database, AlertTriangle, Signal, Star, Copy
+  Printer, Database, AlertTriangle, Signal, Star, Copy, Key, Upload
 } from 'lucide-react';
 
 // ── Constantes ───────────────────────────────────────────────
 const CURRENCIES = ['AOA','USD','EUR','BRL'];
-const LANGUAGES  = [{ code:'pt', label:'Português' }, { code:'fr', label:'Français' }];
+const LANGUAGES  = [{ code:'pt-BR', label:'\u{1F1F5}\u{1F1F9} Português' }, { code:'fr', label:'\u{1F1EB}\u{1F1F7} Français' }, { code:'en', label:'\u{1F1EC}\u{1F1E7} English' }];
 const TICKET_SIZES = [52, 60, 72, 80];
 const THEMES = ['dark','light'];
 
@@ -18,114 +20,53 @@ const Dim    = 'rgba(232,197,71,0.15)';
 const Border = 'rgba(232,197,71,0.25)';
 const BgCard = 'rgba(255,255,255,0.03)';
 
-const s = {
-  page: {
-    minHeight:'100vh', background:'#0a0a0a',
-    display:'flex', alignItems:'center', justifyContent:'center',
-    fontFamily:"'Courier New', Courier, monospace",
-    overflow:'hidden', position:'relative',
-  },
-  grid: {
-    position:'absolute', inset:0, pointerEvents:'none',
-    backgroundImage:`linear-gradient(rgba(232,197,71,0.04) 1px, transparent 1px),
-                     linear-gradient(90deg, rgba(232,197,71,0.04) 1px, transparent 1px)`,
-    backgroundSize:'40px 40px',
-  },
-  card: {
-    width:'100%', maxWidth:560, margin:'0 20px',
-    background:'rgba(10,10,10,0.95)',
-    border:`1px solid ${Border}`,
-    borderRadius:16,
-    boxShadow:'0 0 60px rgba(232,197,71,0.08)',
-    overflow:'hidden',
-    position:'relative', zIndex:1,
-  },
-  header: {
-    padding:'32px 40px 24px',
-    borderBottom:`1px solid rgba(232,197,71,0.1)`,
-  },
-  logo: {
-    fontSize:28, fontWeight:700, letterSpacing:6, color:Gold,
-    marginBottom:4,
-  },
-  subtitle: { fontSize:11, color:'rgba(232,197,71,0.5)', letterSpacing:3 },
-  body: { padding:'32px 40px' },
-  footer: {
-    padding:'20px 40px 28px',
-    borderTop:`1px solid rgba(255,255,255,0.06)`,
-    display:'flex', gap:12, justifyContent:'flex-end',
-  },
-  label: {
-    display:'block', fontSize:11, color:'rgba(232,197,71,0.7)',
-    letterSpacing:2, marginBottom:8, textTransform:'uppercase',
-  },
-  input: {
-    width:'100%', background:'rgba(255,255,255,0.04)',
-    border:`1px solid rgba(255,255,255,0.1)`,
-    borderRadius:8, padding:'10px 14px',
-    color:'#fff', fontSize:13, outline:'none',
-    transition:'border 0.2s',
-    boxSizing:'border-box',
-    fontFamily:'inherit',
-  },
-  btnPrimary: {
-    background:Gold, color:'#0a0a0a',
-    border:'none', borderRadius:8,
-    padding:'11px 24px', fontWeight:700,
-    fontSize:13, cursor:'pointer',
-    letterSpacing:1, fontFamily:'inherit',
-    display:'flex', alignItems:'center', gap:8,
-    transition:'opacity 0.15s',
-  },
-  btnSecondary: {
-    background:'transparent', color:'rgba(255,255,255,0.5)',
-    border:`1px solid rgba(255,255,255,0.12)`,
-    borderRadius:8, padding:'11px 24px',
-    fontSize:13, cursor:'pointer',
-    fontFamily:'inherit',
-    display:'flex', alignItems:'center', gap:8,
-    transition:'all 0.15s',
-  },
-  btnGhost: {
-    background:'transparent', color:Gold,
-    border:`1px solid ${Border}`,
-    borderRadius:8, padding:'10px 20px',
-    fontSize:12, cursor:'pointer',
-    fontFamily:'inherit', letterSpacing:1,
-    transition:'all 0.15s',
-  },
-  row: { display:'flex', gap:14, marginBottom:18 },
-  col: { flex:1 },
-  error: {
-    background:'rgba(245,101,101,0.08)', border:'1px solid rgba(245,101,101,0.25)',
-    borderRadius:8, padding:'10px 14px', color:'#fc8181',
-    fontSize:12, marginBottom:16, display:'flex', alignItems:'center', gap:8,
-  },
-  success: {
-    background:'rgba(72,187,120,0.08)', border:'1px solid rgba(72,187,120,0.25)',
-    borderRadius:8, padding:'10px 14px', color:'#68d391',
-    fontSize:12, marginBottom:16, display:'flex', alignItems:'center', gap:8,
-  },
-  chip: (active) => ({
-    flex:1, padding:'12px 10px', borderRadius:8, cursor:'pointer',
-    border: active ? `1.5px solid ${Gold}` : '1px solid rgba(255,255,255,0.1)',
-    background: active ? Dim : 'transparent',
-    color: active ? Gold : 'rgba(255,255,255,0.45)',
-    fontSize:12, textAlign:'center', transition:'all 0.15s',
-    fontFamily:'inherit', letterSpacing:1,
-    display:'flex', flexDirection:'column', alignItems:'center', gap:6,
-  }),
-  peerCard: (sel) => ({
-    padding:'14px 16px', borderRadius:10, cursor:'pointer',
-    border: sel ? `1.5px solid ${Gold}` : '1px solid rgba(255,255,255,0.1)',
-    background: sel ? Dim : BgCard,
-    marginBottom:10, display:'flex', alignItems:'center', gap:12,
-    transition:'all 0.15s',
-  }),
-};
+// ── Thème dynamique ─────────────────────────────────────────
+function useSetupS() {
+  const ctx = useTheme();
+  return makeS(ctx?.theme === 'dark' || !ctx);
+}
+function makeS(isDark) {
+  const Gold='#e8c547', Dim='rgba(232,197,71,0.15)';
+  const Border=isDark?'rgba(232,197,71,0.25)':'rgba(200,160,30,0.4)';
+  const textMain=isDark?'#fff':'#111';
+  const textMuted=isDark?'rgba(255,255,255,0.5)':'rgba(0,0,0,0.5)';
+  const inputBg=isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.06)';
+  const inputBdr=isDark?'rgba(255,255,255,0.1)':'rgba(0,0,0,0.15)';
+  const btnSecC=isDark?'rgba(255,255,255,0.5)':'rgba(0,0,0,0.5)';
+  const btnSecB=isDark?'rgba(255,255,255,0.12)':'rgba(0,0,0,0.15)';
+  const divider=isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.12)';
+  const chipC=isDark?'rgba(255,255,255,0.45)':'rgba(0,0,0,0.55)';
+  const chipB=isDark?'rgba(255,255,255,0.1)':'rgba(0,0,0,0.2)';
+  return {
+    page:{minHeight:'100vh',background:isDark?'#0a0a0a':'#f5f4ef',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:"'Courier New',Courier,monospace",overflow:'hidden',position:'relative'},
+    grid:{position:'absolute',inset:0,pointerEvents:'none',backgroundImage:`linear-gradient(rgba(232,197,71,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(232,197,71,0.04) 1px,transparent 1px)`,backgroundSize:'40px 40px'},
+    card:{width:'100%',maxWidth:560,margin:'0 20px',background:isDark?'rgba(10,10,10,0.97)':'rgba(255,255,254,0.97)',border:`1px solid ${Border}`,borderRadius:16,boxShadow:`0 0 60px rgba(232,197,71,${isDark?'0.08':'0.12'})`,overflow:'hidden',position:'relative',zIndex:1},
+    header:{padding:'32px 40px 24px',borderBottom:`1px solid ${isDark?'rgba(232,197,71,0.1)':'rgba(200,160,30,0.2)'}`},
+    logo:{fontSize:28,fontWeight:700,letterSpacing:6,color:Gold,marginBottom:4},
+    subtitle:{fontSize:11,color:isDark?'rgba(232,197,71,0.5)':'rgba(140,110,10,0.75)',letterSpacing:3},
+    body:{padding:'32px 40px'},
+    footer:{padding:'20px 40px 28px',borderTop:`1px solid ${divider}`,display:'flex',gap:12,justifyContent:'flex-end'},
+    label:{display:'block',fontSize:11,color:isDark?'rgba(232,197,71,0.7)':'rgba(140,110,10,0.85)',letterSpacing:2,marginBottom:8,textTransform:'uppercase'},
+    input:{width:'100%',background:inputBg,border:`1px solid ${inputBdr}`,borderRadius:8,padding:'10px 14px',color:textMain,fontSize:13,outline:'none',transition:'border 0.2s',boxSizing:'border-box',fontFamily:'inherit'},
+    btnPrimary:{background:Gold,color:'#0a0a0a',border:'none',borderRadius:8,padding:'11px 24px',fontWeight:700,fontSize:13,cursor:'pointer',letterSpacing:1,fontFamily:'inherit',display:'flex',alignItems:'center',gap:8,transition:'opacity 0.15s'},
+    btnSecondary:{background:'transparent',color:btnSecC,border:`1px solid ${btnSecB}`,borderRadius:8,padding:'11px 24px',fontSize:13,cursor:'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',gap:8,transition:'all 0.15s'},
+    btnGhost:{background:'transparent',color:Gold,border:`1px solid ${Border}`,borderRadius:8,padding:'10px 20px',fontSize:12,cursor:'pointer',fontFamily:'inherit',letterSpacing:1,transition:'all 0.15s'},
+    row:{display:'flex',gap:14,marginBottom:18},col:{flex:1},
+    error:{background:'rgba(245,101,101,0.08)',border:'1px solid rgba(245,101,101,0.25)',borderRadius:8,padding:'10px 14px',color:'#fc8181',fontSize:12,marginBottom:16,display:'flex',alignItems:'center',gap:8},
+    success:{background:'rgba(72,187,120,0.08)',border:'1px solid rgba(72,187,120,0.25)',borderRadius:8,padding:'10px 14px',color:'#68d391',fontSize:12,marginBottom:16,display:'flex',alignItems:'center',gap:8},
+    chip:(active)=>({flex:1,padding:'12px 10px',borderRadius:8,cursor:'pointer',border:active?`1.5px solid ${Gold}`:`1px solid ${chipB}`,background:active?Dim:'transparent',color:active?Gold:chipC,fontSize:12,textAlign:'center',transition:'all 0.15s',fontFamily:'inherit',letterSpacing:1,display:'flex',flexDirection:'column',alignItems:'center',gap:6}),
+    peerCard:(sel)=>({padding:'14px 16px',borderRadius:10,cursor:'pointer',border:sel?`1.5px solid ${Gold}`:`1px solid ${chipB}`,background:sel?Dim:(isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.04)'),marginBottom:10,display:'flex',alignItems:'center',gap:12,transition:'all 0.15s'}),
+    textMain,textMuted,divider,chipC,chipB,Gold,Dim,Border,inputBdr,
+    BgCard: isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.04)',
+  };
+}
+
+
+// (bloc de styles statique supprimé — remplacé par makeS()/useSetupS())
 
 // ── Composants atomiques ─────────────────────────────────────
 function Input({ label, value, onChange, type='text', placeholder='', disabled=false, icon:Icon }) {
+  const s = useSetupS();
   const [show, setShow] = useState(false);
   const isPass = type === 'password';
   return (
@@ -141,10 +82,10 @@ function Input({ label, value, onChange, type='text', placeholder='', disabled=f
           disabled={disabled}
           style={{ ...s.input, paddingLeft: Icon ? 36 : 14, paddingRight: isPass ? 40 : 14, opacity: disabled ? 0.5 : 1 }}
           onFocus={e => e.target.style.borderColor = Gold}
-          onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.1)'}
+          onBlur={e => e.target.style.borderColor = s.inputBdr}
         />
         {isPass && (
-          <button onClick={() => setShow(!show)} style={{ position:'absolute', right:12, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:'rgba(255,255,255,0.4)', padding:0 }}>
+          <button onClick={() => setShow(!show)} style={{ position:'absolute', right:12, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:s.textMuted, padding:0 }}>
             {show ? <EyeOff size={14}/> : <Eye size={14}/>}
           </button>
         )}
@@ -154,13 +95,14 @@ function Input({ label, value, onChange, type='text', placeholder='', disabled=f
 }
 
 function Select({ label, value, onChange, options }) {
+  const s = useSetupS();
   return (
     <div style={{ marginBottom:18 }}>
       {label && <label style={s.label}>{label}</label>}
       <select value={value} onChange={e => onChange(e.target.value)}
         style={{ ...s.input, cursor:'pointer' }}
         onFocus={e => e.target.style.borderColor = Gold}
-        onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.1)'}
+        onBlur={e => e.target.style.borderColor = s.inputBdr}
       >
         {options.map(o => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}
       </select>
@@ -169,12 +111,13 @@ function Select({ label, value, onChange, options }) {
 }
 
 function StepDots({ total, current }) {
+  const s = useSetupS();
   return (
     <div style={{ display:'flex', gap:6, alignItems:'center' }}>
       {Array.from({ length: total }).map((_, i) => (
         <div key={i} style={{
           width: i === current ? 20 : 6, height:6, borderRadius:3,
-          background: i < current ? Gold : i === current ? Gold : 'rgba(255,255,255,0.12)',
+          background: i < current ? Gold : i === current ? Gold : s.chipB,
           transition:'all 0.3s',
         }}/>
       ))}
@@ -183,8 +126,9 @@ function StepDots({ total, current }) {
 }
 
 function ProgressBar({ value }) {
+  const s = useSetupS();
   return (
-    <div style={{ height:3, background:'rgba(255,255,255,0.08)', borderRadius:2, marginBottom:24, overflow:'hidden' }}>
+    <div style={{ height:3, background:s.divider, borderRadius:2, marginBottom:24, overflow:'hidden' }}>
       <motion.div animate={{ width: value + '%' }} style={{ height:'100%', background:Gold, borderRadius:2 }} transition={{ duration:0.4 }}/>
     </div>
   );
@@ -192,53 +136,55 @@ function ProgressBar({ value }) {
 
 // ── Choix initial ─────────────────────────────────────────────
 function ChoiceScreen({ onChoice }) {
+  const s = useSetupS();
+  const { t } = useLang();
   return (
     <motion.div initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-16 }}>
       <div style={{ textAlign:'center', marginBottom:32 }}>
-        <div style={{ fontSize:13, color:'rgba(255,255,255,0.45)', marginBottom:6, letterSpacing:2 }}>BEM-VINDO</div>
-        <div style={{ fontSize:22, color:'#fff', fontWeight:700, letterSpacing:2 }}>Como deseja começar?</div>
+        <div style={{ fontSize:13, color:s.textMuted, marginBottom:6, letterSpacing:2 }}>{t("setup","welcome")}</div>
+        <div style={{ fontSize:22, color:s.textMain, fontWeight:700, letterSpacing:2 }}>{t("setup","chooseStart")}</div>
       </div>
       <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
         <motion.button whileHover={{ scale:1.01 }} whileTap={{ scale:0.99 }}
           onClick={() => onChoice('new')}
-          style={{ background:BgCard, border:`1.5px solid ${Border}`, borderRadius:12, padding:'20px 24px', cursor:'pointer', textAlign:'left', display:'flex', alignItems:'center', gap:16 }}
+          style={{ background:s.BgCard, border:`1.5px solid ${s.Border}`, borderRadius:12, padding:'20px 24px', cursor:'pointer', textAlign:'left', display:'flex', alignItems:'center', gap:16 }}
         >
-          <div style={{ width:44, height:44, borderRadius:10, background:Dim, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-            <Store size={20} color={Gold}/>
+          <div style={{ width:44, height:44, borderRadius:10, background:s.Dim, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+            <Store size={20} color={s.Gold}/>
           </div>
           <div>
-            <div style={{ color:'#fff', fontSize:14, fontWeight:700, marginBottom:3, letterSpacing:1 }}>Nova Boutique</div>
-            <div style={{ color:'rgba(255,255,255,0.4)', fontSize:12 }}>Configurar do zero — nome, máquina, admin</div>
+            <div style={{ color:s.textMain, fontSize:14, fontWeight:700, marginBottom:3, letterSpacing:1 }}>{t("setup","newStore")}</div>
+            <div style={{ color:s.textMuted, fontSize:12 }}>{t("setup","newStoreDesc")}</div>
           </div>
-          <ChevronRight size={16} color={Gold} style={{ marginLeft:'auto' }}/>
+          <ChevronRight size={16} color={s.Gold} style={{ marginLeft:'auto' }}/>
         </motion.button>
 
         <motion.button whileHover={{ scale:1.01 }} whileTap={{ scale:0.99 }}
           onClick={() => onChoice('join')}
-          style={{ background:BgCard, border:'1px solid rgba(255,255,255,0.1)', borderRadius:12, padding:'20px 24px', cursor:'pointer', textAlign:'left', display:'flex', alignItems:'center', gap:16 }}
+          style={{ background:s.BgCard, border:`1px solid ${s.chipB}`, borderRadius:12, padding:'20px 24px', cursor:'pointer', textAlign:'left', display:'flex', alignItems:'center', gap:16 }}
         >
           <div style={{ width:44, height:44, borderRadius:10, background:'rgba(99,179,237,0.1)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
             <Signal size={20} color='#63b3ed'/>
           </div>
           <div>
-            <div style={{ color:'#fff', fontSize:14, fontWeight:700, marginBottom:3, letterSpacing:1 }}>Juntar-me a uma rede</div>
-            <div style={{ color:'rgba(255,255,255,0.4)', fontSize:12 }}>Importar dados de uma máquina ativa no LAN</div>
+            <div style={{ color:s.textMain, fontSize:14, fontWeight:700, marginBottom:3, letterSpacing:1 }}>{t("setup","joinNetwork")}</div>
+            <div style={{ color:s.textMuted, fontSize:12 }}>{t("setup","joinNetworkDesc")}</div>
           </div>
-          <ChevronRight size={16} color='rgba(255,255,255,0.3)' style={{ marginLeft:'auto' }}/>
+          <ChevronRight size={16} color={s.chipC} style={{ marginLeft:'auto' }}/>
         </motion.button>
 
         <motion.button whileHover={{ scale:1.01 }} whileTap={{ scale:0.99 }}
           onClick={() => onChoice('importdb')}
-          style={{ background:BgCard, border:'1px solid rgba(255,255,255,0.1)', borderRadius:12, padding:'20px 24px', cursor:'pointer', textAlign:'left', display:'flex', alignItems:'center', gap:16 }}
+          style={{ background:s.BgCard, border:`1px solid ${s.chipB}`, borderRadius:12, padding:'20px 24px', cursor:'pointer', textAlign:'left', display:'flex', alignItems:'center', gap:16 }}
         >
           <div style={{ width:44, height:44, borderRadius:10, background:'rgba(34,197,94,0.1)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
             <Database size={20} color='#22c55e'/>
           </div>
           <div>
-            <div style={{ color:'#fff', fontSize:14, fontWeight:700, marginBottom:3, letterSpacing:1 }}>Restaurar base de dados</div>
-            <div style={{ color:'rgba(255,255,255,0.4)', fontSize:12 }}>Importar um ficheiro .db existente do CKBPOS</div>
+            <div style={{ color:s.textMain, fontSize:14, fontWeight:700, marginBottom:3, letterSpacing:1 }}>{t("setup","restoreDb")}</div>
+            <div style={{ color:s.textMuted, fontSize:12 }}>{t("setup","restoreDbDesc")}</div>
           </div>
-          <ChevronRight size={16} color='rgba(255,255,255,0.3)' style={{ marginLeft:'auto' }}/>
+          <ChevronRight size={16} color={s.chipC} style={{ marginLeft:'auto' }}/>
         </motion.button>
       </div>
     </motion.div>
@@ -247,6 +193,8 @@ function ChoiceScreen({ onChoice }) {
 
 // ── WIZARD Importar DB ────────────────────────────────────────
 function WizardImportDb({ onDone, onBack }) {
+  const s = useSetupS();
+  const { t } = useLang();
   const [status, setStatus] = useState('idle'); // idle | loading | success | error
   const [errMsg, setErrMsg] = useState('');
 
@@ -282,9 +230,9 @@ function WizardImportDb({ onDone, onBack }) {
         <div style={{ width:56, height:56, borderRadius:14, background:'rgba(34,197,94,0.12)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px' }}>
           <Database size={26} color='#22c55e'/>
         </div>
-        <div style={{ fontSize:18, color:'#fff', fontWeight:700, marginBottom:8 }}>Restaurar base de dados</div>
-        <div style={{ fontSize:13, color:'rgba(255,255,255,0.45)', lineHeight:1.6 }}>
-          Selecione um ficheiro <strong style={{ color:'rgba(255,255,255,0.7)' }}>.db</strong> exportado anteriormente do CKBPOS.<br/>
+        <div style={{ fontSize:18, color:s.textMain, fontWeight:700, marginBottom:8 }}>{t("setup","restoreDb")}</div>
+        <div style={{ fontSize:13, color:s.textMuted, lineHeight:1.6 }}>
+          Selecione um ficheiro <strong style={{ color:s.textMain }}>.db</strong> exportado anteriormente do CKBPOS.<br/>
           Todos os dados (produtos, vendas, utilizadores) serão restaurados.
         </div>
       </div>
@@ -314,8 +262,8 @@ function WizardImportDb({ onDone, onBack }) {
             : <><Database size={16}/> Selecionar ficheiro .db</>}
         </motion.button>
 
-        <button onClick={onBack} style={{ background:'transparent', border:'none', color:'rgba(255,255,255,0.35)', fontSize:13, cursor:'pointer', padding:'8px 0', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
-          <ChevronLeft size={14}/> Voltar
+        <button onClick={onBack} style={{ background:'transparent', border:'none', color:s.textMuted, fontSize:13, cursor:'pointer', padding:'8px 0', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+          <ChevronLeft size={14}/> {t("setup","back")}
         </button>
       </div>
     </motion.div>
@@ -324,20 +272,27 @@ function WizardImportDb({ onDone, onBack }) {
 
 // ── WIZARD Nova Boutique ──────────────────────────────────────
 function WizardNova({ onDone, onBack }) {
+  const s = useSetupS();
+  const { t, changeLang } = useLang();
+  const { theme: currentTheme, toggleTheme } = useTheme();
   const [step, setStep]     = useState(0);
   const [saving, setSaving] = useState(false);
   const [err, setErr]       = useState('');
 
-  const [shop, setShop]     = useState({ name:'', address:'', phone:'', currency:'AOA', language:'pt', theme:'dark' });
+  const [shop, setShop]     = useState({ name:'', address:'', phone:'', currency:'AOA', language:'pt-BR', theme:'dark' });
   const [machine, setMachine] = useState({ label:'Caixa Principal', networkKey:'', ticketSize:'72' });
   const [sync, setSync]     = useState({ supabaseUrl:'', supabaseKey:'', skipSync:false });
   const [admin, setAdmin]   = useState({ name:'', email:'', password:'', confirm:'' });
+  // \u2705 Licensing — etape finale optionnelle (texte ou fichier .ckb)
+  const [licenseCkb, setLicenseCkb] = useState('');
+  const fileInputRef = useRef(null);
 
   const STEPS = [
-    { icon:Store,      label:'Loja' },
-    { icon:Monitor,    label:'Máquina' },
-    { icon:Database,   label:'Sync' },
-    { icon:ShieldCheck,label:'Admin' },
+    { icon:Store,      label:t('setup','stepStore') },
+    { icon:Monitor,    label:t('setup','stepMachine') },
+    { icon:Database,   label:t('setup','stepSync') },
+    { icon:ShieldCheck,label:t('setup','stepAdmin') },
+    { icon:Key,        label:t('setup','stepLicense') },
   ];
 
   const setS = (key) => (val) => setShop(p => ({ ...p, [key]: val }));
@@ -347,32 +302,50 @@ function WizardNova({ onDone, onBack }) {
 
   const validateStep = () => {
     setErr('');
-    if (step === 0 && !shop.name.trim()) { setErr('Nome da loja obrigatório'); return false; }
-    if (step === 1 && !machine.label.trim()) { setErr('Nome da máquina obrigatório'); return false; }
+    if (step === 0 && !shop.name.trim()) { setErr(t('setup','errShopName')); return false; }
+    if (step === 1 && !machine.label.trim()) { setErr(t('setup','errMachineName')); return false; }
     if (step === 3) {
-      if (!admin.name.trim() || !admin.email.trim() || !admin.password) { setErr('Todos os campos são obrigatórios'); return false; }
-      if (!admin.email.includes('@')) { setErr('Email inválido'); return false; }
-      if (admin.password.length < 6) { setErr('Senha mínimo 6 caracteres'); return false; }
-      if (admin.password !== admin.confirm) { setErr('Senhas não coincidem'); return false; }
+      if (!admin.name.trim() || !admin.email.trim() || !admin.password) { setErr(t('setup','errAdminName')); return false; }
+      if (!admin.email.includes('@')) { setErr(t('setup','errEmailInvalid')); return false; }
+      if (admin.password.length < 6) { setErr(t('setup','errPassMin')); return false; }
+      if (admin.password !== admin.confirm) { setErr(t('setup','errPassMatch')); return false; }
     }
     return true;
   };
 
-  const next = () => { if (validateStep()) setStep(s => Math.min(s + 1, 3)); };
+  const next = () => { if (validateStep()) setStep(s => Math.min(s + 1, 4)); };
   const prev = () => { setErr(''); setStep(s => Math.max(s - 1, 0)); };
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setLicenseCkb(String(ev.target.result || '').trim());
+    reader.onerror = () => setErr(t('setup', 'errLicenseFile'));
+    reader.readAsText(file);
+  };
 
   const finish = async () => {
     if (!validateStep()) return;
     setSaving(true);
     try {
+      // \u2705 Licensing — si un .ckb a ete colle/charge, on l'active avant de terminer
+      if (licenseCkb.trim()) {
+        const licRes = await window.electron.licenseActivateManual(licenseCkb.trim());
+        if (licRes?.ok === false || !licRes?.data) {
+          setErr(t('setup', 'errLicenseInvalid'));
+          setSaving(false);
+          return;
+        }
+      }
       const res = await window.electron.setupComplete({ shop, machine, admin, sync: sync.skipSync ? {} : sync });
       if (res.success) onDone({ name: admin.name, email: admin.email, role: 'admin', id: 1 });
-      else setErr(res.error || 'Erro ao guardar configuração');
+      else setErr(res.error || t('setup','errSaveConfig'));
     } catch(e) { setErr(e.message); }
     setSaving(false);
   };
 
-  const progress = ((step + 1) / 4) * 100;
+  const progress = ((step + 1) / 5) * 100;
 
   return (
     <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}>
@@ -384,17 +357,17 @@ function WizardNova({ onDone, onBack }) {
           const active = i === step;
           return (
             <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:6, position:'relative' }}>
-              {i > 0 && <div style={{ position:'absolute', left:0, top:16, width:'50%', height:1, background: done || active ? Gold : 'rgba(255,255,255,0.1)' }}/>}
-              {i < STEPS.length-1 && <div style={{ position:'absolute', right:0, top:16, width:'50%', height:1, background: done ? Gold : 'rgba(255,255,255,0.1)' }}/>}
+              {i > 0 && <div style={{ position:'absolute', left:0, top:16, width:'50%', height:1, background: done || active ? s.Gold : s.divider }}/>}
+              {i < STEPS.length-1 && <div style={{ position:'absolute', right:0, top:16, width:'50%', height:1, background: done ? s.Gold : s.divider }}/>}
               <div style={{
                 width:32, height:32, borderRadius:'50%', zIndex:1,
-                background: done ? Gold : active ? Dim : 'rgba(255,255,255,0.05)',
-                border: active ? `2px solid ${Gold}` : done ? 'none' : '1px solid rgba(255,255,255,0.12)',
+                background: done ? s.Gold : active ? s.Dim : s.divider,
+                border: active ? `2px solid ${s.Gold}` : done ? 'none' : `1px solid ${s.chipB}`,
                 display:'flex', alignItems:'center', justifyContent:'center',
               }}>
-                {done ? <Check size={14} color='#0a0a0a'/> : <Icon size={13} color={active ? Gold : 'rgba(255,255,255,0.3)'}/>}
+                {done ? <Check size={14} color='#0a0a0a'/> : <Icon size={13} color={active ? s.Gold : s.chipC}/>}
               </div>
-              <div style={{ fontSize:10, color: active ? Gold : done ? 'rgba(232,197,71,0.5)' : 'rgba(255,255,255,0.25)', letterSpacing:1 }}>{st.label}</div>
+              <div style={{ fontSize:10, color: active ? s.Gold : done ? 'rgba(232,197,71,0.5)' : s.chipC, letterSpacing:1 }}>{st.label}</div>
             </div>
           );
         })}
@@ -408,22 +381,22 @@ function WizardNova({ onDone, onBack }) {
 
           {step === 0 && (
             <>
-              <Input label="Nome da Loja *" value={shop.name} onChange={setS('name')} placeholder="Ex: CKB Store" icon={Store}/>
+              <Input label={t("setup","shopName")} value={shop.name} onChange={setS('name')} placeholder="Ex: CKB Store" icon={Store}/>
               <div style={s.row}>
-                <div style={s.col}><Input label="Endereço" value={shop.address} onChange={setS('address')} placeholder="Luanda, Angola"/></div>
-                <div style={s.col}><Input label="Telefone" value={shop.phone} onChange={setS('phone')} placeholder="+244 9xx xxx xxx"/></div>
+                <div style={s.col}><Input label={t("setup","address")} value={shop.address} onChange={setS('address')} placeholder="Luanda, Angola"/></div>
+                <div style={s.col}><Input label={t("setup","phone")} value={shop.phone} onChange={setS('phone')} placeholder="+244 9xx xxx xxx"/></div>
               </div>
               <div style={s.row}>
-                <div style={s.col}><Select label="Moeda" value={shop.currency} onChange={setS('currency')} options={CURRENCIES}/></div>
-                <div style={s.col}><Select label="Idioma" value={shop.language} onChange={setS('language')} options={LANGUAGES.map(l=>({ value:l.code, label:l.label }))}/></div>
+                <div style={s.col}><Select label={t("setup","currency")} value={shop.currency} onChange={setS('currency')} options={CURRENCIES}/></div>
+                <div style={s.col}><Select label={t("setup","language")} value={shop.language} onChange={(v) => { setS('language')(v); changeLang(v); }} options={LANGUAGES.map(l=>({ value:l.code, label:l.label }))}/></div>
               </div>
               <div style={{ marginBottom:4 }}>
-                <label style={s.label}>Tema</label>
+                <label style={s.label}>{t("setup","theme")}</label>
                 <div style={{ display:'flex', gap:10 }}>
-                  {THEMES.map(t => (
-                    <button key={t} onClick={() => setS('theme')(t)} style={s.chip(shop.theme===t)}>
+                  {THEMES.map(th => (
+                    <button key={th} onClick={() => { setS('theme')(th); if (th !== currentTheme) toggleTheme(); }} style={s.chip(shop.theme===th)}>
                       <Palette size={16}/>
-                      {t === 'dark' ? 'Escuro' : 'Claro'}
+                      {th === 'dark' ? t('setup','dark') : t('setup','light')}
                     </button>
                   ))}
                 </div>
@@ -433,10 +406,10 @@ function WizardNova({ onDone, onBack }) {
 
           {step === 1 && (
             <>
-              <Input label="Nome desta máquina *" value={machine.label} onChange={setM('label')} placeholder="Ex: Caixa Principal" icon={Monitor}/>
-              <Input label="Chave de rede LAN" value={machine.networkKey} onChange={setM('networkKey')} placeholder="Ex: CKB-XXXX-XXXX" icon={Wifi}/>
+              <Input label={t("setup","machineName")} value={machine.label} onChange={setM('label')} placeholder="Ex: Caixa Principal" icon={Monitor}/>
+              <Input label={t("setup","networkKey")} value={machine.networkKey} onChange={setM('networkKey')} placeholder="Ex: CKB-XXXX-XXXX" icon={Wifi}/>
               <div style={{ marginBottom:4 }}>
-                <label style={s.label}>Largura do ticket</label>
+                <label style={s.label}>{t("setup","ticketWidth")}</label>
                 <div style={{ display:'flex', gap:8 }}>
                   {TICKET_SIZES.map(sz => (
                     <button key={sz} onClick={() => setM('ticketSize')(String(sz))} style={s.chip(machine.ticketSize===String(sz))}>
@@ -452,13 +425,13 @@ function WizardNova({ onDone, onBack }) {
           {step === 2 && (
             <>
               <div style={{ marginBottom:20, padding:'14px 16px', borderRadius:10, background:'rgba(99,179,237,0.06)', border:'1px solid rgba(99,179,237,0.15)' }}>
-                <div style={{ fontSize:12, color:'#63b3ed', marginBottom:4, letterSpacing:1 }}>OPCIONAL</div>
-                <div style={{ fontSize:12, color:'rgba(255,255,255,0.5)' }}>A sincronização cloud pode ser configurada mais tarde em Configurações.</div>
+                <div style={{ fontSize:12, color:'#63b3ed', marginBottom:4, letterSpacing:1 }}>{t("setup","optional")}</div>
+                <div style={{ fontSize:12, color:s.textMuted }}>{t("setup","syncLater")}</div>
               </div>
               <Input label="Supabase URL" value={sync.supabaseUrl} onChange={setSy('supabaseUrl')} placeholder="https://xxx.supabase.co" icon={Database} disabled={sync.skipSync}/>
               <Input label="Supabase Key" value={sync.supabaseKey} onChange={setSy('supabaseKey')} placeholder="eyJhbGciO..." icon={Database} disabled={sync.skipSync}/>
               <button onClick={() => setSy('skipSync')(!sync.skipSync)} style={{ ...s.btnGhost, width:'100%', justifyContent:'center', marginTop:4 }}>
-                {sync.skipSync ? <><Check size={13}/> Ignorado — configurar mais tarde</> : 'Ignorar por agora'}
+                {sync.skipSync ? <><Check size={13}/> Ignorado — configurar mais tarde</> : t('setup','skipSync')}
               </button>
             </>
           )}
@@ -467,15 +440,44 @@ function WizardNova({ onDone, onBack }) {
             <>
               <div style={{ marginBottom:20, padding:'14px 16px', borderRadius:10, background:Dim, border:`1px solid ${Border}` }}>
                 <div style={{ display:'flex', alignItems:'center', gap:8, color:Gold, fontSize:12, letterSpacing:1 }}>
-                  <Star size={13}/> Este será o administrador principal
+                  <Star size={13}/> {t("setup","adminLabel")}
                 </div>
               </div>
-              <Input label="Nome completo *" value={admin.name} onChange={setA('name')} placeholder="Ex: Christ Black" icon={User}/>
-              <Input label="Email *" value={admin.email} onChange={setA('email')} placeholder="admin@ckbpos.com" type="email" icon={User}/>
+              <Input label={t("setup","fullName")} value={admin.name} onChange={setA('name')} placeholder="Ex: Christ Black" icon={User}/>
+              <Input label={t('setup','email')} value={admin.email} onChange={setA('email')} placeholder="admin@ckbpos.com" type="email" icon={User}/>
               <div style={s.row}>
-                <div style={s.col}><Input label="Senha *" value={admin.password} onChange={setA('password')} type="password" placeholder="Mínimo 6 caracteres"/></div>
-                <div style={s.col}><Input label="Confirmar *" value={admin.confirm} onChange={setA('confirm')} type="password" placeholder="Repetir senha"/></div>
+                <div style={s.col}><Input label={t("setup","password")} value={admin.password} onChange={setA('password')} type="password" placeholder={t("setup","minChars")}/></div>
+                <div style={s.col}><Input label={t("setup","confirm")} value={admin.confirm} onChange={setA('confirm')} type="password" placeholder="Repetir senha"/></div>
               </div>
+            </>
+          )}
+
+          {step === 4 && (
+            <>
+              <div style={{ marginBottom:20, padding:'14px 16px', borderRadius:10, background:Dim, border:`1px solid ${Border}` }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8, color:Gold, fontSize:12, letterSpacing:1 }}>
+                  <Key size={13}/> {t('setup','licenseLabel')}
+                </div>
+                <div style={{ fontSize:12, color:s.textMuted, marginTop:6 }}>{t('setup','licenseInfo')}</div>
+              </div>
+
+              <label style={s.label}>{t('setup','licensePaste')}</label>
+              <textarea
+                value={licenseCkb}
+                onChange={(e) => setLicenseCkb(e.target.value)}
+                placeholder={t('setup','licensePlaceholder')}
+                rows={5}
+                style={{ ...s.input, resize:'vertical', marginBottom:14 }}
+                onFocus={e => e.target.style.borderColor = Gold}
+                onBlur={e => e.target.style.borderColor = s.inputBdr}
+              />
+
+              <input type="file" accept=".ckb,.txt" ref={fileInputRef} style={{ display:'none' }} onChange={handleFile}/>
+              <button onClick={() => fileInputRef.current?.click()} style={{ ...s.btnGhost, width:'100%', justifyContent:'center', display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
+                <Upload size={14}/> {t('setup','licenseUpload')}
+              </button>
+
+              <div style={{ fontSize:11, color:s.textMuted, marginTop:14 }}>{t('setup','licenseSkipInfo')}</div>
             </>
           )}
 
@@ -484,12 +486,12 @@ function WizardNova({ onDone, onBack }) {
 
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:8 }}>
         <button onClick={step === 0 ? onBack : prev} style={s.btnSecondary}>
-          <ChevronLeft size={14}/> {step === 0 ? 'Voltar' : 'Anterior'}
+          <ChevronLeft size={14}/> {step === 0 ? t('setup','back') : t('setup','prev')}
         </button>
-        {step < 3
-          ? <button onClick={next} style={s.btnPrimary}>Próximo <ChevronRight size={14}/></button>
+        {step < 4
+          ? <button onClick={next} style={s.btnPrimary}>{t("setup","next")} <ChevronRight size={14}/></button>
           : <button onClick={finish} disabled={saving} style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }}>
-              {saving ? <><Loader size={14} style={{ animation:'spin 1s linear infinite' }}/> A guardar...</> : <><Check size={14}/> Concluir Setup</>}
+              {saving ? <><Loader size={14} style={{ animation:'spin 1s linear infinite' }}/> {t("setup","saving")}</> : <><Check size={14}/> {t("setup","finish")}</>}
             </button>
         }
       </div>
@@ -499,6 +501,8 @@ function WizardNova({ onDone, onBack }) {
 
 // ── WIZARD Juntar-me à rede existante ────────────────────────
 function WizardJoin({ onDone, onBack }) {
+  const s = useSetupS();
+  const { t } = useLang();
   const [phase, setPhase]       = useState('scan');   // scan | auth | syncing | login
   const [peers, setPeers]       = useState([]);
   const [scanning, setScanning] = useState(false);
@@ -517,7 +521,7 @@ function WizardJoin({ onDone, onBack }) {
     try {
       const res = await window.electron.lanScanForSnapshot();
       setPeers(res?.data?.filter(p => p.online) || []);
-      if (!res?.data?.length) setErr('Nenhuma máquina CKBPOS encontrada no LAN. Certifique-se que as outras máquinas estão ligadas.');
+      if (!res?.data?.length) setErr(t("setup","noMachinesFound"));
     } catch(e) { setErr(e.message); }
     setScanning(false);
   };
@@ -540,17 +544,21 @@ function WizardJoin({ onDone, onBack }) {
   }, []);
 
   const requestSnapshot = async () => {
-    if (!selected) { setErr('Selecione uma máquina'); return; }
+    if (!selected) { setErr(t('setup','errSelectMachine')); return; }
     const code = authMode === 'invite' ? inviteCode.trim() : '';
     const key  = authMode === 'key'    ? networkKey.trim() : '';
-    if (authMode === 'invite' && code.length !== 6) { setErr('Código deve ter 6 dígitos'); return; }
-    if (authMode === 'key' && !key) { setErr('Insira a chave de rede'); return; }
+    if (authMode === 'invite' && code.length !== 6) { setErr(t('setup','errCodeLength')); return; }
+    if (authMode === 'key' && !key) { setErr(t('setup','errNetworkKey')); return; }
     setErr('');
     setPhase('syncing');
     setProgress(5);
     try {
+      // Sauvegarder la clé réseau AVANT d'envoyer la demande
+      if (key) {
+        await window.electron.setNetworkKey(key);
+      }
       const res = await window.electron.requestSnapshot({ machine_id: selected, invite_code: code, network_key: key });
-      if (!res.success) { setErr(res.error || 'Erro ao contactar a máquina'); setPhase('auth'); }
+      if (!res.success) { setErr(res.error || t('setup','errContactMachine')); setPhase('auth'); }
     } catch(e) { setErr(e.message); setPhase('auth'); }
   };
 
@@ -560,7 +568,7 @@ function WizardJoin({ onDone, onBack }) {
       const res = await window.electron.dbGet(
         'SELECT id,nom,email,role FROM users WHERE email=? AND actif=1', [loginData.email]
       );
-      if (!res.data) { setLoginErr('Utilizador não encontrado'); setLogging(false); return; }
+      if (!res.data) { setLoginErr(t('setup','errUserNotFound')); setLogging(false); return; }
       const bcRes = await window.electron.dbGet(
         'SELECT password_hash FROM users WHERE email=?', [loginData.email]
       );
@@ -571,7 +579,7 @@ function WizardJoin({ onDone, onBack }) {
       if (loginRes.data) {
         onDone({ id: loginRes.data.id, name: loginRes.data.nom, email: loginRes.data.email, role: loginRes.data.role });
       } else {
-        setLoginErr('Credenciais inválidas');
+        setLoginErr(t('setup','errInvalidCreds'));
       }
     } catch(e) { setLoginErr(e.message); }
     setLogging(false);
@@ -584,32 +592,32 @@ function WizardJoin({ onDone, onBack }) {
       {phase === 'scan' && (
         <>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
-            <div style={{ fontSize:13, color:'rgba(255,255,255,0.6)', letterSpacing:1 }}>MÁQUINAS DETECTADAS</div>
+            <div style={{ fontSize:13, color:s.textMuted, letterSpacing:1 }}>{t("setup","machinesFound")}</div>
             <button onClick={scan} disabled={scanning} style={{ ...s.btnGhost, padding:'6px 14px', fontSize:11 }}>
-              <RefreshCw size={12} style={{ animation: scanning ? 'spin 1s linear infinite' : 'none' }}/> {scanning ? 'A pesquisar...' : 'Atualizar'}
+              <RefreshCw size={12} style={{ animation: scanning ? 'spin 1s linear infinite' : 'none' }}/> {scanning ? t('setup','scanning') : t('setup','refresh')}
             </button>
           </div>
 
           {err && <div style={s.error}><AlertTriangle size={14}/>{err}</div>}
 
           {scanning && !peers.length
-            ? <div style={{ textAlign:'center', padding:'32px 0', color:'rgba(255,255,255,0.3)', fontSize:12 }}>
+            ? <div style={{ textAlign:'center', padding:'32px 0', color:s.textMuted, fontSize:12 }}>
                 <Loader size={24} style={{ animation:'spin 1s linear infinite', marginBottom:12, display:'block', margin:'0 auto 12px' }}/>
-                A pesquisar na rede LAN...
+                {t("setup","scanning")}
               </div>
             : peers.length === 0
-              ? <div style={{ textAlign:'center', padding:'32px 0', color:'rgba(255,255,255,0.3)', fontSize:12 }}>
+              ? <div style={{ textAlign:'center', padding:'32px 0', color:s.textMuted, fontSize:12 }}>
                   <Signal size={32} style={{ marginBottom:12, display:'block', margin:'0 auto 12px', opacity:0.3 }}/>
-                  Nenhuma máquina encontrada
+                  {t("setup","noMachinesFoundShort")}
                 </div>
               : peers.map(p => (
                   <div key={p.machine_id} onClick={() => setSelected(p.machine_id)} style={s.peerCard(selected===p.machine_id)}>
-                    <div style={{ width:36, height:36, borderRadius:8, background: selected===p.machine_id ? Dim : 'rgba(255,255,255,0.05)', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                      <Monitor size={16} color={selected===p.machine_id ? Gold : 'rgba(255,255,255,0.4)'}/>
+                    <div style={{ width:36, height:36, borderRadius:8, background: selected===p.machine_id ? Dim : s.BgCard, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                      <Monitor size={16} color={selected===p.machine_id ? Gold : s.textMuted}/>
                     </div>
                     <div style={{ flex:1 }}>
-                      <div style={{ fontSize:13, color: selected===p.machine_id ? Gold : '#fff', fontWeight:600 }}>{p.machine_label || p.machine_id.slice(0,8)}</div>
-                      <div style={{ fontSize:11, color:'rgba(255,255,255,0.35)' }}>{p.ip} · {p.machine_id.slice(0,8)}</div>
+                      <div style={{ fontSize:13, color: selected===p.machine_id ? Gold : s.textMain, fontWeight:600 }}>{p.machine_label || p.machine_id.slice(0,8)}</div>
+                      <div style={{ fontSize:11, color:s.textMuted }}>{p.ip} · {p.machine_id.slice(0,8)}</div>
                     </div>
                     <div style={{ width:8, height:8, borderRadius:'50%', background:'#68d391' }}/>
                   </div>
@@ -617,8 +625,8 @@ function WizardJoin({ onDone, onBack }) {
           }
 
           <div style={{ display:'flex', justifyContent:'space-between', marginTop:20 }}>
-            <button onClick={onBack} style={s.btnSecondary}><ChevronLeft size={14}/> Voltar</button>
-            <button onClick={() => { if (!selected) { setErr('Selecione uma máquina'); return; } setErr(''); setPhase('auth'); }} style={s.btnPrimary} disabled={!selected}>
+            <button onClick={onBack} style={s.btnSecondary}><ChevronLeft size={14}/> {t("setup","back")}</button>
+            <button onClick={() => { if (!selected) { setErr(t('setup','errSelectMachine')); return; } setErr(''); setPhase('auth'); }} style={s.btnPrimary} disabled={!selected}>
               Continuar <ChevronRight size={14}/>
             </button>
           </div>
@@ -629,7 +637,7 @@ function WizardJoin({ onDone, onBack }) {
       {phase === 'auth' && (
         <>
           <div style={{ marginBottom:20 }}>
-            <div style={{ fontSize:12, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>Máquina selecionada</div>
+            <div style={{ fontSize:12, color:s.textMuted, marginBottom:4 }}>{t("setup","selectedMachine")}</div>
             <div style={{ fontSize:14, color:Gold, fontWeight:600 }}>
               {peers.find(p=>p.machine_id===selected)?.machine_label || selected?.slice(0,8)}
             </div>
@@ -648,16 +656,16 @@ function WizardJoin({ onDone, onBack }) {
 
           {authMode === 'invite'
             ? <>
-                <div style={{ marginBottom:8, fontSize:12, color:'rgba(255,255,255,0.45)', lineHeight:1.6 }}>
-                  Na máquina origem, vá a <span style={{ color:Gold }}>Configurações → Rede → Gerar código</span> e introduza os 6 dígitos aqui.
+                <div style={{ marginBottom:8, fontSize:12, color:s.textMuted, lineHeight:1.6 }}>
+                  {t("setup","sourceMachineHint")} <span style={{ color:Gold }}>{t("setup","generateCodeHint")}</span> {t("setup","enterDigitsHint")}
                 </div>
-                <Input label="Código de convite (6 dígitos)" value={inviteCode} onChange={setInviteCode} placeholder="123456" type="text"/>
+                <Input label={t("setup","inviteCodeLabel")} value={inviteCode} onChange={setInviteCode} placeholder="123456" type="text"/>
               </>
-            : <Input label="Chave de rede LAN" value={networkKey} onChange={setNetworkKey} placeholder="CKB-XXXX-XXXX" icon={Wifi}/>
+            : <Input label={t("setup","networkKey")} value={networkKey} onChange={setNetworkKey} placeholder="CKB-XXXX-XXXX" icon={Wifi}/>
           }
 
           <div style={{ display:'flex', justifyContent:'space-between', marginTop:8 }}>
-            <button onClick={() => { setErr(''); setPhase('scan'); }} style={s.btnSecondary}><ChevronLeft size={14}/> Voltar</button>
+            <button onClick={() => { setErr(''); setPhase('scan'); }} style={s.btnSecondary}><ChevronLeft size={14}/> {t("setup","back")}</button>
             <button onClick={requestSnapshot} style={s.btnPrimary}>Importar dados <ChevronRight size={14}/></button>
           </div>
         </>
@@ -670,11 +678,11 @@ function WizardJoin({ onDone, onBack }) {
             <div style={{ width:64, height:64, borderRadius:'50%', background:Dim, border:`2px solid ${Gold}`, display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px' }}>
               <Database size={28} color={Gold} style={{ animation: progress < 100 ? 'pulse 1s ease-in-out infinite' : 'none' }}/>
             </div>
-            <div style={{ fontSize:14, color:'#fff', fontWeight:600, marginBottom:6 }}>
-              {progress < 100 ? 'A importar dados...' : 'Importação concluída!'}
+            <div style={{ fontSize:14, color:s.textMain, fontWeight:600, marginBottom:6 }}>
+              {progress < 100 ? t("setup","importingData") : t("setup","importComplete")}
             </div>
-            <div style={{ fontSize:12, color:'rgba(255,255,255,0.4)' }}>
-              {progress < 100 ? 'Produtos, ventes, utilizadores, configurações' : 'Pronto para entrar'}
+            <div style={{ fontSize:12, color:s.textMuted }}>
+              {progress < 100 ? t('setup','importingDetail') : t('setup','readyToEnter')}
             </div>
           </div>
           <ProgressBar value={progress}/>
@@ -685,13 +693,13 @@ function WizardJoin({ onDone, onBack }) {
       {/* PHASE: LOGIN após snapshot */}
       {phase === 'login' && (
         <>
-          <div style={{ ...s.success, marginBottom:20 }}><Check size={14}/> Dados importados com sucesso!</div>
-          <div style={{ fontSize:13, color:'rgba(255,255,255,0.5)', marginBottom:20, letterSpacing:1 }}>ENTRAR COM CONTA EXISTENTE</div>
+          <div style={{ ...s.success, marginBottom:20 }}><Check size={14}/> {t("setup","importSuccess")}</div>
+          <div style={{ fontSize:13, color:s.textMuted, marginBottom:20, letterSpacing:1 }}>{t("setup","loginExisting")}</div>
           {loginErr && <div style={s.error}><AlertTriangle size={14}/>{loginErr}</div>}
-          <Input label="Email" value={loginData.email} onChange={v => setLoginData(p=>({...p,email:v}))} placeholder="admin@ckbpos.com" type="email" icon={User}/>
-          <Input label="Senha" value={loginData.password} onChange={v => setLoginData(p=>({...p,password:v}))} type="password" placeholder="••••••••"/>
+          <Input label={t("setup","email")} value={loginData.email} onChange={v => setLoginData(p=>({...p,email:v}))} placeholder="admin@ckbpos.com" type="email" icon={User}/>
+          <Input label={t("setup","password")} value={loginData.password} onChange={v => setLoginData(p=>({...p,password:v}))} type="password" placeholder="••••••••"/>
           <button onClick={doLogin} disabled={logging} style={{ ...s.btnPrimary, width:'100%', justifyContent:'center', marginTop:4 }}>
-            {logging ? <><Loader size={14} style={{ animation:'spin 1s linear infinite' }}/> A entrar...</> : <><Check size={14}/> Entrar</>}
+            {logging ? <><Loader size={14} style={{ animation:'spin 1s linear infinite' }}/> {t("setup","entering")}</> : <><Check size={14}/> {t("setup","enter")}</>}
           </button>
         </>
       )}
@@ -701,6 +709,15 @@ function WizardJoin({ onDone, onBack }) {
 
 // ── Page principale SetupPage ────────────────────────────────
 export default function SetupPage({ onDone }) {
+  const s = useSetupS();
+  const { t } = useLang();
+  const { theme: _initTheme, toggleTheme: _forceTheme } = useTheme();
+  // Forcer dark au premier montage du setup wizard
+  const _forcedRef = require('react').useRef(false);
+  require('react').useEffect(() => {
+    if (!_forcedRef.current && _initTheme !== 'dark') { _forceTheme(); }
+    _forcedRef.current = true;
+  }, []);
   const [view, setView] = useState('choice'); // choice | new | join
 
   return (
@@ -713,7 +730,7 @@ export default function SetupPage({ onDone }) {
       <style>{`
         @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
         @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
-        input::placeholder { color: rgba(255,255,255,0.2); }
+        input::placeholder { color: rgba(150,140,100,0.4); }
         select option { background:#1a1a1a; color:#fff; }
       `}</style>
 
@@ -722,12 +739,12 @@ export default function SetupPage({ onDone }) {
         <div style={s.header}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
             <div>
-              <div style={s.logo}>CKB<span style={{ color:'rgba(255,255,255,0.6)', fontWeight:400 }}>POS</span></div>
-              <div style={s.subtitle}>CONFIGURAÇÃO INICIAL</div>
+              <div style={s.logo}>CKB<span style={{ color:s.textMuted, fontWeight:400 }}>POS</span></div>
+              <div style={s.subtitle}>{t("setup","setupTitle")}</div>
             </div>
             {view !== 'choice' && (
-              <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', letterSpacing:2, paddingTop:6 }}>
-              {view === 'new'      ? 'NOVA BOUTIQUE' : view === 'join' ? 'REDE EXISTENTE' : 'RESTAURAR DB'}
+              <div style={{ fontSize:11, color:s.textMuted, letterSpacing:2, paddingTop:6 }}>
+              {view === 'new'      ? t("setup","newStoreBadge") : view === 'join' ? t("setup","joinNetworkBadge") : t("setup","restoreDbBadge")}
               </div>
             )}
           </div>

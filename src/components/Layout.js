@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { useAuth } from '../App';
+import { useAuth, useTheme } from '../App';
 import { useLang } from '../utils/useLang';
-import { LayoutDashboard, ShoppingCart, Package, Warehouse, History, Users, Settings, LogOut, Minus, Square, X, ChevronLeft, ChevronRight, RefreshCw, AlertTriangle, BookOpen, Terminal, Monitor } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Package, Warehouse, History, Users, Settings, LogOut, Minus, Square, X, ChevronLeft, ChevronRight, RefreshCw, AlertTriangle, BookOpen, Terminal, Monitor, MessageSquare, ClipboardList } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ShiftModal from './ShiftModal';
+import UpdateBanner from './UpdateBanner';
 
 // Animation variants — fade entrant uniquement, pas d'exit pour eviter flash noir
 const pageVariants = {
@@ -55,7 +56,9 @@ function AnimatedPage({ children, locationKey }) {
 
 export default function Layout() {
   const { user, logout } = useAuth();
-  const { t } = useLang();
+  const { theme }        = useTheme();
+  const { t, lang } = useLang();
+  const intlLocale = lang === 'fr' ? 'fr-FR' : lang === 'en' ? 'en-US' : 'pt-BR';
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
@@ -70,6 +73,11 @@ export default function Layout() {
   const [consoleFilter, setConsoleFilter] = useState('ALL');
   const [hasError, setHasError]           = useState(false);
   const consoleEndRef = useRef(null);
+  // ── v4.6.2 Console SQL ──
+  const [consoleTab, setConsoleTab]   = useState('logs'); // 'logs' | 'sql'
+  const [sqlInput, setSqlInput]       = useState('SELECT COUNT(*) FROM ventes;');
+  const [sqlResult, setSqlResult]     = useState(null);
+  const [sqlLoading, setSqlLoading]   = useState(false);
   // ── v1.5.0 Sync status ──
   const [syncSt, setSyncSt] = useState({ status: 'idle', pending: 0, online: 0 });
   // ── v1.7.0 Cloud status ──
@@ -81,17 +89,19 @@ export default function Layout() {
   // ── v3.7.0 Toast notification sync ──
   const [syncToast, setSyncToast] = useState(null);
   const syncToastTimerRef = useRef(null);
+  // ── v4.1.0 Badge messages non lus ──
+  const [unreadChat, setUnreadChat] = useState(0);
 
   // Horloge temps réel
   useEffect(() => {
     const tick = () => {
       const now = new Date();
-      setClock(now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      setClock(now.toLocaleTimeString(intlLocale, { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     };
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [intlLocale]);
 
   // ── v1.4.1 Console in-app — abonnement aux logs ──
   useEffect(() => {
@@ -132,7 +142,7 @@ export default function Layout() {
       setSyncSt(data);
       // v3.7.0 — Toast sync si ventes reçues
       if (data.applied && data.applied > 0 && data.fromLabel) {
-        const msg = `✅ Sync de ${data.fromLabel} — ${data.applied} entrée(s)`;
+        const msg = `\u2705 Sync de ${data.fromLabel} — ${data.applied} entrée(s)`;
         setSyncToast({ msg, key: Date.now() });
         clearTimeout(syncToastTimerRef.current);
         syncToastTimerRef.current = setTimeout(() => setSyncToast(null), 3000);
@@ -164,6 +174,15 @@ export default function Layout() {
     window.electron.coordStatus().then(res => { if (res?.success) setCoordStatus(res); }).catch(() => {});
     const cleanup = window.electron.onCoordStatusChanged((data) => setCoordStatus(data));
     return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
+  // ── v4.1.0 Badge messages non lus ──
+  useEffect(() => {
+    const refresh = () => window.electron.chatUnreadCount().then(r => { if (r?.success) setUnreadChat(r.count); }).catch(()=>{});
+    refresh();
+    const interval = setInterval(refresh, 5000);
+    const cleanup = window.electron.onChatMessage(() => refresh());
+    return () => { clearInterval(interval); if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
   const isAdmin = user?.role === 'admin';
@@ -198,8 +217,10 @@ export default function Layout() {
     ] : []),
     { to: '/historique', icon: History, label: t('nav','history') },
     { to: '/caderno', icon: BookOpen, label: t('nav','caderno') },
+    { to: '/messaging', icon: MessageSquare, label: t('messaging','title') || 'Mensagens', badge: unreadChat },
     ...(isAdmin ? [{ to: '/settings', icon: Settings, label: t('nav','settings') }] : []),
-    ...(isAdmin ? [{ to: '/coord', icon: Monitor, label: 'Coord. F9' }] : []),
+    ...(isAdmin ? [{ to: '/coord', icon: Monitor, label: 'Coord' }] : []),
+    ...(isAdmin ? [{ to: '/audit', icon: ClipboardList, label: 'Audit' }] : []),
   ];
 
   const handleSync = async () => {
@@ -281,7 +302,7 @@ export default function Layout() {
               title="Esta máquina é o Coordenador da rede"
               style={{ display:'flex', alignItems:'center', gap:4, marginRight:6, padding:'2px 8px', borderRadius:4, background:'rgba(99,179,237,0.12)', border:'1px solid rgba(99,179,237,0.35)' }}
             >
-              <span style={{ fontSize:10 }}>⭐</span>
+              <span style={{ fontSize:10 }}>{'\u2B50'}</span>
               <span style={{ fontSize:10, color:'#63b3ed', fontFamily:'monospace', fontWeight:600 }}>COORD</span>
             </div>
           )}
@@ -291,19 +312,19 @@ export default function Layout() {
               title="Coordenador ausente — modo degradado ativo"
               style={{ display:'flex', alignItems:'center', gap:4, marginRight:6, padding:'2px 8px', borderRadius:4, background:'rgba(245,101,101,0.12)', border:'1px solid rgba(245,101,101,0.35)' }}
             >
-              <span style={{ fontSize:10 }}>⚠️</span>
+              <span style={{ fontSize:10 }}>{'\u26A0'}{'\uFE0F'}</span>
               <span style={{ fontSize:10, color:'#fc8181', fontFamily:'monospace', fontWeight:600 }}>DEGRADADO</span>
             </div>
           )}
           {/* ── v1.9.1 Indicateur impression partagée ── */}
           {printerMode.mode === 'shared' && printerMode.targetLabel && (
             <div
-              title={'Impressão partilhada → ' + printerMode.targetLabel}
+              title={'Impressão partilhada \u2192 ' + printerMode.targetLabel}
               style={{ display:'flex', alignItems:'center', gap:4, marginRight:10, padding:'2px 8px', borderRadius:4, background:'rgba(232,197,71,0.1)', border:'1px solid rgba(232,197,71,0.3)' }}
             >
-              <span style={{ fontSize:11 }}>🖨️</span>
+              <span style={{ fontSize:11 }}>{'\u{1F5A8}'}{'\uFE0F'}</span>
               <span style={{ fontSize:10, color:'#e8c547', fontFamily:'monospace', fontWeight:600, whiteSpace:'nowrap' }}>
-                {'→ ' + printerMode.targetLabel}
+                {'\u2192 ' + printerMode.targetLabel}
               </span>
             </div>
           )}
@@ -326,9 +347,13 @@ export default function Layout() {
           <div style={{ padding: collapsed ? '16px 12px' : '16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10, overflow: 'hidden' }}>
             <motion.div
               whileHover={{ scale: 1.08 }}
-              style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--accent-dim)', border: '2px solid var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)', fontWeight: 700, fontSize: 14, flexShrink: 0 }}
+              style={{ width: 36, height: 36, borderRadius: '50%', border: '2px solid var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)', fontWeight: 700, fontSize: 14, flexShrink: 0, overflow: 'hidden', background: 'var(--accent-dim)' }}
             >
-              {user?.nom?.[0]?.toUpperCase()}
+              {user?.photo_base64 ? (
+                <img src={user.photo_base64} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}/>
+              ) : (
+                user?.nom?.[0]?.toUpperCase()
+              )}
             </motion.div>
             <AnimatePresence>
               {!collapsed && (
@@ -490,6 +515,9 @@ export default function Layout() {
         </main>
       </div>
 
+      {/* ── v4.9.0 Auto-update banner ── */}
+      <UpdateBanner />
+
       {/* ── v3.7.0 Toast notification sync ── */}
       {syncToast && (
         <div key={syncToast.key} style={{
@@ -524,7 +552,7 @@ export default function Layout() {
             >
               <div className="modal-header">
                 <h2 className="modal-title" style={{ color: 'var(--danger)' }}>
-                  <AlertTriangle size={18} style={{ display: 'inline', marginRight: 8 }} />⚠️ Estoque Baixo!
+                  <AlertTriangle size={18} style={{ display: 'inline', marginRight: 8 }} />{'\u26A0'}{'\uFE0F'} Estoque Baixo!
                 </h2>
                 <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => setShowAlertPopup(false)} className="btn btn-icon btn-secondary"><X size={16} /></motion.button>
               </div>
@@ -546,9 +574,9 @@ export default function Layout() {
                 </motion.div>
               ))}
               <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-                <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} onClick={() => setShowAlertPopup(false)} className="btn btn-secondary" style={{ flex: 1, justifyContent: 'center' }}>Fechar</motion.button>
+                <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} onClick={() => setShowAlertPopup(false)} className="btn btn-secondary" style={{ flex: 1, justifyContent: 'center' }}>{t('alert','close')}</motion.button>
                 <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} onClick={() => { setShowAlertPopup(false); navigate('/estoque'); }} className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }}>
-                  Ver Estoque
+                  {t('alert','viewStock')}
                 </motion.button>
               </div>
             </motion.div>
@@ -564,55 +592,137 @@ export default function Layout() {
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 280, opacity: 0 }}
             transition={{ duration: 0.22, ease: [0.25, 0.46, 0.45, 0.94] }}
-            style={{ position:'fixed', bottom:0, left:0, right:0, height:268, background:'#080808', borderTop:'2px solid var(--accent)', zIndex:998, display:'flex', flexDirection:'column', fontFamily:'monospace' }}
+            style={{ position:'fixed', bottom:0, left:0, right:0, height:268, background: theme==='dark'?'#080808':'#f0f0f0', borderTop:'2px solid var(--accent)', zIndex:998, display:'flex', flexDirection:'column', fontFamily:'monospace' }}
           >
             {/* Header */}
-            <div style={{ padding:'5px 14px', borderBottom:'1px solid #1e1e1e', display:'flex', alignItems:'center', gap:10, flexShrink:0, background:'#0a0a0a' }}>
+            <div style={{ padding:'5px 14px', borderBottom:`1px solid ${theme==='dark'?'#1e1e1e':'#d0d0d0'}`, display:'flex', alignItems:'center', gap:10, flexShrink:0, background: theme==='dark'?'#0a0a0a':'#e4e4e4' }}>
               <Terminal size={13} color="var(--accent)" />
               <span style={{ fontSize:11, fontWeight:700, color:'var(--accent)', letterSpacing:'1px' }}>CONSOLE</span>
-              <span style={{ fontSize:10, color:'#444' }}>{consoleLogs.length} logs</span>
-              <span style={{ fontSize:9, color:'#333', marginLeft:4 }}>Ctrl+`</span>
+              <span style={{ fontSize:10, color: theme==='dark'?'#444':'#888' }}>{consoleLogs.length} logs</span>
+              <span style={{ fontSize:9, color: theme==='dark'?'#333':'#999', marginLeft:4 }}>Ctrl+`</span>
               <div style={{ flex:1 }} />
               {/* Filtres */}
-              {['ALL','LAN','SYNC','ERROR'].map(f => (
+              {/* Onglet LOGS */}
+              <button onClick={() => setConsoleTab('logs')} style={{ background:consoleTab==='logs'?'var(--accent)':'transparent', color:consoleTab==='logs'?'#000':'#555', border:`1px solid ${consoleTab==='logs'?'var(--accent)':'#2a2a2a'}`, borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', fontWeight:700, letterSpacing:'0.5px' }}>
+                LOGS
+              </button>
+              {/* Onglet SQL */}
+              <button onClick={() => setConsoleTab('sql')} style={{ background:consoleTab==='sql'?'#a78bfa':'transparent', color:consoleTab==='sql'?'#000':'#555', border:`1px solid ${consoleTab==='sql'?'#a78bfa':'#2a2a2a'}`, borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', fontWeight:700, letterSpacing:'0.5px' }}>
+                SQL
+              </button>
+              {/* Filtres logs (visibles seulement en mode LOGS) */}
+              {consoleTab === 'logs' && ['ALL','LAN','SYNC','ERROR'].map(f => (
                 <button key={f} onClick={() => setConsoleFilter(f)} style={{ background:consoleFilter===f?'var(--accent)':'transparent', color:consoleFilter===f?'#000':'#555', border:`1px solid ${consoleFilter===f?'var(--accent)':'#2a2a2a'}`, borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', fontWeight:700, letterSpacing:'0.5px', transition:'all 0.15s' }}>
                   {f}
                 </button>
               ))}
-              <button onClick={() => setConsoleLogs([])} style={{ background:'transparent', border:'1px solid #2a2a2a', color:'#555', borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', marginLeft:4 }}>
-                CLEAR
-              </button>
+              {consoleTab === 'logs' && (
+                <button onClick={() => setConsoleLogs([])} style={{ background:'transparent', border:'1px solid #2a2a2a', color:'#555', borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', marginLeft:4 }}>
+                  CLEAR
+                </button>
+              )}
               <button onClick={() => setShowConsole(false)} style={{ background:'transparent', border:'none', color:'#555', cursor:'pointer', fontSize:16, lineHeight:1, padding:'0 4px', marginLeft:4 }}>
                 ×
               </button>
             </div>
 
-            {/* Lignes de log */}
-            <div style={{ flex:1, overflowY:'auto', padding:'4px 0' }}>
-              {(() => {
-                const TAG_COLOR = { '[LAN]':'#60a5fa','[SYNC]':'#f59e0b','[BEAT]':'#f97316','[BOOT]':'#e8c547','[DB]':'#a78bfa','[IPC]':'#9ca3af','[LOG]':'#6b7280','[CKBPOS]':'#e8c547' };
-                const filtered = consoleFilter === 'ALL'   ? consoleLogs
-                               : consoleFilter === 'ERROR' ? consoleLogs.filter(l => l.level === 'error')
-                               : consoleLogs.filter(l => l.tag === `[${consoleFilter}]`);
-                if (filtered.length === 0) return (
-                  <div style={{ color:'#2a2a2a', fontSize:11, paddingTop:24, textAlign:'center' }}>
-                    {consoleLogs.length === 0 ? 'Aguardando logs\u2026' : 'Nenhum log para este filtro'}
-                  </div>
-                );
-                return filtered.map((log, i) => {
-                  const tc = TAG_COLOR[log.tag] || '#6b7280';
-                  const mc = log.level==='error'?'#ef4444':log.level==='warn'?'#fbbf24':log.level==='success'?'#22c55e':'#888';
-                  return (
-                    <div key={i} style={{ display:'flex', gap:10, fontSize:11, lineHeight:'1.85', padding:'0 14px', borderBottom:'1px solid #0f0f0f' }}>
-                      <span style={{ color:'#2e2e2e', flexShrink:0, width:64 }}>{log.time}</span>
-                      <span style={{ color:tc, background:tc+'18', padding:'0 5px', borderRadius:2, flexShrink:0, minWidth:52, textAlign:'center', fontWeight:700, fontSize:10 }}>{log.tag}</span>
-                      <span style={{ color:mc, flex:1, wordBreak:'break-all' }}>{log.msg}</span>
+            {/* ── Corps : LOGS ── */}
+            {consoleTab === 'logs' && (
+              <div style={{ flex:1, overflowY:'auto', padding:'4px 0' }}>
+                {(() => {
+                  const TAG_COLOR = { '[LAN]':'#60a5fa','[SYNC]':'#f59e0b','[BEAT]':'#f97316','[BOOT]':'#e8c547','[DB]':'#a78bfa','[IPC]':'#9ca3af','[LOG]':'#6b7280','[CKBPOS]':'#e8c547' };
+                  const filtered = consoleFilter === 'ALL'   ? consoleLogs
+                                 : consoleFilter === 'ERROR' ? consoleLogs.filter(l => l.level === 'error')
+                                 : consoleLogs.filter(l => l.tag === `[${consoleFilter}]`);
+                  if (filtered.length === 0) return (
+                    <div style={{ color:'#2a2a2a', fontSize:11, paddingTop:24, textAlign:'center' }}>
+                      {consoleLogs.length === 0 ? 'Aguardando logs…' : 'Nenhum log para este filtro'}
                     </div>
                   );
-                });
-              })()}
-              <div ref={consoleEndRef} />
-            </div>
+                  return filtered.map((log, i) => {
+                    const tc = TAG_COLOR[log.tag] || '#6b7280';
+                    const mc = log.level==='error'?'#ef4444':log.level==='warn'?'#fbbf24':log.level==='success'?'#22c55e':'#888';
+                    return (
+                      <div key={i} style={{ display:'flex', gap:10, fontSize:11, lineHeight:'1.85', padding:'0 14px', borderBottom:'1px solid #0f0f0f' }}>
+                        <span style={{ color:'#2e2e2e', flexShrink:0, width:64 }}>{log.time}</span>
+                        <span style={{ color:tc, background:tc+'18', padding:'0 5px', borderRadius:2, flexShrink:0, minWidth:52, textAlign:'center', fontWeight:700, fontSize:10 }}>{log.tag}</span>
+                        <span style={{ color:mc, flex:1, wordBreak:'break-all' }}>{log.msg}</span>
+                      </div>
+                    );
+                  });
+                })()}
+                <div ref={consoleEndRef} />
+              </div>
+            )}
+
+            {/* ── Corps : SQL ── */}
+            {consoleTab === 'sql' && (
+              <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+                {/* Input SQL */}
+                <div style={{ display:'flex', gap:6, padding:'6px 10px', borderBottom:'1px solid #1a1a1a', flexShrink:0 }}>
+                  <textarea
+                    value={sqlInput}
+                    onChange={e => setSqlInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); runSql(); } }}
+                    placeholder="SELECT * FROM ventes LIMIT 10;"
+                    rows={2}
+                    style={{ flex:1, background:'#111', border:'1px solid #2a2a2a', color:'#a78bfa', borderRadius:4, padding:'4px 8px', fontFamily:'monospace', fontSize:11, resize:'none', outline:'none' }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (!sqlInput.trim() || sqlLoading) return;
+                      setSqlLoading(true); setSqlResult(null);
+                      window.electron.devSqlQuery(sqlInput.trim())
+                        .then(r => setSqlResult(r))
+                        .catch(e => setSqlResult({ success:false, error: e.message }))
+                        .finally(() => setSqlLoading(false));
+                    }}
+                    style={{ background:'#a78bfa22', border:'1px solid #a78bfa', color:'#a78bfa', borderRadius:4, padding:'0 14px', fontSize:10, fontFamily:'monospace', fontWeight:700, cursor:'pointer', flexShrink:0, letterSpacing:'0.5px' }}
+                  >
+                    {sqlLoading ? '…' : t('devConsole','runBtn')}
+                    <span style={{ display:'block', fontSize:8, color:'#555', fontWeight:400 }}>Ctrl+Enter</span>
+                  </button>
+                  <button onClick={() => setSqlResult(null)} style={{ background:'transparent', border:'1px solid #2a2a2a', color:'#444', borderRadius:4, padding:'0 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace' }}>{t('devConsole','clearBtn')}</button>
+                </div>
+                {/* Résultats */}
+                <div style={{ flex:1, overflowY:'auto', overflowX:'auto', padding:'4px 0' }}>
+                  {!sqlResult && !sqlLoading && (
+                    <div style={{ color:'#2a2a2a', fontSize:11, paddingTop:20, textAlign:'center', fontFamily:'monospace' }}>{t('devConsole','cmdHint')}</div>
+                  )}
+                  {sqlLoading && (
+                    <div style={{ color:'#a78bfa', fontSize:11, paddingTop:20, textAlign:'center', fontFamily:'monospace' }}>{t('devConsole','running')}</div>
+                  )}
+                  {sqlResult && !sqlResult.success && (
+                    <div style={{ color:'#ef4444', fontSize:11, padding:'8px 14px', fontFamily:'monospace' }}>{'\u274C'} {sqlResult.error}</div>
+                  )}
+                  {sqlResult && sqlResult.success && sqlResult.rows.length === 0 && (
+                    <div style={{ color:'#22c55e', fontSize:11, padding:'8px 14px', fontFamily:'monospace' }}>{'\u2705'} {sqlResult.info || `0 lignes — ${sqlResult.count} changes`}</div>
+                  )}
+                  {sqlResult && sqlResult.success && sqlResult.rows.length > 0 && (() => {
+                    const cols = Object.keys(sqlResult.rows[0]);
+                    return (
+                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:10, fontFamily:'monospace' }}>
+                        <thead>
+                          <tr style={{ background:'#111', position:'sticky', top:0 }}>
+                            {cols.map(c => <th key={c} style={{ padding:'3px 10px', color:'#a78bfa', borderBottom:'1px solid #2a2a2a', textAlign:'left', fontWeight:700, whiteSpace:'nowrap' }}>{c}</th>)}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sqlResult.rows.map((row, i) => (
+                            <tr key={i} style={{ background: i%2===0?'transparent': theme==='dark'?'#0d0d0d':'#e8e8e8' }}>
+                              {cols.map(c => <td key={c} style={{ padding:'2px 10px', color:'#888', borderBottom:'1px solid #0f0f0f', maxWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{row[c] === null ? <span style={{color:'#333'}}>NULL</span> : String(row[c])}</td>)}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    );
+                  })()}
+                  {sqlResult && sqlResult.success && sqlResult.rows.length > 0 && (
+                    <div style={{ color:'#444', fontSize:9, padding:'4px 14px', fontFamily:'monospace' }}>{sqlResult.count} ligne(s)</div>
+                  )}
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

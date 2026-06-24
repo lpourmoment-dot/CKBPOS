@@ -2,13 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../App';
 import { useLang } from '../utils/useLang';
 import { Plus, Minus, AlertTriangle, Search, X, Layers } from 'lucide-react';
-import { useAlert } from '../components/AlertModal'; // ✅ AJOUT
+import { useAlert } from '../components/AlertModal'; // \u2705 AJOUT
 
 export default function EstoquePage() {
   const { user } = useAuth();
-  const { t } = useLang();
+  const { t, lang } = useLang();
+  const intlLocale = lang === 'fr' ? 'fr-FR' : lang === 'en' ? 'en-US' : 'pt-BR';
 
-  // ✅ Hook modal React (remplace alert() natif)
+  // \u2705 Hook modal React (remplace alert() natif)
   const { showAlert, AlertModalComponent } = useAlert();
 
   const [products, setProducts] = useState([]);
@@ -64,9 +65,9 @@ export default function EstoquePage() {
   };
 
   const handleMouvement = async () => {
-    // ✅ Remplacé alert() natifs → showAlert React
+    // \u2705 Remplacé alert() natifs \u2192 showAlert React
     if (!quantite || Number(quantite) <= 0) {
-      showAlert('', 'Informe uma quantidade válida', 'warning'); return;
+      showAlert('', t('stock','invalidQuantity'), 'warning'); return;
     }
     if (modalType === 'sortie' && !motif) {
       showAlert('', t('stock','selectMotive'), 'warning'); return;
@@ -82,8 +83,8 @@ export default function EstoquePage() {
     const stockAntes = stockSource.stock_cartons;
 
     if (modalType === 'sortie' && cartonsQty > stockAntes) {
-      // ✅ Remplacé alert() natif → showAlert React
-      showAlert('Stock insuficiente!', `Disponível: ${Math.round(stockAntes * 100) / 100} caixas`, 'warning');
+      // \u2705 Remplacé alert() natif \u2192 showAlert React
+      showAlert(t('stock','insufficientStock'), `${t('stock','available')}: ${Math.round(stockAntes * 100) / 100} ${t('stock','boxesShort')}`, 'warning');
       return;
     }
 
@@ -130,8 +131,8 @@ export default function EstoquePage() {
 
       setShowModal(false); loadProducts(); loadMouvements();
     } catch(e) {
-      // ✅ Remplacé alert() natif → showAlert React
-      showAlert('Erro', e.message, 'error');
+      // \u2705 Remplacé alert() natif \u2192 showAlert React
+      showAlert(t('stock','error'), e.message, 'error');
     }
     setLoading(false);
   };
@@ -178,14 +179,14 @@ export default function EstoquePage() {
     : 0;
 
   const quantityLabel =
-    typeMesure === 'carton' ? `📦 ${t('stock','quantityBoxes')}` :
+    typeMesure === 'carton' ? `\u{1F4E6} ${t('stock','quantityBoxes')}` :
     typeMesure === 'demi'   ? `½ ${t('stock','quantityHalves')}` :
-                              `🔹 ${t('stock','quantityUnits')}`;
+                              `\u{1F539} ${t('stock','quantityUnits')}`;
 
   const TYPE_MESURE = [
-    { key:'carton', label:`📦 ${t('cashier','box')}` },
+    { key:'carton', label:`\u{1F4E6} ${t('cashier','box')}` },
     { key:'demi',   label:`½ ${t('cashier','half')}` },
-    { key:'unite',  label:`🔹 ${t('cashier','unit')}` },
+    { key:'unite',  label:`\u{1F539} ${t('cashier','unit')}` },
   ];
 
   const MOTIFS_SORTIE = [
@@ -256,7 +257,7 @@ export default function EstoquePage() {
                     </td>
                     <td style={{ color:'var(--text-muted)', fontSize:13 }}>{p.categorie}</td>
                     <td style={{ fontFamily:'monospace', fontWeight:700, color:isLow?'var(--danger)':'var(--success)' }}>
-                      {roundStock(p.stock_cartons)} cx
+                      {roundStock(p.stock_cartons)} {t('stock','boxesShort')}
                     </td>
                     <td>
                       <input type="number" value={p.stock_alerte || 0} min="0"
@@ -265,8 +266,8 @@ export default function EstoquePage() {
                     </td>
                     <td>
                       {isLow
-                        ? <span className="badge badge-danger"><AlertTriangle size={10} style={{ display:'inline', marginRight:3 }}/>Baixo</span>
-                        : <span className="badge badge-success">OK</span>}
+                        ? <span className="badge badge-danger"><AlertTriangle size={10} style={{ display:'inline', marginRight:3 }}/>{t('stock','lowBadge')}</span>
+                        : <span className="badge badge-success">{t('stock','okBadge')}</span>}
                     </td>
                     <td>
                       <div style={{ display:'flex', gap:6 }}>
@@ -292,17 +293,17 @@ export default function EstoquePage() {
           {filteredMouvements.map(m => (
             <div key={m.id} className="card" style={{ padding:'12px 16px', display:'flex', alignItems:'center', gap:12 }}>
               <div style={{ width:80, fontSize:12, fontWeight:700, color:typeColor[m.type] }}>
-                {m.type==='entree'?'➕':m.type==='sortie'?'➖':m.type==='vente'?'🛒':m.type==='retour'?'↩️':'✏️'} {m.type}
+                {m.type==='entree'?'\u2795':m.type==='sortie'?'\u2796':m.type==='vente'?'\u{1F6D2}':m.type==='retour'?'\u21A9\uFE0F':'\u270F\uFE0F'} {m.type}
               </div>
               <div style={{ flex:1 }}>
                 <div style={{ fontWeight:600, fontSize:13 }}>
                   {m.product_nom}{m.variant_nom ? ` — ${m.variant_nom}` : ''}
                 </div>
                 <div style={{ fontSize:11, color:'var(--text-muted)' }}>
-                  {new Date(m.date_mouvement).toLocaleString('fr-FR')} · {m.user_nom}
+                  {new Date(m.date_mouvement).toLocaleString(intlLocale)} · {m.user_nom}
                 </div>
                 {(m.motif||m.note) && (
-                  <div style={{ fontSize:11, color:'var(--text-secondary)', marginTop:2 }}>📝 {m.note}</div>
+                  <div style={{ fontSize:11, color:'var(--text-secondary)', marginTop:2 }}>{'\u{1F4DD}'} {m.note}</div>
                 )}
               </div>
               <div style={{ textAlign:'right' }}>
@@ -310,7 +311,7 @@ export default function EstoquePage() {
                   {m.type==='entree'||m.type==='retour'?'+':'-'}{Math.round(m.quantite*100)/100} {m.type_mesure||'cx'}
                 </div>
                 <div style={{ fontSize:11, color:'var(--text-muted)' }}>
-                  {Math.round(m.stock_avant*100)/100} → {Math.round(m.stock_apres*100)/100} cx
+                  {Math.round(m.stock_avant*100)/100} {'\u2192'} {Math.round(m.stock_apres*100)/100} {t('stock','boxesShort')}
                 </div>
               </div>
             </div>
@@ -342,7 +343,7 @@ export default function EstoquePage() {
                       <button key={v.id} onClick={() => setSelectedVariant(v)}
                         style={{ padding:'10px 14px', borderRadius:8, border:`2px solid ${selectedVariant?.id===v.id?'var(--accent)':'var(--border)'}`, background:selectedVariant?.id===v.id?'var(--accent-dim)':'var(--bg-hover)', cursor:'pointer', display:'flex', justifyContent:'space-between', fontFamily:'inherit', color:'var(--text-primary)' }}>
                         <span style={{ fontWeight:600 }}>{v.nom}</span>
-                        <span style={{ fontSize:12, color:'var(--text-muted)' }}>Stock: {roundStock(v.stock_cartons)} cx</span>
+                        <span style={{ fontSize:12, color:'var(--text-muted)' }}>{t('stock','stockLabel')}: {roundStock(v.stock_cartons)} {t('stock','boxesShort')}</span>
                       </button>
                     ))}
                   </div>
@@ -373,9 +374,9 @@ export default function EstoquePage() {
               {/* Preview */}
               {quantite && stockSrc && (
                 <div style={{ background:modalType==='entree'?'rgba(34,197,94,0.1)':'rgba(239,68,68,0.1)', border:`1px solid ${modalType==='entree'?'rgba(34,197,94,0.3)':'rgba(239,68,68,0.3)'}`, borderRadius:8, padding:'10px 14px', display:'flex', justifyContent:'space-between', fontSize:13 }}>
-                  <span>Novo stock:</span>
+                  <span>{t('stock','newStock')}:</span>
                   <span style={{ fontFamily:'monospace', fontWeight:700, color:modalType==='entree'?'var(--success)':'var(--danger)' }}>
-                    {Math.round(newStock*100)/100} cx ({Math.round(cartonsPreview*100)/100} cx = {quantite} {typeMesure})
+                    {Math.round(newStock*100)/100} {t('stock','boxesShort')} ({Math.round(cartonsPreview*100)/100} {t('stock','boxesShort')} = {quantite} {typeMesure})
                   </span>
                 </div>
               )}
@@ -415,7 +416,7 @@ export default function EstoquePage() {
         </div>
       )}
 
-      {/* ✅ Modal React pur — zéro focus trap */}
+      {/* {'\u2705'} Modal React pur — zéro focus trap */}
       {AlertModalComponent}
     </div>
   );

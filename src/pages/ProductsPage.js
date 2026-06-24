@@ -2,22 +2,23 @@ import React, { useState, useEffect } from 'react';
 import { useLang } from '../utils/useLang';
 import { useAuth } from '../App';
 import { Plus, Search, Edit2, Trash2, Package, AlertTriangle, X, ChevronDown, ChevronUp } from 'lucide-react';
-import { useAlert, useConfirm } from '../components/AlertModal'; // ✅ AJOUT
+import { useAlert, useConfirm } from '../components/AlertModal'; // \u2705 AJOUT
 
 const emptyForm = {
   nom:'', categorie:'General', prix_carton:'', cout_carton:'',
   unites_par_carton:12, stock_cartons:0, prix_demi:'', prix_unite:'',
   prix_demi_manual:false, prix_unite_manual:false, has_variants:false,
-  barcode:'' // ✅ v1.2.3 — code-barres EAN-13/CODE128
+  barcode:'' // \u2705 v1.2.3 — code-barres EAN-13/CODE128
 };
 
 const emptyVariant = { nom:'', prix_carton:'', prix_demi:'', prix_unite:'', stock_cartons:0 };
 
 export default function ProductsPage() {
-  const { t, fmt, currency } = useLang();
+  const { t, fmt, currency, lang } = useLang();
+  const intlLocale = lang === 'fr' ? 'fr-FR' : lang === 'en' ? 'en-US' : 'pt-BR';
   const { user } = useAuth();
 
-  // ✅ Hooks modals React (remplacent alert() et confirm() natifs)
+  // \u2705 Hooks modals React (remplacent alert() et confirm() natifs)
   const { showAlert, AlertModalComponent } = useAlert();
   const { showConfirm, ConfirmModalComponent } = useConfirm();
 
@@ -34,7 +35,7 @@ export default function ProductsPage() {
 
   useEffect(() => { loadProducts(); }, []);
 
-  // ✅ Déclaré avant le useEffect pour éviter TDZ
+  // \u2705 Déclaré avant le useEffect pour éviter TDZ
   const filtered = products.filter(p =>
     p.nom.toLowerCase().includes(search.toLowerCase()) ||
     (p.categorie||'').toLowerCase().includes(search.toLowerCase())
@@ -65,7 +66,7 @@ export default function ProductsPage() {
       prix_demi_manual: !!p.prix_demi_manual,
       prix_unite_manual: !!p.prix_unite_manual,
       has_variants: !!p.has_variants,
-      barcode: p.barcode || '', // ✅ v1.2.3
+      barcode: p.barcode || '', // \u2705 v1.2.3
     });
     setEditing(p.id);
     const vars = await loadVariants(p.id);
@@ -98,7 +99,7 @@ export default function ProductsPage() {
   };
 
   const handleSave = async () => {
-    // ✅ Remplacé alert() natif → showAlert React
+    // \u2705 Remplacé alert() natif \u2192 showAlert React
     if (!form.nom || !form.prix_carton) {
       showAlert('', t('products','productName') + ' et prix obligatoires', 'warning');
       return;
@@ -154,14 +155,14 @@ export default function ProductsPage() {
       }
       setShowModal(false); loadProducts();
     } catch(e) {
-      // ✅ Remplacé alert() natif → showAlert React
+      // \u2705 Remplacé alert() natif \u2192 showAlert React
       showAlert('Erro', e.message, 'error');
     }
     setLoading(false);
   };
 
   const handleDelete = async (id, nom) => {
-    // ✅ Remplacé window.confirm() natif → showConfirm React (async/await)
+    // \u2705 Remplacé window.confirm() natif \u2192 showConfirm React (async/await)
     const ok = await showConfirm(t('products','confirmDelete'), `"${nom}" ?`, 'warning');
     if (!ok) return;
     await window.electron.dbQuery("UPDATE products SET actif=0 WHERE id=?", [id]);
@@ -214,7 +215,7 @@ export default function ProductsPage() {
                 </div>
               </div>
               <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-                <span style={{ fontFamily:'monospace', color:'var(--accent)', fontWeight:700 }}>{(p.prix_carton||0).toLocaleString('fr-FR')} {currency}</span>
+                <span style={{ fontFamily:'monospace', color:'var(--accent)', fontWeight:700 }}>{(p.prix_carton||0).toLocaleString(intlLocale)} {currency}</span>
                 {p.has_variants && (
                   <button onClick={() => toggleExpand(p.id)} className="btn btn-icon btn-secondary">
                     {expandedProduct===p.id ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
@@ -233,7 +234,7 @@ export default function ProductsPage() {
                     <span style={{ fontWeight:500 }}>{v.nom}</span>
                     <div style={{ display:'flex', gap:16, alignItems:'center' }}>
                       <span style={{ color:'var(--text-muted)', fontSize:11 }}>{t('products','stock')}: {roundStock(v.stock_cartons)} cx</span>
-                      <span style={{ fontFamily:'monospace', color:'var(--accent)' }}>{(v.prix_carton||p.prix_carton).toLocaleString('fr-FR')} {currency}</span>
+                      <span style={{ fontFamily:'monospace', color:'var(--accent)' }}>{(v.prix_carton||p.prix_carton).toLocaleString(intlLocale)} {currency}</span>
                     </div>
                   </div>
                 ))}
@@ -324,10 +325,10 @@ export default function ProductsPage() {
                 </div>
               </div>
 
-              {/* ✅ v1.2.3 — Code-barres */}
+              {/* {'\u2705'} v1.2.3 — Code-barres */}
               <div className="form-group">
                 <label className="form-label" style={{ display:'flex', alignItems:'center', gap:6 }}>
-                  <span>📦</span> Código de Barras (EAN-13 / CODE128)
+                  <span>{'\u{1F4E6}'}</span> Código de Barras (EAN-13 / CODE128)
                 </label>
                 <div style={{ position:'relative' }}>
                   <input
@@ -414,9 +415,9 @@ export default function ProductsPage() {
               {form.prix_carton > 0 && (
                 <div style={{ background:'var(--bg-hover)', borderRadius:10, padding:14, display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
                   {[
-                    { label: t('cashier','box'),  value: Number(form.prix_carton).toLocaleString('fr-FR') },
-                    { label: t('cashier','half'), value: (form.prix_demi_manual&&form.prix_demi?Number(form.prix_demi):Number(autoDemi)).toLocaleString('fr-FR') },
-                    { label: t('cashier','unit'), value: (form.prix_unite_manual&&form.prix_unite?Number(form.prix_unite):Number(autoUnite)).toLocaleString('fr-FR') },
+                    { label: t('cashier','box'),  value: Number(form.prix_carton).toLocaleString(intlLocale) },
+                    { label: t('cashier','half'), value: (form.prix_demi_manual&&form.prix_demi?Number(form.prix_demi):Number(autoDemi)).toLocaleString(intlLocale) },
+                    { label: t('cashier','unit'), value: (form.prix_unite_manual&&form.prix_unite?Number(form.prix_unite):Number(autoUnite)).toLocaleString(intlLocale) },
                   ].map(({label,value}) => (
                     <div key={label} style={{ textAlign:'center' }}>
                       <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:4 }}>{label}</div>
@@ -437,7 +438,7 @@ export default function ProductsPage() {
         </div>
       )}
 
-      {/* ✅ Modals React purs — zéro focus trap */}
+      {/* {'\u2705'} Modals React purs — zéro focus trap */}
       {AlertModalComponent}
       {ConfirmModalComponent}
     </div>
