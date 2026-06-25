@@ -38,6 +38,30 @@ function registerLicenseIPC(db, ipcMain, machineId) {
   let realtimeChannel = null;
   let supabaseClient = null;
 
+  // ── v4.9.5 — Vérification périodique de la licence (toutes les 30 min) ──
+  // Même pattern que le check auto-update existant dans main.js.
+  // Notifie le renderer pour forcer un refresh React — couvre le cas d'une
+  // expiration de date qui tombe pendant une session inactive.
+  function periodicLicenseCheck() {
+    try {
+      const payload = getStoredPayload(db);
+      const salesUsed = getSalesUsed(db);
+      const status = evaluateStatus(payload, machineId, salesUsed);
+      if (global._mainWindowRef && !global._mainWindowRef.isDestroyed()) {
+        global._mainWindowRef.webContents.send('license-sales-updated');
+      }
+      if (!status.valid && payload) {
+        console.log('[LICENSE] Periodic check — statut invalide:', status.reason);
+      }
+    } catch (_e) {
+      // silencieux — ne jamais crasher l'app pour un check licence
+    }
+  }
+
+  // Premier check différé (10s) + intervalle 30 min
+  setTimeout(periodicLicenseCheck, 10000);
+  setInterval(periodicLicenseCheck, 30 * 60 * 1000);
+
   function activate(ckbContent) {
     const payload = validateCkbContent(ckbContent);
     setSetting(db, 'license_payload', JSON.stringify(payload));

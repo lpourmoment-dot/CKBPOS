@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, useTheme } from '../App';
+import { ExpirationBanner } from '../App';
 import { useLang } from '../utils/useLang';
 import { LayoutDashboard, ShoppingCart, Package, Warehouse, History, Users, Settings, LogOut, Minus, Square, X, ChevronLeft, ChevronRight, RefreshCw, AlertTriangle, BookOpen, Terminal, Monitor, MessageSquare, ClipboardList } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -499,7 +500,9 @@ export default function Layout() {
         </motion.aside>
 
         {/* Main content with page transitions */}
-        <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-primary)', position: 'relative' }}>
+        <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-primary)', position: 'relative', display: 'flex', flexDirection: 'column' }}>
+          {/* v4.9.5 — Banner d'expiration licence (J-7/J-3/J-1) */}
+          <ExpirationBanner />
           <AnimatePresence mode="sync">
             <motion.div
               key={location.pathname}
