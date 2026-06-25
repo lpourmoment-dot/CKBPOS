@@ -1,14 +1,17 @@
-# 🏪 CKBPOS — Guide d'installation complet
+# 🏪 CKBPOS — Application Point de Vente Professionnelle
 
-## ✅ Prérequis (déjà installés)
-- Node.js
-- Git
+**Version : 4.9.6** | Electron + React + SQLite
+
+---
+
+## ✅ Prérequis
+
+- [Node.js](https://nodejs.org/) (v16+)
+- Windows 10/11
 
 ---
 
 ## 📁 ÉTAPE 1 — Préparer le projet
-
-Ouvre **PowerShell** ou **CMD** et tape :
 
 ```bash
 cd Desktop
@@ -16,47 +19,30 @@ mkdir CKBPOS
 cd CKBPOS
 ```
 
-Copie tous les fichiers du projet dans ce dossier `CKBPOS`.
+Copie tous les fichiers du projet dans ce dossier.
 
 ---
 
-## 🔑 ÉTAPE 2 — Placer le fichier credentials.json
+## 🔑 ÉTAPE 2 — Fichier credentials.json
 
 Place ton fichier `credentials.json` Google dans la **racine** du projet :
 ```
 CKBPOS/
-  credentials.json   ← ICI
+  credentials.json   ← ICI (non inclus dans le repo)
   main.js
   package.json
   ...
-```
-
-Si tu n'as pas le fichier JSON, crée un fichier `credentials.json` avec ce contenu :
-```json
-{
-  "installed": {
-    "client_id": "690009821524-s7dttaegc1ducnvvtkshqb9cj2ot9321.apps.googleusercontent.com",
-    "project_id": "ckbpos",
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_secret": "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",
-    "redirect_uris": ["http://localhost"]
-  }
-}
 ```
 
 ---
 
 ## 📦 ÉTAPE 3 — Installer les dépendances
 
-Dans le dossier CKBPOS, ouvre PowerShell et tape :
-
 ```bash
 npm install
 ```
 
-⏳ Attends que l'installation se termine (peut prendre 2-5 minutes)
+> `postinstall` lance automatiquement `electron-rebuild` pour `better-sqlite3`.
 
 ---
 
@@ -66,114 +52,194 @@ npm install
 npm run dev
 ```
 
-Cela va :
-1. Démarrer le serveur React sur http://localhost:3000
-2. Ouvrir automatiquement l'application Electron
+Cela démarre le serveur React sur `http://localhost:3000` puis ouvre Electron.
 
 **Compte admin par défaut :**
 - Email : `admin@ckbpos.com`
 - Mot de passe : `admin123`
 
-⚠️ **Change le mot de passe admin immédiatement** après la première connexion !
+> ⚠️ Change le mot de passe admin immédiatement après la première connexion !
 
 ---
 
-## 🏗️ ÉTAPE 5 — Compiler l'application .exe
-
-Quand tu es prêt à créer l'installateur Windows :
+## 🏗️ ÉTAPE 5 — Compiler l'installateur .exe
 
 ```bash
 npm run dist
 ```
 
-Le fichier `.exe` sera généré dans le dossier `dist/`
+Le fichier `.exe` sera dans le dossier `dist/`.
 
 ---
 
-## 🔧 RÉSOLUTION DES PROBLÈMES
+## 📋 Structure du projet
 
-### Erreur "better-sqlite3 not found"
+```
+CKBPOS/
+├── main.js                     # Electron main process (IPC, DB, sync, licence)
+├── preload.js                  # IPC bridge (contextBridge)
+├── licensing.js                 # Validation JWT + signature AES (licence)
+├── license-ipc.js               # Handlers IPC licence + vérification périodique
+├── license-keys.json            # Clés de sécurité licence (NON committé)
+├── preload-license-additions.js # API licence côté renderer
+├── credentials.json             # Google OAuth (NON committé)
+├── package.json
+├── INSTALLER.bat / DEMARRER.bat # Scripts d'installation/lancement
+├── database/
+│   ├── db.js                    # SQLite schema + migrations
+│   └── driveSync.js             # Google Drive sync (legacy)
+├── public/
+│   └── index.html               # Template HTML
+├── src/
+│   ├── index.js                 # Point d'entrée React
+│   ├── App.js                   # Root + routing + LicenseContext + ExpirationBanner
+│   ├── styles/
+│   │   └── global.css           # Thème dark/light + composants partagés + banner licence
+│   ├── utils/
+│   │   ├── useLang.js           # Hook i18n (pt-BR, fr, en)
+│   │   └── translations.js      # Traductions (compat legacy)
+│   ├── components/
+│   │   ├── Layout.js            # Sidebar + titlebar + console SQL + banner licence
+│   │   ├── ShiftModal.js        # Ouverture/fermeture de caisse (fundo de caixa)
+│   │   ├── UpdateBanner.js      # Banner auto-update
+│   │   └── AlertModal.js        # Alerte stock bas
+│   └── pages/
+│       ├── LoginPage.js         # Login admin + PIN vendeur
+│       ├── SetupPage.js         # Configuration initiale (réseau, cloud, imprimante)
+│       ├── DashboardPage.js     # Dashboard admin/vendeur
+│       ├── CaissePage.js        # Interface de caisse tactile
+│       ├── ProductsPage.js      # Gestion produits (carton/demi/unité)
+│       ├── EstoquePage.js       # Gestion de stock
+│       ├── HistoriquePage.js    # Historique des ventes
+│       ├── CadernoPage.js       # Registre caderno (relevés)
+│       ├── UsersPage.js         # Gestion utilisateurs (admin/vendeur)
+│       ├── SettingsPage.js      # Paramètres (réseau, cloud, langue, impression)
+│       ├── CoordDashboardPage.js# Dashboard coordinateur (multi-machines)
+│       ├── AuditLogPage.js      # Journal d'audit
+│       ├── MessagingPage.js     # Messagerie inter-machines
+│       ├── LicensePage.js       # Activation + statut licence
+│       └── translations.js      # Toutes les traductions (pt-BR, fr, en)
+└── assets/
+    └── icon.ico
+```
+
+---
+
+## 🎯 Fonctionnalités
+
+### Caisse & Ventes
+| Fonctionnalité | Statut |
+|---|---|
+| Caisse tactile | ✅ |
+| Calcul monnaie rendue | ✅ |
+| Paiement mixte (Dinheiro + Multicaixa Express) | ✅ |
+| Tickets avec impression thermique 72mm | ✅ |
+| Partage d'impression entre machines | ✅ |
+| Réservations (pending → pago) | ✅ |
+| Historique des ventes | ✅ |
+
+### Produits & Stock
+| Fonctionnalité | Statut |
+|---|---|
+| Gestion produits (carton/demi/unité) | ✅ |
+| Stock en temps réel | ✅ |
+| Alertes stock bas | ✅ |
+| Scan code-barres / QR code | ✅ |
+| Registre Caderno (relevés) | ✅ |
+
+### Utilisateurs & Rôles
+| Fonctionnalité | Statut |
+|---|---|
+| Login Admin + PIN vendeur | ✅ |
+| Gestion utilisateurs (CRUD) | ✅ |
+| Ouverture/fermeture de caisse (shift) | ✅ |
+| Dashboard vendeur | ✅ |
+| Dashboard admin | ✅ |
+
+### Multi-machines & Cloud
+| Fonctionnalité | Statut |
+|---|---|
+| Sync cloud (Supabase Realtime) | ✅ |
+| Sync snapshot complet | ✅ |
+| Dashboard coordinateur | ✅ |
+| Messagerie inter-machines | ✅ |
+| Console SQL intégrée | ✅ |
+| Journal d'audit | ✅ |
+| Auto-update (electron-updater) | ✅ |
+
+### Licence
+| Fonctionnalité | Statut |
+|---|---|
+| Activation par fichier .ckb (manuelle) | ✅ |
+| Activation par Supabase Realtime (automatique) | ✅ |
+| Mode FREE (30 ventes) | ✅ |
+| Vérification périodique (30 min) | ✅ |
+| Banner d'expiration (J-7 / J-3 / J-1) | ✅ |
+| Gating par licence | ✅ |
+
+### Internationalisation
+| Fonctionnalité | Statut |
+|---|---|
+| Português (pt-BR) | ✅ |
+| Français (fr) | ✅ |
+| English (en) | ✅ |
+| Thème dark / light | ✅ |
+
+---
+
+## 🌐 Langues
+
+CKBPOS supporte 3 langues, sélectionnables dans les paramètres :
+
+- 🇧🇷 **Português (pt-BR)** — langue par défaut
+- 🇫🇷 **Français (fr)**
+- 🇬🇧 **English (en)**
+
+---
+
+## 🔧 Résolution des problèmes
+
+### Erreur `better-sqlite3` / module natif
 ```bash
 npm rebuild better-sqlite3
 ```
 
-### Erreur "electron not found"
-```bash
-npm install electron --save-dev
-```
-
-### Erreur EACCES (permissions)
-Lance PowerShell en **Administrateur**
-
 ### L'app ne démarre pas
 ```bash
+# Terminal 1 : React
 npm run react-start
-# Dans un autre terminal :
+# Terminal 2 : Electron
 npx electron .
 ```
 
----
-
-## 📋 STRUCTURE DU PROJET
-
-```
-CKBPOS/
-├── main.js              # Electron main process
-├── preload.js           # IPC bridge
-├── credentials.json     # Google OAuth (NE PAS PARTAGER)
-├── package.json
-├── database/
-│   ├── db.js           # SQLite + schema
-│   └── driveSync.js    # Google Drive sync
-├── src/
-│   ├── App.js          # React root + routing
-│   ├── index.js
-│   ├── styles/
-│   │   └── global.css
-│   ├── components/
-│   │   └── Layout.js   # Sidebar + titlebar
-│   └── pages/
-│       ├── LoginPage.js
-│       ├── DashboardPage.js
-│       ├── CaissePage.js
-│       ├── ProductsPage.js
-│       ├── HistoriquePage.js
-│       ├── UsersPage.js
-│       └── SettingsPage.js
-└── public/
-    └── index.html
-```
+### Build React échoue (warning `crypto`)
+C'est un warning lié à `bcryptjs` et webpack 5 — il n'empêche pas le fonctionnement.
 
 ---
 
-## 🎯 FONCTIONNALITÉS INCLUSES
+## ⚠️ Sécurité
 
-| Fonctionnalité | Status |
-|----------------|--------|
-| Login Admin/Vendeur | ✅ |
-| PIN rapide vendeur | ✅ |
-| Gestion produits (carton/demi/unité) | ✅ |
-| Caisse tactile | ✅ |
-| Calcul monnaie | ✅ |
-| Dashboard Admin | ✅ |
-| Dashboard Vendeur | ✅ |
-| Historique ventes | ✅ |
-| Gestion utilisateurs | ✅ |
-| Impression tickets | ✅ |
-| Google Drive sync | ✅ |
-| Mode dark | ✅ |
-| Stock en temps réel | ✅ |
-
----
-
-## ⚠️ SÉCURITÉ
-
-- Ne jamais mettre `credentials.json` sur GitHub
-- Ajouter dans `.gitignore` : `credentials.json`, `*.db`, `node_modules/`
+- `credentials.json` — **ne jamais commiter** (contient les clés Google OAuth)
+- `license-keys.json` — **ne jamais commiter** (contient la clé AES partagée)
 - Changer le mot de passe admin par défaut immédiatement
+- Les bases `.db` sont exclues du repo via `.gitignore`
 
 ---
 
-## 📞 SUPPORT
+## 📝 Versions récentes
+
+| Version | Ajouts |
+|---|---|
+| **4.9.5-4.9.6** | Système de licence complet (activation, realtime, banner, UUID ventes, sync dédup) |
+| **4.9.0** | Auto-update, console SQL, thème light |
+| **4.6.0** | Console SQL intégrée |
+| **4.1.0** | Messagerie inter-machines, badge non-lus |
+| **3.9.0** | QR code produits, caderno |
+| **3.5.0** | Dashboard coordinateur, audit |
+| **3.4.0** | Setup page, first-run wizard |
+
+---
+
+## 📞 Support
 
 En cas de problème, note l'erreur exacte et contacte le support.
