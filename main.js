@@ -252,6 +252,15 @@ ipcMain.handle('db-query', (_, sql, params) => {
       );
       if (newSql !== sql) { finalSql = newSql; finalParams.push(MACHINE_ID); }
     }
+    // v4.9.5 — Injecter uuid automatiquement dans INSERT INTO ventes si absent
+    if (sqlUp.startsWith('INSERT') && /\bVENTES\b/.test(sqlUp) && !/UUID/i.test(sqlUp)) {
+      const { randomUUID } = require('crypto');
+      const uuidSql = finalSql.replace(
+        /INSERT INTO ventes\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i,
+        (m, cols, vals) => 'INSERT INTO ventes (' + cols + ', uuid) VALUES (' + vals + ', ?)'
+      );
+      if (uuidSql !== finalSql) { finalSql = uuidSql; finalParams.push(randomUUID()); }
+    }
     const result = db.prepare(finalSql).run(...finalParams);
 
     // \u2705 Licensing — incrémenter le compteur de ventes (tier FREE)
@@ -647,9 +656,10 @@ ipcMain.handle('reservation-create', async (_, data) => {
     // Pour type pago_retirar : créer la vente immédiatement + déduire stock
     let venteId = null;
     if (type === 'pago_retirar') {
+      const { randomUUID } = require('crypto');
       const vRes = db.prepare(
-        "INSERT INTO ventes (user_id,client_nom,client_nif,total,montant_recu,monnaie_rendue,mode_paiement,montant_dinheiro,montant_express,statut,facture_num) VALUES (?,?,?,?,?,?,?,?,?,'pago_retirar',?)"
-      ).run(userId, clientNom||null, clientNif||'CONSUMIDOR FINAL', total, total, 0, modeP, montantD||0, montantE||0, '');
+        "INSERT INTO ventes (user_id,client_nom,client_nif,total,montant_recu,monnaie_rendue,mode_paiement,montant_dinheiro,montant_express,statut,facture_num,machine_id,uuid) VALUES (?,?,?,?,?,?,?,?,?,'pago_retirar',?,?,?)"
+      ).run(userId, clientNom||null, clientNif||'CONSUMIDOR FINAL', total, total, 0, modeP, montantD||0, montantE||0, '', MACHINE_ID, randomUUID());
       venteId = vRes.lastInsertRowid;
       try { incrementSalesCounter(db); notifyLicenseSalesUpdated(); } catch(_lic) {}
 
@@ -709,9 +719,10 @@ ipcMain.handle('reservation-payer', async (_, { id, userId, modeP, montantD, mon
     const totalPaid = (Number(montantD)||0) + (Number(montantE)||0);
     const change = Math.max(0, totalPaid - total);
 
+    const { randomUUID } = require('crypto');
     const vRes = db.prepare(
-      "INSERT INTO ventes (user_id,client_nom,client_nif,total,montant_recu,monnaie_rendue,mode_paiement,montant_dinheiro,montant_express,facture_num) VALUES (?,?,?,?,?,?,?,?,?,?)"
-    ).run(userId, clientNom||res.client_nom, clientNif||res.client_nif, total, totalPaid, change, modeP||'dinheiro', montantD||0, montantE||0, numeroFacture);
+      "INSERT INTO ventes (user_id,client_nom,client_nif,total,montant_recu,monnaie_rendue,mode_paiement,montant_dinheiro,montant_express,facture_num,machine_id,uuid) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+    ).run(userId, clientNom||res.client_nom, clientNif||res.client_nif, total, totalPaid, change, modeP||'dinheiro', montantD||0, montantE||0, numeroFacture, MACHINE_ID, randomUUID());
     const venteId = vRes.lastInsertRowid;
     try { incrementSalesCounter(db); notifyLicenseSalesUpdated(); } catch(_lic) {}
 
@@ -849,6 +860,8 @@ ipcMain.handle('force-migration', async () => {
       "ALTER TABLE products ADD COLUMN unites INTEGER DEFAULT 1",
       // v3.9.0 — machine_label dans coordinator_log
       "ALTER TABLE coordinator_log ADD COLUMN machine_label TEXT",
+      // v4.9.5 — UUID pour ventes (unicité inter-machines lors du sync)
+      "ALTER TABLE ventes ADD COLUMN uuid TEXT",
     ];
 
     let applied = 0;
@@ -863,6 +876,23 @@ ipcMain.handle('force-migration', async () => {
       const fixed = db.prepare("UPDATE reservations SET statut='pendente' WHERE statut='active'").run();
       if (fixed.changes > 0) console.log(`[migration] ${fixed.changes} réservations 'active' \u2192 'pendente'`);
     } catch(e) {}
+
+    // v4.9.5 — Backfill UUID pour les ventes existantes (sans uuid)
+    // Génère un UUID v4 pour chaque vente qui n'en a pas encore.
+    // Les nouvelles ventes reçoivent leur uuid à l'insertion (voir handler db-query).
+    try {
+      const { randomUUID } = require('crypto');
+      const withoutUuid = db.prepare("SELECT id FROM ventes WHERE uuid IS NULL").all();
+      if (withoutUuid.length > 0) {
+        const stmt = db.prepare("UPDATE ventes SET uuid = ? WHERE id = ?");
+        for (const row of withoutUuid) {
+          stmt.run(randomUUID(), row.id);
+        }
+        console.log(`[migration] ${withoutUuid.length} ventes sans uuid \u2192 uuid généré`);
+      }
+    } catch(e) {
+      console.log('[migration] uuid backfill skipped:', e.message);
+    }
 
     // Tables v1.0.9
     db.exec(`
@@ -2669,6 +2699,28 @@ function handleSyncDelta(ws, msg) {
                   try { db.prepare('INSERT INTO users ('+cols+') VALUES ('+phs+')').run(...vals); }
                   catch(_eu) {}
                 }
+              } else if (e.table_name === 'ventes' && e.row.uuid) {
+                // ── v4.9.5 — Cas spécial : table ventes (déduplication par UUID) ──
+                // La table ventes a un AUTOINCREMENT local : l'id distant ne correspond
+                // jamais à l'id local. On déduplique par uuid pour éviter qu'une vente
+                // distante (même id autoincrement, uuid différent) n'écrase une vente locale.
+                const existing = db.prepare('SELECT id FROM ventes WHERE uuid=?').get(e.row.uuid);
+                const known = knownCols('ventes');
+                const rowKeys = Object.keys(e.row).filter(k => known.has(k));
+                if (rowKeys.length === 0) { skipped++; continue; }
+                if (existing) {
+                  const skip = new Set(['id','uuid']);
+                  const sets = rowKeys.filter(k=>!skip.has(k)).map(k=>'"'+k+'"=?').join(',');
+                  const vals = rowKeys.filter(k=>!skip.has(k)).map(k=>e.row[k]);
+                  if (sets) db.prepare('UPDATE ventes SET '+sets+' WHERE uuid=?').run(...vals, e.row.uuid);
+                } else {
+                  const skip = new Set(['id']);
+                  const cols = rowKeys.filter(k=>!skip.has(k)).map(c=>'"'+c+'"').join(',');
+                  const phs  = rowKeys.filter(k=>!skip.has(k)).map(()=>'?').join(',');
+                  const vals = rowKeys.filter(k=>!skip.has(k)).map(k=>e.row[k]);
+                  try { db.prepare('INSERT INTO ventes ('+cols+') VALUES ('+phs+')').run(...vals); }
+                  catch(_ev) {}
+                }
               } else {
                 // ── Fix robustesse schéma : filtrer les colonnes inconnues ──
                 const known = knownCols(e.table_name);
@@ -3693,6 +3745,22 @@ function applyCloudRow(entry) {
             const vals = Object.keys(row).filter(k=>!skip.has(k)).map(k=>row[k]);
             try { db.prepare('INSERT INTO users ('+cols+') VALUES ('+phs+')').run(...vals); } catch(_eu) {}
           }
+        } else if (entry.table_name === 'ventes' && entry.row_data.uuid) {
+          // v4.9.5 — ventes : déduplication par uuid (ne pas écraser par id distant)
+          const row = entry.row_data;
+          const existing = db.prepare('SELECT id FROM ventes WHERE uuid=?').get(row.uuid);
+          if (existing) {
+            const skip = new Set(['id','uuid']);
+            const sets = Object.keys(row).filter(k=>!skip.has(k)).map(k=>'"'+k+'"=?').join(',');
+            const vals = Object.keys(row).filter(k=>!skip.has(k)).map(k=>row[k]);
+            if (sets) db.prepare('UPDATE ventes SET '+sets+' WHERE uuid=?').run(...vals, row.uuid);
+          } else {
+            const skip = new Set(['id']);
+            const cols = Object.keys(row).filter(k=>!skip.has(k)).map(c=>'"'+c+'"').join(',');
+            const phs  = Object.keys(row).filter(k=>!skip.has(k)).map(()=>'?').join(',');
+            const vals = Object.keys(row).filter(k=>!skip.has(k)).map(k=>row[k]);
+            try { db.prepare('INSERT INTO ventes ('+cols+') VALUES ('+phs+')').run(...vals); } catch(_ev) {}
+          }
         } else {
           const cols = Object.keys(entry.row_data).map(c => '"' + c + '"').join(',');
           const phs  = Object.keys(entry.row_data).map(() => '?').join(',');
@@ -4219,11 +4287,23 @@ function applySnapshot(snapshot, receivedNetworkKey) {
               const known = snapKnownCols(table);
               const rowKeys = Object.keys(row).filter(k => known.has(k));
               if (rowKeys.length === 0) { snapSkip++; continue; }
-              const cols = rowKeys.map(c => '"' + c + '"').join(',');
-              const phs  = rowKeys.map(() => '?').join(',');
-              const vals = rowKeys.map(k => row[k]);
-              db.prepare('INSERT OR IGNORE INTO "' + table + '" (' + cols + ') VALUES (' + phs + ')').run(...vals);
-              snapOk++;
+              // v4.9.5 — ventes : déduplication par uuid (ne pas forcer l'id distant)
+              if (table === 'ventes' && row.uuid) {
+                const existing = db.prepare('SELECT id FROM ventes WHERE uuid=?').get(row.uuid);
+                if (existing) { snapSkip++; continue; } // déjà présente localement
+                const skip = new Set(['id']);
+                const cols = rowKeys.filter(k=>!skip.has(k)).map(c=>'"'+c+'"').join(',');
+                const phs  = rowKeys.filter(k=>!skip.has(k)).map(()=>'?').join(',');
+                const vals = rowKeys.filter(k=>!skip.has(k)).map(k=>row[k]);
+                try { db.prepare('INSERT INTO ventes ('+cols+') VALUES ('+phs+')').run(...vals); snapOk++; }
+                catch(_ev) { snapSkip++; }
+              } else {
+                const cols = rowKeys.map(c => '"' + c + '"').join(',');
+                const phs  = rowKeys.map(() => '?').join(',');
+                const vals = rowKeys.map(k => row[k]);
+                db.prepare('INSERT OR IGNORE INTO "' + table + '" (' + cols + ') VALUES (' + phs + ')').run(...vals);
+                snapOk++;
+              }
             } catch(_e) { snapSkip++; }
           }
           console.log('[SETUP] ' + table + ': ' + snapOk + ' ok, ' + snapSkip + ' skip / ' + rows.length + ' total');

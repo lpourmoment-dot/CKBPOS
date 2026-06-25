@@ -170,6 +170,7 @@ select.form-input option { background: var(--bg-card); }
 @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes banner-pulse-urgent { 0%, 100% { opacity: 0.85; } 50% { opacity: 1; box-shadow: 0 0 24px rgba(239,68,68,0.5); } }
 
 .spin { animation: spin 1s linear infinite; }
 
@@ -385,4 +386,64 @@ select.form-input option { background: var(--bg-card); }
   opacity: 0.6;
   cursor: not-allowed;
   pointer-events: none;
+}
+
+/* ── v4.9.5 Banner d'expiration licence (J-7/J-3/J-1) ── */
+.license-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  flex-shrink: 0;
+}
+.license-banner-msg { flex: 1; }
+.license-banner-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.license-banner-btn {
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: inherit;
+  background: rgba(0,0,0,0.25);
+  color: #fff;
+  transition: transform 0.1s, background 0.15s;
+}
+.license-banner-btn:hover { transform: translateY(-1px); background: rgba(0,0,0,0.4); }
+.license-banner-dismiss {
+  padding: 5px 10px;
+  border-radius: 5px;
+  border: 1px solid rgba(255,255,255,0.3);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  background: transparent;
+  color: inherit;
+  transition: background 0.15s;
+}
+.license-banner-dismiss:hover { background: rgba(255,255,255,0.1); }
+.license-banner-soon {
+  background: linear-gradient(90deg, rgba(232,197,71,0.15), rgba(232,197,71,0.08));
+  border-bottom: 1px solid rgba(232,197,71,0.4);
+  color: var(--accent);
+}
+.license-banner-warning {
+  background: linear-gradient(90deg, rgba(249,115,22,0.18), rgba(249,115,22,0.1));
+  border-bottom: 1px solid rgba(249,115,22,0.5);
+  color: #fb923c;
+}
+.license-banner-urgent {
+  background: linear-gradient(90deg, rgba(239,68,68,0.2), rgba(239,68,68,0.12));
+  border-bottom: 1px solid rgba(239,68,68,0.6);
+  color: #ef4444;
+  animation: banner-pulse-urgent 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .license-banner-urgent { animation: none; }
 }
