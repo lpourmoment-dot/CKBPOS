@@ -1,86 +1,77 @@
 # Integration du systeme de licence dans CKBPOS
 
-## 1. Dependances a installer
-```
+> **Statut : termine (v4.9.5)** — Commit `cb6173d` sur branche `add-ckbpos-4.9.3`
+
+---
+
+## 1. Dependances a installer ✅
+```bash
 npm install jsonwebtoken @supabase/supabase-js
 ```
 
-## 2. Fichiers a copier a la racine du projet CKBPOS (a cote de main.js)
-- `licensing.js`
-- `license-ipc.js`
-- `LicensePage.js` (dans le dossier des pages React, ex: src/pages/)
-- `LicensePage.css` (meme dossier que LicensePage.js)
-- `license-keys.json` → genere depuis CKBPOS-ADMIN, onglet **Cles & Securite** →
-  bouton "Exporter le bundle pour CKBPOS" → copier le JSON affiche → creer le fichier
-  `license-keys.json` a la racine du projet CKBPOS (meme niveau que package.json)
-  ⚠️ Ne JAMAIS commiter ce fichier sur un repo public (il contient la cle AES partagee)
+## 2. Fichiers a copier a la racine du projet CKBPOS ✅
+- `licensing.js` — logique de validation JWT + signature AES
+- `license-ipc.js` — handlers IPC (activation, statut, realtime, verification periodique 30 min)
+- `LicensePage.js` → `src/pages/LicensePage.js`
+- `LicensePage.css` → `src/pages/LicensePage.css`
+- `license-keys.json` — genere depuis CKBPOS-ADMIN (onglet Cles & Securite → "Exporter le bundle")
+  - ⚠️ Ne JAMAIS commiter ce fichier sur un repo public (contient la cle AES partagee)
 
-## 3. translations.js
-Une section `licensing` (27 cles, pt-BR/fr/en) a deja ete ajoutee dans le fichier
-`translations.js` fourni dans cette livraison. Remplacer l'ancien fichier par celui-ci
-(ou fusionner manuellement si des changements ont eu lieu entre temps).
+## 3. translations.js ✅
+Section `licensing` (42 cles, pt-BR/fr/en) fusionnee dans `src/pages/translations.js`.
+Cles incluses : titre, stamps, statuts, sales, expiration, activation, erreurs, mode FREE, banner (J-7/J-3/J-1).
 
-## 4. Modifications dans main.js (CKBPOS)
+## 4. Modifications dans main.js ✅
 
-Ajouter en haut du fichier :
-```js
-const { registerLicenseIPC, incrementSalesCounter } = require('./license-ipc');
-```
+- **Import** : `const { registerLicenseIPC, incrementSalesCounter } = require('./license-ipc');`
+- **Enregistrement IPC** : `registerLicenseIPC(db, ipcMain, machineId)` dans `app.whenReady()`
+- **Compteur ventes** : `incrementSalesCounter(db)` apres chaque INSERT dans `ventes` (3 handlers)
+- **UUID ventes (v4.9.5)** :
+  - Injection automatique `uuid` + `machine_id` dans tout INSERT INTO ventes (handler db-query)
+  - 2 handlers caisse : colonnes `uuid` + `machine_id` ajoutees a l'INSERT
+  - Migration `ALTER TABLE ventes ADD COLUMN uuid TEXT` + backfill pour ventes existantes
+  - Sync : deduplication par UUID aux 3 endroits (realtime, pull HTTP, snapshot)
 
-A la fin de `app.whenReady().then(() => { ... })`, apres la creation de la fenetre
-et l'obtention du machine_id existant (`getMachineId()` ou equivalent deja present
-dans le projet) :
-```js
-registerLicenseIPC(db, ipcMain, machineId); // machineId = la variable existante du projet
-```
+## 5. Modifications dans preload.js ✅
+API exposees dans `contextBridge.exposeInMainWorld('electron', { ... })` :
+- `licenseActivateManual(ckbContent)`
+- `licenseStatus()`
+- `licenseListenRealtime(email)`
+- `licenseStopListen()`
+- `onLicenseReceived(cb)` / `onLicenseSalesUpdated(cb)`
 
-Dans le handler existant qui enregistre une vente (recherche du handler qui fait
-l'INSERT dans la table `ventes`), ajouter un appel apres l'insertion reussie :
-```js
-incrementSalesCounter(db);
-```
+## 6. Cote React (App.js) ✅
+- `LicenseContext` + `useLicense()` pour partage d'etat
+- `LicenseWatcher` : ecoute les mises a jour IPC (ventes + reception realtime)
+- Route `/license` toujours accessible meme si acces bloque
+- Gating `hasLicenseAccess` : licence valide OU mode FREE < 30 ventes
+- Redirection declarative vers `/license` si acces bloque
 
-## 5. Modifications dans preload.js (CKBPOS)
-Coller le contenu de `preload-license-additions.js` a l'interieur du bloc
-`contextBridge.exposeInMainWorld('electron', { ... })` existant.
-
-## 6. Cote React (App.js ou equivalent point d'entree)
-Au demarrage de l'app, appeler `window.electron.licenseStatus()` :
-- si `valid: false` → afficher `<LicensePage onActivated={...} />` en bloquant l'acces
-  au reste de l'app (sauf si tier FREE et sales_used < 30, dans ce cas autoriser
-  l'usage avec un banner d'avertissement)
-- si `valid: true` → continuer normalement
-
-Exemple minimal (a adapter au routeur/structure existante du projet) :
-```jsx
-const [licenseOk, setLicenseOk] = useState(null);
-
-useEffect(() => {
-  window.electron.licenseStatus().then(res => {
-    setLicenseOk(res?.data?.valid || res?.data?.reason === 'no_license' && res?.data?.salesUsed < 30);
-  });
-}, []);
-
-if (licenseOk === false) return <LicensePage onActivated={() => setLicenseOk(true)} />;
-```
-
-## 7. Flux complet
-1. Client paie (Multicaixa Express) → CKB recoit confirmation manuelle (WhatsApp/SMS)
+## 7. Flux complet ✅
+1. Client paie (Multicaixa Express) → CKB recoit confirmation (WhatsApp/SMS)
 2. CKB ouvre CKBPOS-ADMIN → cree la licence (nom, email, whatsapp, tier)
-3. CKBPOS-ADMIN genere le `.ckb` ET le diffuse automatiquement via Supabase Realtime
-   sur le canal `license-{email}`
+3. CKBPOS-ADMIN genere le `.ckb` ET le diffuse via Supabase Realtime sur `license-{email}`
 4. Cote client CKBPOS :
-   - **Option automatique** : le client saisit son email dans l'onglet "Recevoir
-     automatiquement" de `LicensePage` → reste a l'ecoute du canal → activation
-     instantanee a la reception
-   - **Option manuelle** : CKB copie le contenu `.ckb` affiche dans CKBPOS-ADMIN
-     et l'envoie par WhatsApp → le client le colle dans l'onglet "Coller manuellement"
-5. Le payload est stocke localement (table `settings`, cles `license_payload` et
-   `license_ckb_raw`) → revalide a chaque demarrage + verification periodique
-   recommandee (ex: toutes les 6h, meme pattern que le check auto-update existant)
+   - **Option automatique** : client saisit son email → ecoute realtime → activation instantanee
+   - **Option manuelle** : CKB envoie le `.ckb` par WhatsApp → client le colle dans LicensePage
+5. Payload stocke localement (table `settings`, cles `license_payload` + `license_ckb_raw`)
+6. Revalidation au demarrage + verification periodique (toutes les 30 min)
 
-## 8. Points a ajouter dans une session suivante
-- Verification periodique automatique (pas seulement au demarrage)
-- Banner d'expiration imminente (J-7, J-3, J-1)
-- Gestion du cas "machine_id deja utilise" cote ADMIN (alerte si tentative
-  d'activation sur une 2e machine pour une licence a machine_id fixe)
+## 8. Points ajoutes en session 17-18 ✅
+- ✅ Verification periodique automatique (30 min, dans `license-ipc.js`)
+- ✅ Banner d'expiration imminente (J-7/J-3/J-1, dans `ExpirationBanner` + `global.css`)
+- ✅ UUID ventes + deduplication sync (dans `main.js`)
+- ⬜ Gestion du cas "machine_id deja utilise" cote ADMIN (a faire dans **CKBPOS-ADMIN**, pas ce repo)
+
+---
+
+## Fichiers modifies (commit cb6173d)
+
+| Fichier | Changements |
+|---|---|
+| `license-ipc.js` | +24 — verification periodique 30 min |
+| `main.js` | +98/-3 — UUID ventes, migration, deduplication sync |
+| `src/App.js` | +157/-30 — LicenseContext, LicenseWatcher, gating, ExpirationBanner |
+| `src/components/Layout.js` | +3/-1 — rendu ExpirationBanner dans `<main>` |
+| `src/pages/translations.js` | +141 — 42 cles licensing x 3 langues |
+| `src/styles/global.css` | +61 — bloc .license-banner* + keyframe |
