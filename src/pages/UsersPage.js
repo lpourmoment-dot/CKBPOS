@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLang } from '../utils/useLang';
 import { Plus, Edit2, Trash2, UserCheck, UserX, X, Eye, EyeOff, FileEdit, Clock } from 'lucide-react';
-import bcrypt from 'bcryptjs';
 import { useAlert, useConfirm } from '../components/AlertModal'; // \u2705 AJOUT
 
 const emptyForm = { nom:'', email:'', role:'vendeur', password:'', pin:'', actif:1, peut_modifier_factures:0, photo_base64:'' };
@@ -66,11 +65,15 @@ export default function UsersPage() {
       if (editing) {
         const updates = ['nom=?','email=?','role=?','pin=?','actif=?','peut_modifier_factures=?','photo_base64=?'];
         const vals    = [form.nom,form.email,form.role,form.pin||null,form.actif,form.peut_modifier_factures,form.photo_base64||null];
-        if (form.password) { updates.push('password_hash=?'); vals.push(bcrypt.hashSync(form.password,10)); }
+        if (form.password) {
+          const hashRes = await window.electron.authHashPassword(form.password);
+          updates.push('password_hash=?'); vals.push(hashRes?.data);
+        }
         vals.push(editing);
         await window.electron.dbQuery(`UPDATE users SET ${updates.join(',')} WHERE id=?`, vals);
       } else {
-        const hash = bcrypt.hashSync(form.password, 10);
+        const hashRes = await window.electron.authHashPassword(form.password);
+        const hash = hashRes?.data;
         await window.electron.dbQuery(
           "INSERT INTO users (nom,email,role,password_hash,pin,actif,peut_modifier_factures,photo_base64) VALUES (?,?,?,?,?,?,?,?)",
           [form.nom,form.email,form.role,hash,form.pin||null,1,form.peut_modifier_factures,form.photo_base64||null]
