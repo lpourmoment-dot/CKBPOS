@@ -313,6 +313,20 @@ ipcMain.handle('db-get', (_, sql, params) => {
   catch(err) { return { success:false, error:err.message }; }
 });
 
+// v4.9.6 — Auth bcrypt côté main uniquement (retiré du renderer, évite le polyfill 'crypto' webpack)
+ipcMain.handle('auth-hash-password', (_, plain) => {
+  try {
+    const bcrypt = require('bcryptjs');
+    return { success:true, data:bcrypt.hashSync(plain, 10) };
+  } catch(err) { return { success:false, error:err.message }; }
+});
+ipcMain.handle('auth-verify-password', (_, plain, hash) => {
+  try {
+    const bcrypt = require('bcryptjs');
+    return { success:true, data:bcrypt.compareSync(plain, hash || '') };
+  } catch(err) { return { success:false, error:err.message }; }
+});
+
 // ── Console SQL (debug terrain) ──
 ipcMain.handle('dev-sql-query', (_, sql) => {
   try {

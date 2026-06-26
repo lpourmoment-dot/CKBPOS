@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('electron', {
   dbQuery: (sql, params) => ipcRenderer.invoke('db-query', sql, params),
   dbGet:   (sql, params) => ipcRenderer.invoke('db-get',   sql, params),
 
+  // Auth (v4.9.6 — bcrypt déplacé côté main, évite polyfill 'crypto' webpack)
+  authHashPassword:   (plain)       => ipcRenderer.invoke('auth-hash-password', plain),
+  authVerifyPassword: (plain, hash) => ipcRenderer.invoke('auth-verify-password', plain, hash),
+
   // Google Drive
   driveAuth:   ()     => ipcRenderer.invoke('drive-auth'),
   driveToken:  (code) => ipcRenderer.invoke('drive-token', code),

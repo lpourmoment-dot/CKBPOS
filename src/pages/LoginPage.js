@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
 import { Eye, EyeOff, Lock, Mail, Hash, AlertTriangle, KeyRound } from 'lucide-react';
-import bcrypt from 'bcryptjs';
 import { useLang } from '../utils/useLang';
 import { SyncLanPanel, RememberSession } from './LoginPagePatch';
 
@@ -55,7 +54,8 @@ export default function LoginPage() {
         return;
       }
       const user = res.data;
-      const valid = bcrypt.compareSync(password, user.password_hash);
+      const verifyRes = await window.electron.authVerifyPassword(password, user.password_hash);
+      const valid = !!verifyRes?.data;
       if (!valid) {
         const newTentativas = (user.tentativas_login || 0) + 1;
         await window.electron.dbQuery(
@@ -127,7 +127,8 @@ export default function LoginPage() {
 
   const handleResetStep3 = async () => {
     if (newPassword.length < 6) { setResetMsg(t('login','passwordTooShort')); return; }
-    const hash = bcrypt.hashSync(newPassword, 10);
+    const hashRes = await window.electron.authHashPassword(newPassword);
+    const hash = hashRes?.data;
     await window.electron.dbQuery(
       "UPDATE users SET password_hash=?, tentativas_login=0 WHERE id=?", [hash, resetUser.id]
     );

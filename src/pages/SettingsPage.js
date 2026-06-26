@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { WHATSAPP_1, WHATSAPP_2, whatsappLink } from '../config/contacts';
 import { useTheme } from '../App';
 import { useLang } from '../utils/useLang';
 import { useAuth } from '../App';
@@ -168,6 +170,7 @@ function DataSharingSection() {
 }
 
 export default function SettingsPage() {
+  const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
   const { t, lang, currency, changeLang, changeCurrency } = useLang();
   const intlLocale = lang === 'fr' ? 'fr-FR' : lang === 'en' ? 'en-US' : 'pt-BR';
@@ -1349,6 +1352,34 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
             </div>
           </div>
         )}
+      </Accordion>
+
+      {/* ===== LICENÇA ===== */}
+      <Accordion id="licenca" icon={<Ticket size={16}/>} title={t('settings','accLicense')} color="#e8c547" openSections={openSections} toggleSection={toggleSection}>
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          <button onClick={() => navigate('/license')} className="btn btn-secondary" style={{ gap:8, justifyContent:'center' }}>
+            <KeyRound size={14}/> {t('settings','manageLicenseBtn')}
+          </button>
+          <p style={{ fontSize:12.5, color:'var(--text-secondary)', margin:0 }}>{t('settings','renewLicenseSubtitle')}</p>
+          <a
+            href={whatsappLink(WHATSAPP_1)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-secondary"
+            style={{ gap:8, justifyContent:'center', textDecoration:'none' }}
+          >
+            {t('settings','renewWhatsapp1')}
+          </a>
+          <a
+            href={whatsappLink(WHATSAPP_2)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-secondary"
+            style={{ gap:8, justifyContent:'center', textDecoration:'none' }}
+          >
+            {t('settings','renewWhatsapp2')}
+          </a>
+        </div>
       </Accordion>
 
       {/* ===== INFORMAÇÕES DO SISTEMA ===== */}

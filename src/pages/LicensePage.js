@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useLang } from '../utils/useLang';
+import { useLicense } from '../App';
+import { WHATSAPP_1, WHATSAPP_2, whatsappLink } from '../config/contacts';
+import './LicensePage.css';
 
 // Respect du pattern anti-TDZ du projet :
 // declarer les refs avant tout useEffect qui les reference,
@@ -7,6 +11,8 @@ import { useLang } from '../utils/useLang';
 
 export default function LicensePage({ onActivated }) {
   const { t } = useLang();
+  const navigate = useNavigate();
+  const { refreshLicense } = useLicense();
   const [tab, setTab] = useState('manual');
   const [ckbInput, setCkbInput] = useState('');
   const [email, setEmail] = useState('');
@@ -16,6 +22,7 @@ export default function LicensePage({ onActivated }) {
 
   const onActivatedRef = useRef(null);
   const unsubscribeRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     onActivatedRef.current = onActivated;
@@ -27,6 +34,7 @@ export default function LicensePage({ onActivated }) {
       setListening(false);
       setStatus({ valid: true, payload });
       if (onActivatedRef.current) onActivatedRef.current(payload);
+      refreshLicense().then(() => navigate('/'));
     });
     unsubscribeRef.current = unsub;
     return () => {
@@ -54,10 +62,22 @@ export default function LicensePage({ onActivated }) {
       }
       setStatus({ valid: true, payload: res.data });
       if (onActivatedRef.current) onActivatedRef.current(res.data);
+      await refreshLicense();
+      navigate('/');
     } catch (e) {
       setError(t('licensing', 'invalidLicense'));
     }
-  }, [ckbInput, t]);
+  }, [ckbInput, t, refreshLicense, navigate]);
+
+  const handleFileImport = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setCkbInput(String(reader.result || '').trim());
+    reader.onerror = () => setError(t('licensing', 'invalidLicense'));
+    reader.readAsText(file);
+    e.target.value = '';
+  }, [t]);
 
   const handleListen = useCallback(async () => {
     setError('');
@@ -105,6 +125,15 @@ export default function LicensePage({ onActivated }) {
         <div className="ticket-perf ticket-perf--top" aria-hidden="true" />
 
         <div className="ticket-body">
+          {status?.valid && (
+            <button
+              className="btn-secondary"
+              style={{ marginBottom: 16, width: 'auto', padding: '6px 14px', fontSize: 12 }}
+              onClick={() => navigate('/')}
+            >
+              {t('licensing', 'backBtn')}
+            </button>
+          )}
           <div className="ticket-eyebrow">CKBPOS &middot; {t('licensing', 'title')}</div>
           <p className="ticket-subtitle">{t('licensing', 'subtitle')}</p>
 
@@ -128,6 +157,31 @@ export default function LicensePage({ onActivated }) {
           </div>
 
           <div className="ticket-divider" aria-hidden="true" />
+
+          {stampVariant === 'danger' && (
+            <div className="license-renew">
+              <p className="ticket-subtitle">{t('licensing', 'renewSubtitle')}</p>
+              <a
+                className="btn-primary"
+                style={{ display: 'block', textAlign: 'center', textDecoration: 'none', marginBottom: 8 }}
+                href={whatsappLink(WHATSAPP_1)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {t('licensing', 'renewWhatsapp1')}
+              </a>
+              <a
+                className="btn-secondary"
+                style={{ display: 'block', textAlign: 'center', textDecoration: 'none', marginBottom: 14 }}
+                href={whatsappLink(WHATSAPP_2)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {t('licensing', 'renewWhatsapp2')}
+              </a>
+              <div className="ticket-divider" aria-hidden="true" />
+            </div>
+          )}
 
           <div className="license-tabs" role="tablist">
             <button
@@ -157,6 +211,16 @@ export default function LicensePage({ onActivated }) {
                 onChange={(e) => setCkbInput(e.target.value)}
                 placeholder={t('licensing', 'manualPlaceholder')}
               />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".ckb,.txt"
+                style={{ display: 'none' }}
+                onChange={handleFileImport}
+              />
+              <button className="btn-secondary" style={{ marginBottom: 10 }} onClick={() => fileInputRef.current?.click()}>
+                {t('licensing', 'importFileBtn')}
+              </button>
               <button className="btn-primary" onClick={handleActivateManual}>
                 {t('licensing', 'activateBtn')}
               </button>
