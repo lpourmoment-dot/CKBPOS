@@ -97,9 +97,41 @@ function registerLicenseIPC(db, ipcMain, machineId) {
         realtime: { transport: WebSocket },
       });
 
+      const cleanEmail = email.toLowerCase().trim();
+
+      // \u2705 Fix race condition (persistance) : recuperer immediatement toute
+      // licence deja deposee avant qu'on ait commence a ecouter (ex: admin
+      // a cree la licence pendant que le client etait hors ligne).
+      async function applyDelivery(row) {
+        const payload = activate(row.ckb_content);
+        try {
+          await supabaseClient.from('license_deliveries').update({ delivered: true }).eq('id', row.id);
+        } catch (_e) { /* non bloquant */ }
+        if (global._mainWindowRef) {
+          global._mainWindowRef.webContents.send('license-received', payload);
+        }
+        return payload;
+      }
+
+      try {
+        const { data: pending } = await supabaseClient
+          .from('license_deliveries')
+          .select('*')
+          .eq('email', cleanEmail)
+          .eq('delivered', false)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        if (pending && pending.length > 0) {
+          await applyDelivery(pending[0]);
+          return { ok: true, immediate: true };
+        }
+      } catch (err) {
+        console.error('[license-listen-realtime] check pending echoue:', err);
+      }
+
       if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
 
-      const channelName = 'license-' + email.toLowerCase().trim().replace(/[^a-z0-9]/g, '_');
+      const channelName = 'license-' + cleanEmail.replace(/[^a-z0-9]/g, '_');
       realtimeChannel = supabaseClient.channel(channelName);
 
       realtimeChannel.on('broadcast', { event: 'license-delivered' }, (msg) => {
@@ -112,6 +144,19 @@ function registerLicenseIPC(db, ipcMain, machineId) {
           console.error('[license-listen-realtime] activation echouee:', err);
         }
       });
+
+      // \u2705 Filet de securite supplementaire : si la livraison persistee arrive
+      // pendant qu'on ecoute (postgres_changes), on l'applique aussi — couvre
+      // le cas ou le broadcast ephemere serait manque pour une autre raison.
+      realtimeChannel.on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'license_deliveries', filter: `email=eq.${cleanEmail}` },
+        (payload) => {
+          applyDelivery(payload.new).catch((err) =>
+            console.error('[license-listen-realtime] postgres_changes activation echouee:', err)
+          );
+        }
+      );
 
       // \u2705 Fix race condition : attendre la confirmation reelle de jonction
       // (SUBSCRIBED) avant de signaler au renderer que l'ecoute est active.
