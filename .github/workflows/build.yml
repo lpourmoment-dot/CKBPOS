@@ -39,12 +39,12 @@ jobs:
           )
         shell: cmd
 
+      - name: Build React app
+        run: npm run react-build
+
       - name: Pre-build verification
         run: node scripts/verify-build.js
         shell: cmd
-
-      - name: Build React app
-        run: npm run react-build
 
       - name: Build Electron installer
         run: npm run dist
@@ -94,12 +94,12 @@ jobs:
           )
         shell: cmd
 
+      - name: Build React app
+        run: npm run react-build
+
       - name: Full pre-build verification
         run: node scripts/verify-build.js
         shell: cmd
-
-      - name: Build React app
-        run: npm run react-build
 
       - name: Build and publish to GitHub Releases
         run: npm run publish-update
