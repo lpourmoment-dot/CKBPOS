@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "generated": "2026-07-03T17:45:38.518Z",
+  "files": {
+    "main.js": "fab0be74186988a639332560409400f90f96dddaa57d5c609b2ff05939da411e",
+    "preload.js": "94108f9fe2c987df59142094dfdff38b31bb388468b96b8da66a98eb26568712",
+    "license-ipc.js": "7d13766b7aa4964b8316b905a6ad12ab14b21fab5f1d4288e71dd0082a1f9f5d",
+    "licensing.js": "97aeb83375cd4c3b0630880f6e89853396a998b813ce9d6ea7c1f12d2ace5af5",
+    "license-keys.json": "7c6ad393ee57865939200c2560333d34d25629a66e745e909e1b9a5efd44a0f5",
+    "database/db.js": "1c3e8e26ec95a46983b6bec3463abe922861cb8552eed87ad4d01f4006b13a10",
+    "database/driveSync.js": "7b9cb0a0f9cf35ce0f0c23d8559658506473477eddd369c3dfaec41136e412c6",
+    "src/utils/adaptive-print.js": "c21de671820ae6548d4e09ffad46bce5aa7d767b43560e611935224e8499e430",
+    "src/utils/printer-detect.js": "ab2ecdb9fc3d4af86f8f16e48c454e55e9e19f14b698e8d590c41fe00e76f8dd",
+    "src/utils/escpos.js": "958f3a45603e01824864e027015d6c3bd3d03985714f68427aa1735b40acfefd"
+  }
+}

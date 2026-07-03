@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld('electron', {
   // Auth (v4.9.6 — bcrypt déplacé côté main, évite polyfill 'crypto' webpack)
   authHashPassword:   (plain)       => ipcRenderer.invoke('auth-hash-password', plain),
   authVerifyPassword: (plain, hash) => ipcRenderer.invoke('auth-verify-password', plain, hash),
+  authLogin:          (email, pass) => ipcRenderer.invoke('auth-login', { email, password: pass }),
+
+  // Achat de licença en self-service (v5)
+  purchaseTiersList:   ()    => ipcRenderer.invoke('purchase-tiers-list'),
+  purchaseRequestSubmit: (req) => ipcRenderer.invoke('purchase-request-submit', req),
 
   // Google Drive
   driveAuth:   ()     => ipcRenderer.invoke('drive-auth'),
@@ -45,8 +50,11 @@ contextBridge.exposeInMainWorld('electron', {
   // ── v1.0.9 ──────────────────────────────────
   getPrinters: () => ipcRenderer.invoke('get-printers'),
 
-  // Numéro de facture séquentiel
-  nextFactureNum: () => ipcRenderer.invoke('next-facture-num'),
+  // ── v5.0 — Adaptive Print Engine ──────────────────────
+  detectPrinter:   (name) => ipcRenderer.invoke('detect-printer', name),
+  testPrint:       (opts) => ipcRenderer.invoke('test-print', opts),
+  printStats:      ()     => ipcRenderer.invoke('print-stats'),
+  printCacheReset: ()     => ipcRenderer.invoke('print-cache-reset'),
 
   // Empresas
   empresasList:   ()       => ipcRenderer.invoke('empresas-list'),
@@ -243,9 +251,6 @@ contextBridge.exposeInMainWorld('electron', {
   // ── v4.5.0 Export Excel ──────────────────────────────────────────
   excelExportSales: (params) => ipcRenderer.invoke('excel-export-sales', params),
   excelExportStock: ()       => ipcRenderer.invoke('excel-export-stock'),
-
-  // ── v4.6.2 Console SQL debug ─────────────────────────────────────
-  devSqlQuery: (sql) => ipcRenderer.invoke('dev-sql-query', sql),
 
   // ── v4.9.0 Auto-update ────────────────────────────────────────────
   updateCheck:   () => ipcRenderer.invoke('update-check'),

@@ -1,9 +1,0 @@
-{
-  "aesKey": "58a844c1d6bca5ec2eeb134f37c3721149f9abc13a4e498921643c851eef14c0",
-  "currentVersion": "v1",
-  "publicKeys": {
-    "v1": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAikF3fUqyzU3LRVdYl5cM\nbW7v80ZWm4TY0JG3SSeHXEY+X+URMf5IJL1nkgetNzdL2ATEoFeh+/BKou/1tBv8\njbxLSg/+FZD/qVa2oo7hwO/Q3yGOI7Oi86DCV2pMICjw4Pl8guZZ94zWvlamrq1I\nJySdWk2SYzdTBBycAu1fpbRs8fQEtQlHD/b4BDqAH27shsgcVtHHz/QGmckvC6eZ\n9Ogh79J/sOgWxoCtwNVhUUdeP1XlQse71WUQ7NQ1hCDIu3G9ecmwheLuV2ZPJM6h\nrGne648m4vqdSNgvo7X027eMFscB4fu0p7oSqj9YKriUxtaPEyfnasLAVgMZ6xC2\ndwIDAQAB\n-----END PUBLIC KEY-----\n"
-  },
-  "supabaseUrl": "https://okutvlizyngqknqltsko.supabase.co",
-  "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9rdXR2bGl6eW5ncWtucWx0c2tvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAxNjI4NjMsImV4cCI6MjA5NTczODg2M30.rqopcpLdhmkp9VnVtcdub44n5zaIg5Pe24CS4fC9ZWQ"
-}
