@@ -4,9 +4,8 @@
 // Ne contient JAMAIS de cle privee — uniquement les cles PUBLIQUES RSA
 // (verification de signature) + la cle AES partagee (dechiffrement).
 //
-// Le fichier license-keys.json (a la racine du projet, a cote de package.json)
-// est genere depuis CKBPOS-ADMIN (onglet "Cles & Securite" -> "Exporter le bundle").
-// Il NE DOIT JAMAIS contenir de cle privee.
+// La cle AES est CHIFFREE dans license-keys.json (aesKeyEncrypted + aesKeyIv).
+// Elle est dechiffree au demarrage via une cle maitre derivee du machine_id.
 
 const fs = require('fs');
 const path = require('path');
@@ -15,11 +14,51 @@ const jwt = require('jsonwebtoken');
 
 const BUNDLE_PATH = path.join(__dirname, 'license-keys.json');
 
+// Salt fixe pour la derivation de cle maitre (identique sur toutes les machines)
+const MASTER_KEY_SALT = 'CKBPOS-LICENSING-SALT-v1';
+
 function loadBundle() {
   if (!fs.existsSync(BUNDLE_PATH)) {
     throw new Error('license-keys.json manquant — exporter le bundle depuis CKBPOS-ADMIN');
   }
   return JSON.parse(fs.readFileSync(BUNDLE_PATH, 'utf8'));
+}
+
+/**
+ * Derive une cle maitre a partir du machine_id via PBKDF2.
+ * Cette cle est utilisee pour dechiffrer la cle AES dans license-keys.json.
+ */
+function deriveMasterKey(machineId) {
+  return crypto.pbkdf2Sync(
+    machineId || 'DEFAULT-MACHINE',
+    MASTER_KEY_SALT,
+    100000, // 100k itérations
+    32,     // 32 bytes = 256 bits
+    'sha512'
+  );
+}
+
+/**
+ * Dechiffre la cle AES depuis license-keys.json.
+ * Supporte l'ancien format (aesKey en clair) et le nouveau (aesKeyEncrypted).
+ */
+function getAesKey(machineId) {
+  const bundle = loadBundle();
+
+  // Nouveau format : cle chiffree
+  if (bundle.aesKeyEncrypted && bundle.aesKeyIv) {
+    const masterKey = deriveMasterKey(machineId);
+    const iv = Buffer.from(bundle.aesKeyIv, 'hex');
+    const encrypted = Buffer.from(bundle.aesKeyEncrypted, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-cbc', masterKey, iv);
+    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    return decrypted.toString('hex');
+  }
+
+  // Ancien format : cle en clair (fallback)
+  if (bundle.aesKey) return bundle.aesKey;
+
+  throw new Error('Aucune cle AES trouvée dans license-keys.json');
 }
 
 function aesDecrypt(b64, aesKeyHex) {
@@ -36,9 +75,10 @@ function aesDecrypt(b64, aesKeyHex) {
  * Valide le contenu brut d'un fichier .ckb.
  * Retourne le payload decode si valide, leve une exception sinon.
  */
-function validateCkbContent(ckbContent) {
+function validateCkbContent(ckbContent, machineId) {
   const bundle = loadBundle();
-  const token = aesDecrypt(ckbContent, bundle.aesKey);
+  const aesKey = getAesKey(machineId);
+  const token = aesDecrypt(ckbContent, aesKey);
   const decoded = jwt.decode(token, { complete: true });
   if (!decoded) throw new Error('Fichier de licence invalide ou corrompu');
 
@@ -76,4 +116,4 @@ function getSupabaseConfig() {
   return { url: bundle.supabaseUrl, anonKey: bundle.supabaseAnonKey };
 }
 
-module.exports = { validateCkbContent, evaluateStatus, getSupabaseConfig, loadBundle };
+module.exports = { validateCkbContent, evaluateStatus, getSupabaseConfig, loadBundle, deriveMasterKey, getAesKey };

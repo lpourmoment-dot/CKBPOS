@@ -1,4 +1,21 @@
+// ── STARTUP GUARD ──────────────────────────────────────────────
+// Vérifie les fichiers critiques AVANT de charger les modules.
+// Si un fichier manque ou a été modifié, affiche une dialogue et quitte.
+const { checkStartupFiles, showStartupError } = require('./scripts/startup-guard');
+const _startupCheck = checkStartupFiles(require('electron').app);
+if (!_startupCheck.ok) {
+  showStartupError(require('electron').app, _startupCheck.missing, _startupCheck.tampered);
+  // app.exit(1) est appelé dans showStartupError — le code ci-dessous ne s'exécute jamais
+}
+// ── FIN STARTUP GUARD ──────────────────────────────────────────
+
 const { registerLicenseIPC, incrementSalesCounter } = require('./license-ipc');
+const { generateTicketHTML, generateHistoriqueTicketHTML, generateShiftHTML, generateProdutosHTML, generateProdutosTicketHTML, generateHistoriqueHTML, generateCadernoTicketHTML, fmtNum, fmtDate } = require('./src/main/templates');
+const consoleModule = require('./src/main/console');
+const coordinatorModule = require('./src/main/coordinator');
+const auditModule = require('./src/main/audit');
+const emailModule = require('./src/main/email');
+const excelModule = require('./src/main/excel');
 // \u2705 Licensing — notifie le renderer pour re-verifier l'acces immediatement apres une vente
 function notifyLicenseSalesUpdated() {
   try {
@@ -17,8 +34,13 @@ const store = new Store();
 let QRCode = null;
 try { QRCode = require('qrcode'); } catch(e) { console.log('qrcode non installé, QR désactivé'); }
 
+// ── Adaptive Print Engine (v5.0) ────────────────────────────
+const { adaptivePrint, getCachedCapabilities, clearCapabilityCache, getPrintStats } = require('./src/utils/adaptive-print');
+const { detectPrinterCapabilities, classifyPrinter } = require('./src/utils/printer-detect');
+const { createTicketBuilder } = require('./src/utils/escpos');
+
 let mainWindow;
-const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+const isDev = process.env.NODE_ENV === 'development' || (!app.isPackaged && process.env.NODE_ENV !== 'production');
 
 // \u2705 Auto-update (electron-updater)
 let autoUpdater = null;
@@ -65,6 +87,7 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    consoleModule.initConsole(mainWindow);
     mainWindow.focus();
     mainWindow.webContents.focus();
     // \u2705 Fix charset UTF-8 : injecter meta charset si absent (corrige symboles/emojis cassés)
@@ -77,15 +100,47 @@ function createWindow() {
     `).catch(()=>{});
   });
 
-  // \u2705 F12 / Ctrl+Shift+I \u2192 DevTools (before-input-event — fiable sur tous les claviers)
-  mainWindow.webContents.on('before-input-event', (_, input) => {
-    if (input.type === 'keyDown' && (
-      input.key === 'F12' ||
-      (input.control && input.shift && input.key === 'I')
-    )) {
-      mainWindow.webContents.toggleDevTools();
+  // DevTools uniquement en mode développement (F12 / Ctrl+Shift+I)
+  if (isDev) {
+    mainWindow.webContents.on('before-input-event', (_, input) => {
+      if (input.type === 'keyDown' && (
+        input.key === 'F12' ||
+        (input.control && input.shift && input.key === 'I')
+      )) {
+        mainWindow.webContents.toggleDevTools();
+      }
+    });
+  }
+
+  // ── Anti-debug en production ──
+  if (!isDev) {
+    // Fermer DevTools si ouvert en production (détection périodique)
+    const _antiDebugInterval = setInterval(() => {
+      try {
+        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.isDevToolsOpened()) {
+          mainWindow.webContents.closeDevTools();
+        }
+      } catch(_e) {}
+    }, 3000);
+
+    // Bloquer l'ouverture de DevTools via context menu ou autre moyen
+    mainWindow.webContents.on('devtools-opened', () => {
+      try { mainWindow.webContents.closeDevTools(); } catch(_e) {}
+    });
+  }
+
+  // ── Anti-tamper: détection d'environnement de debug ──
+  if (!isDev) {
+    // Vérifier les variables d'environnement suspectes (x64dbg, ollydbg, etc.)
+    const _debugEnvVars = ['NODE_OPTIONS', 'ELECTRON_ENABLE_LOGGING', 'ELECTRON_ENABLE_STACK_DUMPING'];
+    for (const envVar of _debugEnvVars) {
+      if (process.env[envVar]) {
+        console.error(`[SECURITY] Variable de debug détectée: ${envVar}`);
+        // Optionnel: quitter l'app
+        // app.exit(1);
+      }
     }
-  });
+  }
 
   if (isDev) {
     // Désactiver le cache en mode dev
@@ -193,6 +248,10 @@ ipcMain.handle('update-install', () => {
 
 app.whenReady().then(() => {
   createWindow();
+  // Certificate pinning pour Supabase (anti-MITM)
+  try { const { setupCertPinning } = require('./scripts/cert-pinning'); setupCertPinning(require('electron').session); } catch(_e) {}
+  // DB Encryption: chiffer à l'arrêt
+  try { setupExitEncryption(_dbPath); } catch(_e) {}
   // Pré-charger les modules lourds en arrière-plan après que la fenêtre est prête
   setTimeout(() => {
     try { require('./database/driveSync'); } catch(e) {}
@@ -218,26 +277,152 @@ ipcMain.on('window-maximize', () => mainWindow.isMaximized()?mainWindow.unmaximi
 ipcMain.on('window-close', () => mainWindow.close());
 
 ipcMain.handle('store-get', (_, key) => store.get(key));
+consoleModule.registerIPC(ipcMain);
 ipcMain.handle('store-set', (_, key, value) => { store.set(key, value); return true; });
 ipcMain.handle('store-delete', (_, key) => { store.delete(key); return true; });
 
-// Lister les imprimantes disponibles
+// Lister les imprimantes disponibles (enhanced v5.0)
 ipcMain.handle('get-printers', async () => {
   try {
     const printers = await mainWindow.webContents.getPrintersAsync();
-    return { success: true, data: printers.map(p => ({ name: p.name, isDefault: p.isDefault, status: p.status })) };
+    // v5.0 — Include capability detection for each printer
+    const enhanced = printers.map(p => {
+      const caps = detectPrinterCapabilities(p);
+      return {
+        name: p.name,
+        driverName: p.driverName || '',
+        portName: p.portName || '',
+        // v5.0 capability info
+        type: caps.type,
+        connection: caps.connection,
+        supportsESCPOS: caps.supportsESCPOS,
+        estimatedWidth: caps.estimatedWidth,
+        recommendedMethod: caps.recommendedMethod,
+      };
+    });
+    return { success: true, data: enhanced };
   } catch(e) { return { success: false, error: e.message, data: [] }; }
 });
+
+// ── v5.0 — Printer capability detection ───────────────────
+ipcMain.handle('detect-printer', async (_, printerName) => {
+  try {
+    const printers = await mainWindow.webContents.getPrintersAsync();
+    const printer = printers.find(p => p.name === printerName) || { name: printerName };
+    const caps = detectPrinterCapabilities(printer);
+    console.log('[PRINT] Detected:', JSON.stringify(caps));
+    return { success: true, data: caps };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ── v5.0 — Test print ────────────────────────────────────
+ipcMain.handle('test-print', async (_, { printerName, method }) => {
+  try {
+    const settings = getPrintSettings();
+    const testHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <style>
+      @page { size: ${settings.ticketSizeMm || 72}mm auto; margin: 0; }
+      body { font-family: 'Courier New', monospace; font-size: 12px; width: ${settings.ticketSizeMm || 72}mm; padding: 4mm 2mm; }
+      .center { text-align: center; }
+      .bold { font-weight: 900; }
+    </style></head><body>
+    <div class="center bold" style="font-size:16px;">CKBPOS-PRO</div>
+    <div class="center">Teste de Impressao</div>
+    <div style="border-top:2px solid #000;margin:8px 0;"></div>
+    <div>Data: ${new Date().toLocaleString('pt-BR')}</div>
+    <div>Impressora: ${printerName || 'Padrao'}</div>
+    <div>Metodo: ${method || 'Auto'}</div>
+    <div style="border-top:2px solid #000;margin:8px 0;"></div>
+    <div class="center bold">OK!</div>
+    <div style="border-top:2px solid #000;margin:8px 0;"></div>
+    <div class="center" style="font-size:9px;">CKBPOS-PRO v${APP_VERSION}</div>
+    </body></html>`;
+
+    const ticketData = {
+      shopName: 'CKBPOS-PRO',
+      shopAddress: 'Teste de Impressao',
+      shopPhone: '',
+      shopNif: '',
+      clientNom: '',
+      clientNif: '',
+      items: [{ name: 'Item Teste', qty: 1, price: '0', subtotal: '0', type: 'unidade' }],
+      total: '0',
+      cashGiven: '',
+      change: '',
+      seller: 'Teste',
+      date: new Date().toLocaleString('pt-BR'),
+      currency: 'Kz',
+      payMode: 'dinheiro',
+      montantDinheiro: '',
+      montantExpress: '',
+      numeroFacture: 'TEST-001',
+      segundaVia: false,
+      statut: '',
+      flags: {},
+      appVersion: APP_VERSION,
+    };
+
+    const result = await printHTML(testHtml, 1, true, ticketData);
+    return { success: true, ...result };
+  } catch(e) {
+    console.error('[PRINT] Test print error:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+// ── v5.0 — Get print statistics ──────────────────────────
+ipcMain.handle('print-stats', () => {
+  try {
+    return { success: true, data: getPrintStats() };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ── v5.0 — Reset print cache ─────────────────────────────
+ipcMain.handle('print-cache-reset', () => {
+  try {
+    clearCapabilityCache();
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ── DB Encryption: déchiffrer AVANT ouverture ──
+const { preDecryptDb, setupExitEncryption } = require('./scripts/db-encryption');
+const _dbPath = require('path').join(require('electron').app.getPath('userData'), 'ckbpos.db');
+preDecryptDb(_dbPath);
 
 const db = require('./database/db');
 const { MACHINE_ID } = require('./database/db');
 // Version auto depuis package.json
 const APP_VERSION = (() => { try { return require('./package.json').version; } catch(e) { return '3.2.0'; } })();
-// \u2705 Version auto depuis package.json — utilisé dans SettingsPage.js
+// ✅ Version auto depuis package.json — utilisé dans SettingsPage.js
 ipcMain.handle('app-version', () => APP_VERSION);
+
+// Initialize extracted modules
+auditModule.init({ db, MACHINE_ID });
+emailModule.init({ db, APP_VERSION });
+excelModule.init({ db, app });
+
+const DB_QUERY_WHITELIST = new Set([
+  'users','products','product_variants','stock_mouvements','ventes','vente_items',
+  'shifts','settings','clients','reservations','reservation_items','empresas',
+  'caderno_entries','caderno_motivos','caderno_trabalhadores','caderno_produtos',
+  'network_peers','sync_log','sync_state','stock_reservations','print_queue',
+  'coordinator_log','user_sessions','document_series','fiscal_config',
+  'lancamentos_contabilisticos','pgc_contas','historique_modifications',
+  'notas_credito_debito'
+]);
 
 ipcMain.handle('db-query', (_, sql, params) => {
   try {
+    // Whitelist : extraire les noms de tables de la requête et vérifier
+    const tablePattern = /\b(?:FROM|INTO|UPDATE|JOIN)\s+["`]?(\w+)["`]?/gi;
+    let m;
+    while ((m = tablePattern.exec(sql)) !== null) {
+      const tbl = m[1].toLowerCase();
+      if (!DB_QUERY_WHITELIST.has(tbl)) {
+        return { success:false, error:'Table non autorisée: ' + tbl };
+      }
+    }
     if (sql.trim().toUpperCase().startsWith('SELECT')) {
       return { success:true, data:db.prepare(sql).all(...(params||[])) };
     }
@@ -305,6 +490,37 @@ ipcMain.handle('db-query', (_, sql, params) => {
     if (/\b(VENTES|VENTE_ITEMS|USERS)\b/.test(sqlUp)) {
       setImmediate(() => triggerInstantSync());
     }
+
+    // Auto-caderno : quand une vente est annulée, créer une entrée caderno
+    if (sqlUp.startsWith('UPDATE') && /\bVENTES\b/.test(sqlUp) && /ANNULE/.test(sqlUp) && /\bSTATUT\b/.test(sqlUp)) {
+      setImmediate(() => {
+        try {
+          // Extraire l'ID de la vente depuis les params (dernier param = WHERE id=?)
+          const venteId = params && params.length > 0 ? params[params.length - 1] : null;
+          if (!venteId) return;
+          const vente = db.prepare("SELECT id, total, user_id, client_nom, facture_num FROM ventes WHERE id=?").get(venteId);
+          if (!vente || !vente.total || vente.total <= 0) return;
+          const today = new Date().toISOString().slice(0,10);
+          db.prepare(
+            `INSERT INTO caderno_entries (nom, motivo, montant, montant_raw, note, direction, est_dette, statut_dette, user_id, machine_id, date_jour)
+             VALUES (?, 'Anulação', ?, ?, ?, 'sortie', 0, NULL, ?, ?, ?)`
+          ).run(
+            vente.client_nom || 'Cliente',
+            vente.total,
+            `Venda #${vente.id} ${vente.facture_num || ''}`.trim(),
+            `Anulação venda #${vente.id}`,
+            vente.user_id,
+            MACHINE_ID,
+            today
+          );
+          // Écriture PGC : débit 612 / crédit 43
+          db.prepare(
+            "INSERT INTO lancamentos_contabilisticos (vente_id,descricao,conta_debito,conta_credito,valor,machine_id) VALUES (?,?,?,?,?,?)"
+          ).run(venteId, `Anulação Venda #${vente.id}`, '612', '43', vente.total, MACHINE_ID);
+        } catch(_ac) { console.error('[CADERNO-AUTO]', _ac.message); }
+      });
+    }
+
     return { success:true, data:result };
   } catch(err) { return { success:false, error:err.message }; }
 });
@@ -327,18 +543,71 @@ ipcMain.handle('auth-verify-password', (_, plain, hash) => {
   } catch(err) { return { success:false, error:err.message }; }
 });
 
-// ── Console SQL (debug terrain) ──
+// ── Auth login sécurisé (brute-force protection côté serveur) ──
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+const _loginAttempts = new Map(); // email -> { count, lastAttempt }
+
+ipcMain.handle('auth-login', (_, { email, password }) => {
+  try {
+    if (!email || !password) return { success:false, error:'Email et mot de passe requis' };
+
+    // Vérifier lockout
+    const record = _loginAttempts.get(email);
+    if (record && record.count >= LOGIN_MAX_ATTEMPTS) {
+      const elapsed = Date.now() - record.lastAttempt;
+      if (elapsed < LOGIN_LOCKOUT_MS) {
+        const remaining = Math.ceil((LOGIN_LOCKOUT_MS - elapsed) / 60000);
+        return { success:false, error:`Compte temporairement bloqué. Réessayez dans ${remaining} minute(s)` };
+      }
+      _loginAttempts.delete(email);
+    }
+
+    // Trouver l'utilisateur
+    const user = db.prepare('SELECT * FROM users WHERE email=? AND actif=1').get(email);
+    if (!user) return { success:false, error:'Identifiants invalides' };
+
+    // Vérifier le mot de passe
+    const bcrypt = require('bcryptjs');
+    const valid = bcrypt.compareSync(password, user.password_hash || '');
+    if (!valid) {
+      // Incrémenter compteur
+      const newCount = (record ? record.count : 0) + 1;
+      _loginAttempts.set(email, { count: newCount, lastAttempt: Date.now() });
+      try { db.prepare('UPDATE users SET tentativas_login=? WHERE id=?').run(newCount, user.id); } catch(_e) {}
+      if (newCount >= LOGIN_MAX_ATTEMPTS) {
+        return { success:false, error:'Compte bloqué après 5 tentatives. Réessayez dans 15 minutes.' };
+      }
+      return { success:false, error:`Identifiants invalides (${newCount}/${LOGIN_MAX_ATTEMPTS})` };
+    }
+
+    // Succès — reset compteur
+    _loginAttempts.delete(email);
+    try {
+      db.prepare("UPDATE users SET tentativas_login=0, last_login=datetime('now','utc') WHERE id=?").run(user.id);
+    } catch(_e) {}
+
+    return { success:true, data:{ id:user.id, nom:user.nom, email:user.email, role:user.role, peut_modifier_factures:user.peut_modifier_factures } };
+  } catch(err) { return { success:false, error:err.message }; }
+});
+
+// ── Console SQL (debug terrain) — DEV uniquement ──
 ipcMain.handle('dev-sql-query', (_, sql) => {
+  if (process.env.NODE_ENV === 'production' || !process.env.ELECTRON_IS_DEV) {
+    return { success:false, error:'Non disponible en production' };
+  }
   try {
     const s = sql.trim();
     if (!s) return { success:false, error:'Requête vide' };
     const up = s.toUpperCase();
+    // Bloquer les commandes destructrices
+    const BLOCKED = /^\s*(DROP|DELETE|TRUNCATE|ALTER|INSERT|UPDATE|CREATE)\b/;
+    if (BLOCKED.test(up)) return { success:false, error:'Commande non autorisée en mode debug' };
     if (up.startsWith('SELECT') || up.startsWith('PRAGMA')) {
       const rows = db.prepare(s).all();
       return { success:true, rows, count: rows.length };
     } else {
-      const r = db.prepare(s).run();
-      return { success:true, rows:[], count: r.changes, info: 'changes: ' + r.changes };
+      return { success:false, error:'Seules les requêtes SELECT/PRAGMA sont autorisées' };
     }
   } catch(e) { return { success:false, error:e.message }; }
 });
@@ -432,14 +701,16 @@ ipcMain.handle('caderno-produtos-delete', (_, id) => {
 });
 
 // ── Charger les entrées d'un jour ──
-ipcMain.handle('caderno-entries-list', (_, { date_jour, user_id, is_admin }) => {
+ipcMain.handle('caderno-entries-list', (_, { date_jour, user_id }) => {
   try {
+    const user = db.prepare('SELECT role FROM users WHERE id=?').get(user_id);
+    const isAdmin = user && user.role === 'admin';
     let sql = `SELECT e.*, u.nom as user_nom
                FROM caderno_entries e
                JOIN users u ON e.user_id = u.id
                WHERE e.date_jour = ?`;
     const params = [date_jour];
-    if (!is_admin) { sql += ' AND e.user_id = ?'; params.push(user_id); }
+    if (!isAdmin) { sql += ' AND e.user_id = ?'; params.push(user_id); }
     sql += ' ORDER BY e.created_at ASC';
     return { success:true, data:db.prepare(sql).all(...params) };
   } catch(e) { return { success:false, error:e.message }; }
@@ -449,7 +720,7 @@ ipcMain.handle('caderno-entries-list', (_, { date_jour, user_id, is_admin }) => 
 // Règle : même nom + même motivo + même date_jour \u2192 additionne le montant
 ipcMain.handle('caderno-entries-add', (_, entry) => {
   try {
-    const { nom, motivo, montant, montant_raw, note, direction, est_dette, user_id, machine_id, date_jour } = entry;
+    const { nom, motivo, montant, montant_raw, note, direction, est_dette, user_id, machine_id, date_jour, categorie_depense } = entry;
 
     // Chercher si une entrée identique existe déjà aujourd'hui
     const existing = db.prepare(
@@ -471,9 +742,25 @@ ipcMain.handle('caderno-entries-add', (_, entry) => {
       const statutDette = est_dette ? 'pendente' : null;
       const r = db.prepare(
         `INSERT INTO caderno_entries
-         (nom, motivo, montant, montant_raw, note, direction, est_dette, statut_dette, user_id, machine_id, date_jour)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`
-      ).run(nom, motivo, montant||0, montant_raw||'', note||'', direction, est_dette?1:0, statutDette, user_id, machine_id||'LOCAL', date_jour);
+         (nom, motivo, montant, montant_raw, note, direction, est_dette, statut_dette, user_id, machine_id, date_jour, categorie_depense)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).run(nom, motivo, montant||0, montant_raw||'', note||'', direction, est_dette?1:0, statutDette, user_id, machine_id||'LOCAL', date_jour, categorie_depense||null);
+
+      // Écriture comptable PGC automatique
+      try {
+        const entryId = r.lastInsertRowid;
+        const desc = `Caderno: ${motivo} — ${nom}`;
+        if (direction === 'entree') {
+          db.prepare(
+            "INSERT INTO lancamentos_contabilisticos (vente_id,descricao,conta_debito,conta_credito,valor,machine_id) VALUES (?,?,?,?,?,?)"
+          ).run(null, desc, '43', '711', montant||0, machine_id||'LOCAL');
+        } else {
+          db.prepare(
+            "INSERT INTO lancamentos_contabilisticos (vente_id,descricao,conta_debito,conta_credito,valor,machine_id) VALUES (?,?,?,?,?,?)"
+          ).run(null, desc, '612', '43', montant||0, machine_id||'LOCAL');
+        }
+      } catch(_pgc) {}
+
       return { success:true, id:r.lastInsertRowid, cumul:false };
     }
   } catch(e) { return { success:false, error:e.message }; }
@@ -498,8 +785,10 @@ ipcMain.handle('caderno-entries-pago', (_, id) => {
 });
 
 // ── Limpar histórico ──
-ipcMain.handle('caderno-entries-clear', (_, { mode, date_jour, user_id, is_admin }) => {
+ipcMain.handle('caderno-entries-clear', (_, { mode, date_jour, user_id }) => {
   try {
+    const user = db.prepare('SELECT role FROM users WHERE id=?').get(user_id);
+    const isAdmin = user && user.role === 'admin';
     let sql = '';
     const params = [];
     if (mode === 'today') {
@@ -510,18 +799,20 @@ ipcMain.handle('caderno-entries-clear', (_, { mode, date_jour, user_id, is_admin
     } else if (mode === 'all') {
       sql = 'DELETE FROM caderno_entries';
     }
-    if (!is_admin) { sql += (sql.includes('WHERE') ? ' AND' : ' WHERE') + ' user_id=?'; params.push(user_id); }
+    if (!isAdmin) { sql += (sql.includes('WHERE') ? ' AND' : ' WHERE') + ' user_id=?'; params.push(user_id); }
     db.prepare(sql).run(...params);
     return { success:true };
   } catch(e) { return { success:false, error:e.message }; }
 });
 
 // ── Lister les jours disponibles ──
-ipcMain.handle('caderno-days-list', (_, { user_id, is_admin }) => {
+ipcMain.handle('caderno-days-list', (_, { user_id }) => {
   try {
+    const user = db.prepare('SELECT role FROM users WHERE id=?').get(user_id);
+    const isAdmin = user && user.role === 'admin';
     let sql = 'SELECT DISTINCT date_jour FROM caderno_entries';
     const params = [];
-    if (!is_admin) { sql += ' WHERE user_id=?'; params.push(user_id); }
+    if (!isAdmin) { sql += ' WHERE user_id=?'; params.push(user_id); }
     sql += ' ORDER BY date_jour DESC LIMIT 30';
     return { success:true, data:db.prepare(sql).all(...params) };
   } catch(e) { return { success:false, error:e.message }; }
@@ -622,20 +913,6 @@ ipcMain.handle('backup-restore', async () => {
   } catch(e) { return { success: false, error: e.message }; }
 });
 
-// ============================================================
-// NUMERO FACTURE SEQUENTIEL
-// ============================================================
-ipcMain.handle('next-facture-num', async () => {
-  try {
-    const year = new Date().getFullYear();
-    // \u2705 Basé sur MAX(id) — séquentiel et jamais réutilisé même après annulation
-    const row = db.prepare("SELECT COALESCE(MAX(id),0) as maxId FROM ventes").get();
-    const seq = (row?.maxId || 0) + 1;
-    const shortId = MACHINE_ID.slice(0,8).toUpperCase();
-    const num = `FR CKB${year}/${shortId}-${String(seq).padStart(4,'0')}`;
-    return { success: true, numero: num, seq };
-  } catch(e) { return { success: false, error: e.message }; }
-});
 
 // ============================================================
 // EMPRESAS
@@ -1022,7 +1299,30 @@ function getPrintSettings() {
   const copiesShift  = parseInt(db.prepare("SELECT value FROM settings WHERE key='printer_copies_shift'").get()?.value  || '1');
   const ticketSizeMm = parseInt(db.prepare("SELECT value FROM settings WHERE key='ticket_size_mm'").get()?.value || '72');
   const ticketWidthMicrons = (ticketSizeMm * 1000) + 100; // ex: 72 -> 72100
-  return { printerName, copiesTicket, copiesShift, ticketSizeMm, ticketWidthMicrons };
+  
+  // v6.0 — Auto-width for mobile/small printers (fallback 58mm)
+  let effectiveWidthMicrons = ticketWidthMicrons;
+  const autoResize = db.prepare("SELECT value FROM settings WHERE key='printer_auto_resize'").get()?.value === '1';
+  if (autoResize) {
+    // Default to 58mm if auto-resize is enabled and no specific size is set
+    effectiveWidthMicrons = 58500;
+  }
+  
+  // v5.0 — Adaptive print settings
+  const printMethod    = db.prepare("SELECT value FROM settings WHERE key='printer_method'").get()?.value    || 'auto';
+  const paperWidth     = db.prepare("SELECT value FROM settings WHERE key='printer_paper_width'").get()?.value  || 'auto';
+  const connectionType = db.prepare("SELECT value FROM settings WHERE key='printer_connection'").get()?.value || 'auto';
+  
+  return { printerName, copiesTicket, copiesShift, ticketSizeMm, ticketWidthMicrons, effectiveWidthMicrons, printMethod, paperWidth, connectionType };
+}
+
+// Helper function to calculate page size based on printer capabilities
+function calculatePageSize(widthMm, isTicket) {
+  const mmToMicrons = (mm) => Math.round(mm * 1000);
+  return {
+    width: mmToMicrons(widthMm),
+    height: isTicket ? mmToMicrons(300) : mmToMicrons(297), // 300mm for tickets, A4 height for others
+  };
 }
 
 // \u2705 v1.2.3 — Lire les flags de personnalisation du ticket depuis settings
@@ -1040,116 +1340,29 @@ function getTicketFlags() {
   return defaults;
 }
 
-function printHTML(html, copies = 1, isTicket = false) {
-  return new Promise((resolve, reject) => {
-    const { printerName, ticketWidthMicrons } = getPrintSettings();
-    const os = require('os');
-    const fs = require('fs');
+function printHTML(html, copies = 1, isTicket = false, ticketData = null) {
+  return new Promise(async (resolve, reject) => {
+    const settings = getPrintSettings();
+    const { printerName, ticketWidthMicrons, printMethod } = settings;
 
-    const thermalFix = isTicket ? `<style>
-      * { color: #000000 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-      body { background: #ffffff !important; }
-    </style>` : '';
-    const fixedHtml = html.replace('</head>', thermalFix + '</head>');
+    console.log(`[PRINT] Starting print — Printer: ${printerName || 'default'} | Method: ${printMethod} | Ticket: ${isTicket} | Copies: ${copies}`);
 
-    const tmpFile = path.join(os.tmpdir(), 'ckbpos_' + Date.now() + '.html');
-    fs.writeFileSync(tmpFile, fixedHtml, 'utf8');
-    const cleanup = () => { try { fs.unlinkSync(tmpFile); } catch(e) {} };
-
-    // ── Détecter "Microsoft Print to PDF" ──────────────────────────
-    // Quand cette imprimante virtuelle est sélectionnée, on utilise
-    // printToPDF() d'Electron au lieu de print() pour garder les
-    // dimensions exactes du ticket (72mm) au lieu d'une page A4.
-    const isMicrosoftPdf = printerName && printerName.trim().toLowerCase().includes('microsoft print to pdf');
-
-    const win = new BrowserWindow({
-      show: false,
-      webPreferences: { nodeIntegration: false, contextIsolation: true }
-    });
-    win.loadURL('file:///' + tmpFile.replace(/\\/g, '/'));
-
-    win.webContents.on('did-finish-load', () => {
-      setTimeout(async () => {
-        try {
-          if (isMicrosoftPdf && isTicket) {
-            // -- Chemin PDF : printToPDF avec dimensions dynamiques --
-            const pdfBuffer = await win.webContents.printToPDF({
-              printBackground: true,
-              pageSize: { width: ticketWidthMicrons || 72100, height: 400000 },
-              margins: { marginType: 'none' },
-            });
-            win.close();
-            cleanup();
-
-            const result = await dialog.showSaveDialog({
-              title: 'Salvar Factura PDF',
-              defaultPath: path.join('D:\\', 'factura_' + Date.now() + '.pdf'),
-              filters: [{ name: 'PDF', extensions: ['pdf'] }]
-            });
-
-            if (result.canceled) {
-              // \u2705 Dialog annulé = impression abandonnée volontairement
-              // On résout avec success:true pour ne pas bloquer le bouton Imprimir
-              return resolve({ success: true, canceled: true });
-            }
-            fs.writeFileSync(result.filePath, pdfBuffer);
-            // \u2705 Ouvrir le PDF automatiquement après sauvegarde
-            shell.openPath(result.filePath).catch(() => {});
-            return resolve({ success: true, path: result.filePath });
-          }
-
-          // ── Chemin impression physique (POS-80, AnyDesk, etc.) ──
-          const printOptions = {
-            silent: true,
-            printBackground: true,
-            color: false,
-            copies: Math.max(1, copies),
-            margins: { marginType: 'none' },
-            scaleFactor: 100,
-          };
-
-          if (isTicket) {
-            printOptions.pageSize = { width: ticketWidthMicrons || 72100, height: 400000 };
-          }
-
-          if (printerName && printerName.trim()) {
-            printOptions.deviceName = printerName.trim();
-          }
-
-          win.webContents.print(printOptions, (success, errorType) => {
-            win.close();
-            cleanup();
-            if (success) {
-              resolve({ success: true });
-            } else {
-              // Fallback : essayer sans deviceName
-              const tmpFile2 = path.join(os.tmpdir(), 'ckbpos_fb_' + Date.now() + '.html');
-              fs.writeFileSync(tmpFile2, fixedHtml, 'utf8');
-              const cleanup2 = () => { try { fs.unlinkSync(tmpFile2); } catch(e) {} };
-              const win2 = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true } });
-              win2.loadURL('file:///' + tmpFile2.replace(/\\/g, '/'));
-              win2.webContents.on('did-finish-load', () => {
-                setTimeout(() => {
-                  const fallbackOpts = { silent: true, printBackground: true, color: false, copies: Math.max(1, copies), margins: { marginType: 'none' }, scaleFactor: 100 };
-                  if (isTicket) fallbackOpts.pageSize = { width: ticketWidthMicrons || 72100, height: 400000 };
-                  win2.webContents.print(fallbackOpts, (s2, e2) => {
-                    win2.close(); cleanup2();
-                    if (s2) resolve({ success: true });
-                    else reject(new Error(e2 || errorType));
-                  });
-                }, 800);
-              });
-              win2.webContents.on('did-fail-load', (e, code, desc) => { win2.close(); cleanup2(); reject(new Error(desc)); });
-            }
-          });
-
-        } catch(err) {
-          win.close(); cleanup();
-          reject(err);
-        }
-      }, 1500);
-    });
-    win.webContents.on('did-fail-load', (e, code, desc) => { win.close(); cleanup(); reject(new Error(desc)); });
+    try {
+      const result = await adaptivePrint({
+        html,
+        ticketData,
+        printerName,
+        settings: { ...settings, ticketSizeMm: settings.ticketSizeMm },
+        methodOverride: printMethod || 'auto',
+        isTicket,
+        copies,
+      });
+      console.log(`[PRINT] Result:`, JSON.stringify(result));
+      resolve(result);
+    } catch (err) {
+      console.error(`[PRINT] Error:`, err.message);
+      reject(err);
+    }
   });
 }
 
@@ -1191,7 +1404,17 @@ ipcMain.handle('print-ticket', async (_, data) => {
     const { copiesTicket, ticketSizeMm } = getPrintSettings();
     const copies = data.copies || copiesTicket || 2;
     const flags = getTicketFlags();
-    const result = await printHTML(generateTicketHTML({ ...data, qrDataUrl, flags, ticketSizeMm }), copies, true);
+    // v5.0 — Pass ticket data for ESC/POS generation
+    const ticketDataForESCPOS = {
+      shopName: data.shopName, shopAddress: data.shopAddress, shopPhone: data.shopPhone, shopNif: data.shopNif,
+      clientNom: data.clientNom, clientNif: data.clientNif,
+      items: data.items, total: data.total, cashGiven: data.cashGiven, change: data.change,
+      seller: data.seller, date: data.date, currency: data.currency,
+      payMode: data.payMode, montantDinheiro: data.montantDinheiro, montantExpress: data.montantExpress,
+      numeroFacture: data.numeroFacture, segundaVia: data.segundaVia, statut: data.statut,
+      flags, appVersion: APP_VERSION,
+    };
+    const result = await printHTML(generateTicketHTML({ ...data, qrDataUrl, flags, ticketSizeMm }), copies, true, ticketDataForESCPOS);
     return { success: true, copies, ...(result || {}) };
   }
   catch(e) {
@@ -1278,746 +1501,14 @@ ipcMain.handle('print-caderno', async (_, data) => {
   }
 });
 
-// ============================================================
-// TICKET HTML - Format professionnel 58mm
-// ============================================================
-function generateTicketHTML(data) {
-  const {
-    shopName, shopAddress, shopPhone, shopNif,
-    clientNom, clientNif, items, total, cashGiven, change,
-    seller, date, currency, statut,
-    payMode, montantDinheiro, montantExpress,
-    qrDataUrl, numeroFacture,
-    segundaVia,
-    flags: rawFlags,
-    ticketSizeMm: _tMm,
-  } = data;
-  const ticketW = `${_tMm || 72}mm`;
-
-  // Valeurs par défaut si flags absents (tout visible)
-  const flags = rawFlags || {
-    showQr:true, showAddress:true, showPhone:true, showNif:true,
-    showFactureNum:true, showClientNom:true, showClientNif:true,
-    showSeller:true, showObrigado:true, showVersion:true, showSecondaVia:true,
-  };
-
-  const payLabel = payMode==='dinheiro'?'Numerário':payMode==='express'?'App Express':'Misto';
-  const clientDisplay = clientNom || 'CONSUMIDOR FINAL';
-  const nifDisplay = clientNif || 'CONSUMIDOR FINAL';
-  const frNum = numeroFacture || '';
-
-  // Largeur utile 58mm - 2x2mm padding = 54mm
-  // font-size 11px Courier New = ~1.8mm/char \u2192 max ~40 chars/ligne
-  const itemsRows = (items||[]).map(i => `
-    <tr>
-      <td style="width:50%;word-break:break-word;"><strong>${i.name}</strong><br><small style="font-size:9px;">(${i.type})</small></td>
-      <td style="width:8%;text-align:center;"><strong>${i.qty}</strong></td>
-      <td style="width:20%;text-align:right;white-space:nowrap;">${i.price}</td>
-      <td style="width:22%;text-align:right;white-space:nowrap;"><strong>${i.subtotal || i.price}</strong></td>
-    </tr>`).join('');
-
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <style>
-    @page { size: ${ticketW} auto; margin: 0; }
-    * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
-    body {
-      font-family: 'Courier New', Courier, monospace;
-      font-size: 12px;
-      width: ${ticketW};
-      padding: 2mm 3mm;
-      color: #000000 !important;
-      background: #ffffff !important;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-    }
-    .center { text-align: center; }
-    .right { text-align: right; }
-    .sep-solid { border-top: 2px solid #000; margin: 4px 0; }
-    .sep-dash  { border-top: 1px dashed #000; margin: 3px 0; }
-    .shop-name { font-size: 15px; font-weight: 900; text-transform: uppercase; text-align: center; line-height: 1.4; word-break: break-word; }
-    .shop-info { font-size: 11px; text-align: center; line-height: 1.7; }
-    .factura-title { font-size: 13px; font-weight: 900; text-align: center; letter-spacing: 1px; margin: 3px 0; text-transform: uppercase; }
-    .fr-num { font-size: 11px; font-weight: 900; text-align: center; margin-bottom: 2px; word-break: break-all; }
-    .original { font-size: 9px; text-align: center; margin-bottom: 3px; }
-    .meta-line { font-size: 11px; line-height: 1.8; }
-    .mention-legal { font-size: 9px; font-style: italic; line-height: 1.4; text-align: justify; margin: 3px 0; }
-    .cancelled { font-size: 13px; text-align: center; font-weight: 900; border: 2px dashed #000; padding: 3px; margin: 5px 0; letter-spacing: 2px; }
-    table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 2px 0; table-layout: fixed; }
-    th { font-size: 10px; font-weight: 900; text-transform: uppercase; padding: 3px 1px; border-top: 2px solid #000; border-bottom: 1px dashed #000; }
-    td { padding: 3px 1px; font-size: 11px; vertical-align: top; word-break: break-word; }
-    tbody tr:last-child td { border-bottom: 2px solid #000; }
-    .total-grand { display: flex; justify-content: space-between; font-size: 16px; font-weight: 900; padding: 4px 0; border-bottom: 2px solid #000; margin: 3px 0 5px; }
-    .pay-title { font-size: 12px; font-weight: 900; margin: 4px 0 2px; text-decoration: underline; }
-    .pay-row { display: flex; justify-content: space-between; font-size: 12px; font-weight: 900; padding: 2px 0; }
-    .footer { text-align: center; font-size: 12px; font-weight: 900; margin-top: 7px; line-height: 1.9; }
-    @media print { * { color: #000 !important; background: transparent !important; } body { background: #fff !important; } }
-  </style></head><body>
-
-  <div class="shop-name">${shopName}</div>
-  <div class="shop-info">
-    ${flags.showNif && shopNif ? `Contribuinte Nº ${shopNif}<br>` : ''}
-    ${flags.showPhone && shopPhone ? `Tel: ${shopPhone}<br>` : ''}
-    ${flags.showAddress && shopAddress ? `${shopAddress}` : ''}
-  </div>
-
-  <div class="sep-solid"></div>
-
-  <div class="factura-title">FACTURA RECIBO</div>
-  ${flags.showFactureNum && frNum ? `<div class="fr-num">${frNum}</div>` : ''}
-  ${flags.showSecondaVia ? `<div class="original">${segundaVia ? '2ème exemplaire — Segunda via' : 'Original'}</div>` : ''}
-
-  <div class="sep-dash"></div>
-
-  <div class="meta-line">
-    ${flags.showClientNom ? `<div>Cliente: ${clientDisplay}</div>` : ''}
-    ${flags.showClientNif ? `<div>NIF: ${nifDisplay}</div>` : ''}
-    <div>Data e Hora: ${date}</div>
-    ${flags.showSeller ? `<div>Vendedor: ${seller.toUpperCase()}</div>` : ''}
-  </div>
-
-  ${flags.showMentionLegal && shopAddress ? `<div class="mention-legal">Os bens/Serviços foram colocados à disposição do adquirente na data do documento: ${shopAddress}.</div>` : ''}
-
-  ${statut==='annule' ? '<div class="cancelled">*** ANULADO ***</div>' : ''}
-
-  <div class="sep-solid"></div>
-
-  <table>
-    <thead>
-      <tr>
-        <th style="width:50%;text-align:left;">Descrição</th>
-        <th style="width:8%;text-align:center;">Qtd</th>
-        <th style="width:20%;text-align:right;">Preço</th>
-        <th style="width:22%;text-align:right;">Total</th>
-      </tr>
-    </thead>
-    <tbody>${itemsRows}</tbody>
-  </table>
-
-  <div class="total-grand">
-    <span>TOTAL</span>
-    <span>${total} ${currency}</span>
-  </div>
-
-  <div class="pay-title">Forma de Pagamento</div>
-  <div class="sep-dash"></div>
-  <div class="pay-row">
-    <span>${payLabel.toUpperCase()}</span>
-    <span>${payMode==='misto'?`${total} ${currency}`:payMode==='dinheiro'?`${montantDinheiro} ${currency}`:`${montantExpress} ${currency}`}</span>
-  </div>
-  ${payMode==='misto' ? `
-  <div class="pay-row" style="font-size:9px;"><span>└ Numerário</span><span>${montantDinheiro} ${currency}</span></div>
-  <div class="pay-row" style="font-size:9px;"><span>└ App Express</span><span>${montantExpress} ${currency}</span></div>` : ''}
-  <div class="sep-dash"></div>
-  ${payMode==='dinheiro' ? `<div class="pay-row"><span>Recebido</span><span>${cashGiven} ${currency}</span></div>` : ''}
-  ${(change && change !== '0' && change !== '0,00') ? `<div class="pay-row"><span>Troco</span><span>${change} ${currency}</span></div>` : ''}
-
-  <div class="sep-solid"></div>
-
-  <div class="footer">
-    ${flags.showObrigado ? 'OBRIGADO PELA SUA COMPRA!<br>' : ''}
-    ${flags.showVersion ? `CKBPOS v${APP_VERSION}` : ''}
-  </div>
-
-  ${flags.showQr && qrDataUrl ? `
-  <div style="text-align:center;margin-top:10px;padding-top:6px;border-top:1px dashed #000;">
-    <img src="${qrDataUrl}" width="120" height="120" style="display:inline-block;"/>
-    <div style="font-size:8px;color:#666;margin-top:3px;font-family:'Courier New',monospace;">Escaneie para verificar</div>
-  </div>` : ''}
-
-  </body></html>`;
-}
-
-// ============================================================
-// HISTORIQUE TICKET HTML - Format 58mm thermique
-// ============================================================
-function generateHistoriqueTicketHTML(data) {
-  const { shopName, ventes, total, currency, filterUser, filterDateFrom, filterDateTo, printedAt, ticketSizeMm: _tMm } = data;
-  const ticketW = `${_tMm || 72}mm`;
-
-  const statutLabel = { annule:'ANUL', modifie:'MOD', normal:'OK', pago_retirar:'RES' };
-  const payLabel    = { dinheiro:'NUM', express:'EXP', misto:'MIS' };
-
-  const countOk   = (ventes||[]).filter(v => v.statut !== 'annule').length;
-  const countAnul = (ventes||[]).filter(v => v.statut === 'annule').length;
-  const isFiltered = filterDateFrom || (filterUser && filterUser !== 'Todos' && filterUser !== 'all');
-
-  const rows = (ventes||[]).map(v => {
-    const statut = statutLabel[v.statut] || 'OK';
-    const pay    = payLabel[v.mode_paiement] || 'NUM';
-    const date   = fmtDate(v.date_vente).slice(0,16); // dd/mm/yyyy hh:mm
-    return `
-  <div class="row-vente">
-    <span class="vid">#${v.id}</span>
-    <span class="vdate">${date}</span>
-    <span class="vpay">${pay}</span>
-    <span class="vstat ${v.statut}">${statut}</span>
-    <span class="vtotal">${fmtNum(v.total)}</span>
-  </div>`;
-  }).join('');
-
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <style>
-    @page { size: ${ticketW} auto; margin: 0; }
-    * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
-    body {
-      font-family: 'Courier New', Courier, monospace;
-      font-size: 11px;
-      width: ${ticketW};
-      padding: 4mm 2mm;
-      color: #000;
-      background: #fff;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-    }
-    .center  { text-align:center; }
-    .right   { text-align:right; }
-    .sep     { border-top:2px solid #000; margin:4px 0; }
-    .sep-d   { border-top:1px dashed #000; margin:3px 0; }
-    .title   { font-size:13px; font-weight:900; text-align:center; text-transform:uppercase; }
-    .sub     { font-size:9px; text-align:center; margin-bottom:2px; }
-    .meta    { font-size:9px; line-height:1.7; }
-    .stats   { display:flex; justify-content:space-between; font-size:9px; margin:3px 0; }
-    .col-hdr { display:flex; justify-content:space-between; font-size:8px; text-transform:uppercase; border-bottom:1px solid #000; padding-bottom:2px; margin-bottom:2px; }
-    .row-vente { display:flex; justify-content:space-between; align-items:center; font-size:9px; padding:2px 0; border-bottom:1px dashed #eee; }
-    .vid    { width:24px; flex-shrink:0; font-size:8px; }
-    .vdate  { width:82px; flex-shrink:0; font-size:8px; }
-    .vpay   { width:20px; flex-shrink:0; font-size:8px; text-align:center; }
-    .vstat  { width:20px; flex-shrink:0; font-size:8px; text-align:center; font-weight:900; }
-    .vstat.annule { color:#000; text-decoration:line-through; }
-    .vtotal { flex:1; text-align:right; font-size:9px; }
-    .total-line { display:flex; justify-content:space-between; font-size:12px; font-weight:900; margin-top:4px; }
-    .footer { text-align:center; font-size:8px; margin-top:6px; }
-    @media print { * { color:#000 !important; background:#fff !important; } }
-  </style>
-  </head><body>
-
-  <div class="title">${shopName || 'CKBPOS'}</div>
-  <div class="sub">Histórico de Vendas${isFiltered ? ' — FILTRADO' : ''}</div>
-  <div class="sep"></div>
-
-  <div class="meta">
-    <div>Impresso: ${printedAt || '-'}</div>
-    ${filterUser && filterUser !== 'all' && filterUser !== 'Todos' ? `<div>Vendedor: ${filterUser}</div>` : ''}
-    ${filterDateFrom ? `<div>De: ${filterDateFrom}</div><div>Até: ${filterDateTo || 'hoje'}</div>` : ''}
-  </div>
-
-  <div class="sep-d"></div>
-
-  <div class="stats">
-    <span>Total: ${(ventes||[]).length} venda(s)</span>
-    <span>OK: ${countOk} | ANUL: ${countAnul}</span>
-  </div>
-
-  <div class="sep"></div>
-
-  <div class="col-hdr">
-    <span style="width:24px">#</span>
-    <span style="width:82px">Data/Hora</span>
-    <span style="width:20px;text-align:center">Pag</span>
-    <span style="width:20px;text-align:center">Stat</span>
-    <span style="flex:1;text-align:right">${currency}</span>
-  </div>
-
-  ${rows || '<div class="center" style="padding:8px 0;">Nenhuma venda</div>'}
-
-  <div class="sep"></div>
-
-  <div class="total-line">
-    <span>TOTAL GERAL</span>
-    <span>${fmtNum(total)} ${currency}</span>
-  </div>
-
-  <div class="sep-d"></div>
-  <div class="footer">CKBPOS — ${printedAt || '-'}</div>
-
-  </body></html>`;
-}
-function generateShiftHTML(data) {
-  const { vendeur, dateDebut, dateFin, items, totalVentes, totalDinheiro, totalExpress, argentEnMain, argentEnvoye, note, currency, shopName, shopAddress, shopPhone, shopNif, cadernoResume, fundoCaixa, ticketSizeMm: _tMm } = data;
-  const ticketW = `${_tMm || 72}mm`;
-  const diffMain = argentEnMain - totalDinheiro;
-  const diffExpress = argentEnvoye - totalExpress;
-  const ecartCaixa = argentEnMain - (fundoCaixa || 0) - totalDinheiro;
-
-  const grouped = {};
-  (items||[]).forEach(i => {
-    if (!grouped[i.nom]) grouped[i.nom] = { carton:0, demi:0, unite:0, subtotal:0 };
-    grouped[i.nom][i.type_vente] += Math.round(i.qty*100)/100;
-    grouped[i.nom].subtotal += i.subtotal;
-  });
-
-  const groupedRows = Object.entries(grouped).map(([nom, v]) => {
-    const parts = [];
-    if (v.carton > 0) parts.push(`${v.carton} cx`);
-    if (v.demi > 0) parts.push(`${v.demi} demi`);
-    if (v.unite > 0) parts.push(`${v.unite} un`);
-    return `<div class="row"><span>${nom}: ${parts.join(' + ')}</span><span>${v.subtotal.toLocaleString('fr-FR')} ${currency}</span></div>`;
-  }).join('');
-
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <style>
-    @page { size: ${ticketW} auto; margin: 0; }
-    * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
-    body {
-      font-family: 'Courier New', Courier, monospace;
-      font-size: 10px;
-      width: ${ticketW};
-      padding: 2mm 2mm;
-      color: #000000 !important;
-      background: #ffffff !important;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-    }
-    .center { text-align: center; }
-    .bold { font-weight: 900; }
-    .separator { border-top: 2px solid #000; margin: 4px 0; }
-    .separator-thin { border-top: 1px dashed #000; margin: 3px 0; }
-    .row { display: flex; justify-content: space-between; margin: 2px 0; font-size:9px; }
-    .shop-name { font-size:13px; font-weight:900; text-transform:uppercase; text-align:center; line-height:1.3; word-break:break-word; }
-    .shop-info { font-size:8px; text-align:center; line-height:1.6; }
-    @media print { * { color: #000 !important; background: transparent !important; } body { background: #fff !important; } }
-  </style>
-  </head><body>
-  <div class="shop-name">${shopName || 'CKBPOS'}</div>
-  <div class="shop-info">
-    ${shopNif ? `Contribuinte Nº ${shopNif}<br>` : ''}
-    ${shopPhone ? `Tel: ${shopPhone}<br>` : ''}
-    ${shopAddress ? `${shopAddress}` : ''}
-  </div>
-  <div class="separator"></div>
-  <div class="center bold" style="font-size:13px;">RELATÓRIO DE TURNO</div>
-  <div class="center" style="font-size:11px;">${vendeur}</div>
-  <div class="separator"></div>
-  <div class="row"><span>Início:</span><span>${dateDebut}</span></div>
-  <div class="row"><span>Fim:</span><span>${dateFin}</span></div>
-  <div class="separator"></div>
-  <div class="bold" style="margin-bottom:4px;">PRODUTOS VENDIDOS:</div>
-  <div class="separator-thin"></div>
-  ${groupedRows || '<div class="center">Nenhuma venda</div>'}
-  <div class="separator"></div>
-  <div class="row bold" style="font-size:14px;"><span>TOTAL VENDAS</span><span>${totalVentes.toLocaleString('fr-FR')} ${currency}</span></div>
-  <div class="separator"></div>
-  <div class="bold" style="margin-bottom:4px;">REGISTRADO NO SISTEMA:</div>
-  <div class="row"><span>Numerário</span><span>${totalDinheiro.toLocaleString('fr-FR')} ${currency}</span></div>
-  <div class="row"><span>App Express</span><span>${totalExpress.toLocaleString('fr-FR')} ${currency}</span></div>
-  <div class="separator-thin"></div>
-  <div class="bold" style="margin-bottom:4px;">CONFIRMADO PELO VENDEDOR:</div>
-  <div class="row"><span>Numerário real</span><span>${argentEnMain.toLocaleString('fr-FR')} ${currency}</span></div>
-  <div class="row"><span>App Express real</span><span>${argentEnvoye.toLocaleString('fr-FR')} ${currency}</span></div>
-  <div class="separator"></div>
-  <div class="bold" style="margin-bottom:4px;">DIFERENÇAS:</div>
-  <div class="row"><span>Numerário</span><span>${diffMain>=0?'+':''}${diffMain.toLocaleString('fr-FR')} ${currency}</span></div>
-  <div class="row"><span>App Express</span><span>${diffExpress>=0?'+':''}${diffExpress.toLocaleString('fr-FR')} ${currency}</span></div>
-  ${(fundoCaixa && fundoCaixa > 0) ? `<div class="separator-thin"></div><div class="row"><span>Fundo Caixa</span><span>${Number(fundoCaixa).toLocaleString('fr-FR')} ${currency}</span></div><div class="row bold"><span>ÉCART CAIXA</span><span>${ecartCaixa>=0?'+':''}${ecartCaixa.toLocaleString('fr-FR')} ${currency}</span></div>` : ''}
-  ${note ? `<div class="separator-thin"></div><div>Obs: ${note}</div>` : ''}
-  <div class="separator"></div>
-  ${cadernoResume ? `
-  <div class="bold" style="margin-bottom:4px;">CADERNO DE CAIXA:</div>
-  <div class="row"><span>Entradas (+)</span><span>${cadernoResume.totalPlus.toLocaleString('fr-FR')} ${currency}</span></div>
-  <div class="row"><span>Sa\u00eddas (-)</span><span>${cadernoResume.totalMoins.toLocaleString('fr-FR')} ${currency}</span></div>
-  ${cadernoResume.dettes > 0 ? `<div class="row" style="font-size:8px;"><span>D\u00edvidas pend.</span><span>${cadernoResume.dettes.toLocaleString('fr-FR')} ${currency}</span></div>` : ''}
-  <div class="row bold"><span>Net caderno</span><span>${cadernoResume.net>=0?'+':''}${cadernoResume.net.toLocaleString('fr-FR')} ${currency}</span></div>
-  <div class="separator"></div>` : ''}
-  <div class="separator-thin"></div>
-  <div class="center" style="margin-top:6px;font-size:10px;">Assinatura: ____________________</div>
-  <div class="center" style="margin-top:6px;font-size:9px;">CKBPOS v${APP_VERSION}</div>
-  </body></html>`;
-}
-
-
-// ============================================================
-// PRODUTOS HTML - Rapport produits vendus A4
-// ============================================================
-function generateProdutosHTML(data) {
-  const { shopName, produtos, currency, filterUser, filterDateFrom, filterDateTo, printedAt } = data;
-  const totalRevenue = (produtos||[]).reduce((s,p) => s + (p.total||0), 0);
-  const totalProduits = (produtos||[]).length;
-
-  const rows = (produtos||[]).map((p, i) => {
-    const bg = i % 2 === 0 ? '#ffffff' : '#f5f5f5';
-    const nom = p.variant_nom ? p.nom + ' \u2014 ' + p.variant_nom : p.nom;
-    const carton = p.carton > 0 ? Math.round(p.carton*100)/100 + ' cx' : '';
-    const demi   = p.demi   > 0 ? Math.round(p.demi*100)/100   + ' demi' : '';
-    const unite  = p.unite  > 0 ? Math.round(p.unite*100)/100  + ' un' : '';
-    const qtyStr = [carton, demi, unite].filter(Boolean).join(' + ') || '-';
-    return `<tr style="background:${bg};">
-      <td style="text-align:center;">${i+1}</td>
-      <td style="font-weight:700;">${nom}</td>
-      <td style="text-align:center;">${qtyStr}</td>
-      <td style="text-align:right;font-weight:700;">${fmtNum(p.total)} ${currency}</td>
-    </tr>`;
-  }).join('');
-
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <style>
-    @page { size: A4; margin: 15mm 12mm; }
-    * { margin:0; padding:0; box-sizing:border-box; }
-    body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #000; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .header { border-bottom: 3px solid #000; padding-bottom: 8px; margin-bottom: 10px; }
-    .title { font-size: 18px; font-weight: 900; text-transform: uppercase; }
-    .subtitle { font-size: 12px; color: #444; margin-top: 2px; }
-    .meta { margin-bottom: 12px; font-size: 11px; line-height: 1.8; }
-    .stats { display: flex; gap: 20px; margin-bottom: 14px; }
-    .stat-box { border: 1px solid #ccc; border-radius: 4px; padding: 6px 14px; text-align: center; }
-    .stat-box .val { font-size: 16px; font-weight: 900; }
-    .stat-box .lbl { font-size: 9px; color: #666; text-transform: uppercase; }
-    table { width: 100%; border-collapse: collapse; font-size: 11px; }
-    thead tr { background: #000; color: #fff; }
-    thead th { padding: 6px; font-weight: 900; font-size: 10px; text-transform: uppercase; }
-    tbody td { padding: 5px 6px; border-bottom: 1px solid #e0e0e0; }
-    tfoot td { padding: 7px 6px; border-top: 3px solid #000; font-weight: 900; font-size: 12px; }
-    .footer { margin-top: 14px; font-size: 9px; color: #888; border-top: 1px solid #ccc; padding-top: 6px; text-align: center; }
-    @media print { * { color:#000 !important; } thead tr { background:#000 !important; color:#fff !important; } }
-  </style></head><body>
-  <div class="header">
-    <div class="title">${shopName || 'CKBPOS'}</div>
-    <div class="subtitle">Relat\u00f3rio de Produtos Vendidos</div>
-  </div>
-  <div class="meta">
-    <div><strong>Impresso em:</strong> ${printedAt || '-'}</div>
-    ${filterUser && filterUser !== 'all' && filterUser !== 'Todos' ? `<div><strong>Vendedor:</strong> ${filterUser}</div>` : ''}
-    ${filterDateFrom ? `<div><strong>Per\u00edodo:</strong> ${filterDateFrom} \u2192 ${filterDateTo || 'hoje'}</div>` : ''}
-  </div>
-  <div class="stats">
-    <div class="stat-box"><div class="val">${totalProduits}</div><div class="lbl">Produtos</div></div>
-    <div class="stat-box" style="border-color:#000;"><div class="val">${fmtNum(totalRevenue)} ${currency}</div><div class="lbl">Receita total</div></div>
-  </div>
-  <table>
-    <thead><tr>
-      <th style="width:30px;text-align:center;">#</th>
-      <th style="text-align:left;">Produto</th>
-      <th style="text-align:center;width:160px;">Quantidade</th>
-      <th style="text-align:right;width:120px;">Total</th>
-    </tr></thead>
-    <tbody>${rows || '<tr><td colspan="4" style="text-align:center;padding:20px;">Nenhum produto</td></tr>'}</tbody>
-    <tfoot><tr>
-      <td colspan="3" style="text-align:right;">TOTAL GERAL</td>
-      <td style="text-align:right;">${fmtNum(totalRevenue)} ${currency}</td>
-    </tr></tfoot>
-  </table>
-  <div class="footer">CKBPOS \u2014 Relat\u00f3rio gerado em ${printedAt || '-'}</div>
-  </body></html>`;
-}
-
-// ============================================================
-// PRODUTOS TICKET HTML - Format 58mm thermique
-// ============================================================
-function generateProdutosTicketHTML(data) {
-  const { shopName, produtos, currency, filterUser, filterDateFrom, filterDateTo, printedAt, ticketSizeMm: _tMm } = data;
-  const ticketW = `${_tMm || 72}mm`;
-  const totalRevenue = (produtos||[]).reduce((s,p) => s + (p.total||0), 0);
-
-  const rows = (produtos||[]).map(p => {
-    const nom = p.variant_nom ? p.nom + ' ' + p.variant_nom : p.nom;
-    const parts = [];
-    if (p.carton > 0) parts.push(Math.round(p.carton*100)/100 + 'cx');
-    if (p.demi   > 0) parts.push(Math.round(p.demi*100)/100   + 'dm');
-    if (p.unite  > 0) parts.push(Math.round(p.unite*100)/100  + 'un');
-    const qtyStr = parts.join('+') || '-';
-    return `<div class="prow">
-      <div class="pnom">${nom}</div>
-      <div class="pinfo"><span class="pqty">${qtyStr}</span><span class="ptot">${fmtNum(p.total)} ${currency}</span></div>
-    </div>`;
-  }).join('');
-
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <style>
-    @page { size: ${ticketW} auto; margin: 0; }
-    * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
-    body { font-family: 'Courier New', Courier, monospace; font-size:10px; width:${ticketW}; padding:4mm 2mm; color:#000; background:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-    .center { text-align:center; }
-    .sep    { border-top:2px solid #000; margin:4px 0; }
-    .sep-d  { border-top:1px dashed #000; margin:3px 0; }
-    .title  { font-size:13px; font-weight:900; text-align:center; text-transform:uppercase; }
-    .sub    { font-size:9px; text-align:center; margin-bottom:2px; }
-    .meta   { font-size:9px; line-height:1.7; margin-bottom:3px; }
-    .col-hdr { display:flex; justify-content:space-between; font-size:8px; text-transform:uppercase; border-bottom:1px solid #000; padding-bottom:2px; margin-bottom:2px; }
-    .prow   { padding:2px 0; border-bottom:1px dashed #ddd; }
-    .pnom   { font-size:10px; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:72mm; }
-    .pinfo  { display:flex; justify-content:space-between; font-size:9px; margin-top:1px; }
-    .pqty   { color:#333; }
-    .ptot   { font-weight:900; }
-    .total-line { display:flex; justify-content:space-between; font-size:12px; font-weight:900; margin-top:5px; }
-    .footer { text-align:center; font-size:8px; margin-top:6px; }
-    @media print { * { color:#000 !important; background:#fff !important; } }
-  </style></head><body>
-  <div class="title">${shopName || 'CKBPOS'}</div>
-  <div class="sub">Produtos Vendidos</div>
-  <div class="sep"></div>
-  <div class="meta">
-    <div>Impresso: ${printedAt || '-'}</div>
-    ${filterUser && filterUser !== 'Todos' && filterUser !== 'all' ? `<div>Vendedor: ${filterUser}</div>` : ''}
-    ${filterDateFrom ? `<div>De: ${filterDateFrom} \u2192 ${filterDateTo || 'hoje'}</div>` : ''}
-  </div>
-  <div class="sep-d"></div>
-  <div class="col-hdr"><span>Produto</span><span>Qtd / Total</span></div>
-  ${rows || '<div class="center" style="padding:8px 0;">Nenhum produto</div>'}
-  <div class="sep"></div>
-  <div class="total-line">
-    <span>${(produtos||[]).length} produto(s)</span>
-    <span>${fmtNum(totalRevenue)} ${currency}</span>
-  </div>
-  <div class="sep-d"></div>
-  <div class="footer">CKBPOS \u2014 ${printedAt || '-'}</div>
-  </body></html>`;
-}
-
-// ============================================================
-// HISTORIQUE HTML - A4, robuste, filtres affichés
-// ============================================================
-function fmtNum(n) {
-  // toLocaleString sécurisé pour Node.js process main
-  const num = Number(n) || 0;
-  return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-}
-
-function fmtDate(str) {
-  try {
-    const d = new Date(str);
-    if (isNaN(d)) return str || '-';
-    const dd = String(d.getDate()).padStart(2,'0');
-    const mm = String(d.getMonth()+1).padStart(2,'0');
-    const yyyy = d.getFullYear();
-    const hh = String(d.getHours()).padStart(2,'0');
-    const mn = String(d.getMinutes()).padStart(2,'0');
-    return `${dd}/${mm}/${yyyy} ${hh}:${mn}`;
-  } catch(e) { return str || '-'; }
-}
-
-function generateHistoriqueHTML(data) {
-  const { shopName, ventes, total, currency, filterUser, filterDateFrom, filterDateTo, printedAt } = data;
-
-  const payLabel = { dinheiro:'Numerário', express:'App Express', misto:'Misto' };
-  const statutLabel = { annule:'ANULADO', modifie:'MODIF.', normal:'OK', pago_retirar:'RESERVADO' };
-
-  const isFiltered = filterDateFrom || (filterUser && filterUser !== 'Todos' && filterUser !== 'all');
-
-  const rows = (ventes||[]).map((v, i) => {
-    const bg = i % 2 === 0 ? '#ffffff' : '#f5f5f5';
-    const statut = statutLabel[v.statut] || 'OK';
-    const statutColor = v.statut === 'annule' ? '#cc0000' : v.statut === 'modifie' ? '#cc7700' : '#007700';
-    return `<tr style="background:${bg};">
-      <td style="text-align:center;">${v.id}</td>
-      <td>${fmtDate(v.date_vente)}</td>
-      <td>${v.vendeur || '-'}</td>
-      <td>${v.client_nom || 'CONSUMIDOR FINAL'}</td>
-      <td style="text-align:center;">${payLabel[v.mode_paiement] || v.mode_paiement || 'Numerário'}</td>
-      <td style="text-align:center;font-weight:900;color:${statutColor};">${statut}</td>
-      <td style="text-align:right;font-weight:700;">${fmtNum(v.total)} ${currency}</td>
-    </tr>`;
-  }).join('');
-
-  const countOk    = (ventes||[]).filter(v => v.statut !== 'annule').length;
-  const countAnul  = (ventes||[]).filter(v => v.statut === 'annule').length;
-
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <style>
-    @page { size: A4; margin: 15mm 12mm; }
-    * { margin:0; padding:0; box-sizing:border-box; }
-    body {
-      font-family: Arial, Helvetica, sans-serif;
-      font-size: 11px;
-      color: #000;
-      background: #fff;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-    }
-    .header { border-bottom: 3px solid #000; padding-bottom: 8px; margin-bottom: 10px; }
-    .title { font-size: 18px; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; }
-    .subtitle { font-size: 12px; color: #444; margin-top: 2px; }
-    .meta { margin-bottom: 10px; font-size: 11px; line-height: 1.8; }
-    .meta strong { display: inline-block; min-width: 90px; }
-    .stats { display: flex; gap: 24px; margin-bottom: 12px; }
-    .stat-box { border: 1px solid #ccc; border-radius: 4px; padding: 6px 14px; text-align: center; }
-    .stat-box .val { font-size: 16px; font-weight: 900; }
-    .stat-box .lbl { font-size: 9px; color: #666; text-transform: uppercase; }
-    table { width: 100%; border-collapse: collapse; font-size: 11px; }
-    thead tr { background: #000; color: #fff; }
-    thead th { padding: 6px 6px; font-weight: 900; font-size: 10px; text-transform: uppercase; }
-    tbody td { padding: 5px 6px; border-bottom: 1px solid #e0e0e0; }
-    tfoot td { padding: 6px 6px; border-top: 3px solid #000; font-weight: 900; font-size: 12px; }
-    .right { text-align: right; }
-    .center { text-align: center; }
-    .footer { margin-top: 16px; font-size: 9px; color: #888; border-top: 1px solid #ccc; padding-top: 6px; text-align: center; }
-    @media print {
-      * { color: #000 !important; }
-      thead tr { background: #000 !important; color: #fff !important; }
-      -webkit-print-color-adjust: exact;
-    }
-  </style>
-  </head><body>
-
-  <div class="header">
-    <div class="title">${shopName || 'CKBPOS'}</div>
-    <div class="subtitle">Relatório de Histórico de Vendas${isFiltered ? ' — FILTRADO' : ' — COMPLETO'}</div>
-  </div>
-
-  <div class="meta">
-    <div><strong>Impresso em:</strong> ${printedAt || '-'}</div>
-    ${filterUser && filterUser !== 'all' && filterUser !== 'Todos' ? `<div><strong>Vendedor:</strong> ${filterUser}</div>` : ''}
-    ${filterDateFrom ? `<div><strong>Período:</strong> ${filterDateFrom} \u2192 ${filterDateTo || 'hoje'}</div>` : ''}
-    <div><strong>Registros:</strong> ${(ventes||[]).length} venda(s)</div>
-  </div>
-
-  <div class="stats">
-    <div class="stat-box">
-      <div class="val">${(ventes||[]).length}</div>
-      <div class="lbl">Total vendas</div>
-    </div>
-    <div class="stat-box">
-      <div class="val">${countOk}</div>
-      <div class="lbl">Confirmadas</div>
-    </div>
-    <div class="stat-box">
-      <div class="val">${countAnul}</div>
-      <div class="lbl">Anuladas</div>
-    </div>
-    <div class="stat-box" style="border-color:#000;">
-      <div class="val">${fmtNum(total)} ${currency}</div>
-      <div class="lbl">Total geral</div>
-    </div>
-  </div>
-
-  <table>
-    <thead>
-      <tr>
-        <th class="center">#</th>
-        <th>Data / Hora</th>
-        <th>Vendedor</th>
-        <th>Cliente</th>
-        <th class="center">Pagamento</th>
-        <th class="center">Status</th>
-        <th class="right">Total</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rows || '<tr><td colspan="7" style="text-align:center;padding:20px;">Nenhuma venda encontrada</td></tr>'}
-    </tbody>
-    <tfoot>
-      <tr>
-        <td colspan="6" class="right">TOTAL GERAL (excl. anuladas)</td>
-        <td class="right">${fmtNum(total)} ${currency}</td>
-      </tr>
-    </tfoot>
-  </table>
-
-  <div class="footer">CKBPOS — Relatório gerado automaticamente em ${printedAt || '-'}</div>
-
-  </body></html>`;
-}
-
-// ============================================================
-// CADERNO TICKET HTML - Format thermique (résumé du jour)
-// ============================================================
-function generateCadernoTicketHTML(data) {
-  const { shopName, entries, date_jour, currency, printedAt, ticketSizeMm: _tMm } = data;
-  const ticketW = `${_tMm || 72}mm`;
-
-  const totalPlus  = (entries||[]).filter(e => e.direction === 'entree').reduce((s,e) => s + (e.montant||0), 0);
-  const totalMoins = (entries||[]).filter(e => e.direction !== 'entree').reduce((s,e) => s + (e.montant||0), 0);
-  const dettes     = (entries||[]).filter(e => e.est_dette && e.statut_dette !== 'pago').reduce((s,e) => s + (e.montant||0), 0);
-  const net        = totalPlus - totalMoins;
-
-  const rows = (entries||[]).map(e => {
-    const signe = e.direction === 'entree' ? '+' : '-';
-    const col   = e.direction === 'entree' ? '#2d9e6b' : '#cc4444';
-    const motTxt = (e.motivo || '').substring(0, 16);
-    const nomTxt = (e.nom    || '-').substring(0, 18);
-    return `<div class="erow">
-      <span class="enom">${nomTxt}</span>
-      <span class="emot">${motTxt}</span>
-      <span class="eamt" style="color:${col};">${signe}${fmtNum(e.montant||0)}</span>
-    </div>`;
-  }).join('');
-
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <style>
-    @page { size: ${ticketW} auto; margin: 0; }
-    * { margin:0; padding:0; box-sizing:border-box; font-weight:700; }
-    body { font-family: 'Courier New', Courier, monospace; font-size:10px; width:${ticketW}; padding:4mm 2mm; color:#000; background:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-    .center { text-align:center; }
-    .sep    { border-top:2px solid #000; margin:4px 0; }
-    .sep-d  { border-top:1px dashed #000; margin:3px 0; }
-    .title  { font-size:13px; font-weight:900; text-align:center; text-transform:uppercase; }
-    .sub    { font-size:9px; text-align:center; margin-bottom:2px; }
-    .meta   { font-size:9px; line-height:1.7; margin-bottom:3px; }
-    .erow   { display:flex; justify-content:space-between; align-items:center; font-size:9px; padding:2px 0; border-bottom:1px dashed #ccc; gap:3px; }
-    .enom   { flex:1; font-size:9px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .emot   { width:60px; font-size:8px; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0; }
-    .eamt   { width:50px; text-align:right; font-size:9px; flex-shrink:0; }
-    .totrow { display:flex; justify-content:space-between; font-size:10px; padding:2px 0; }
-    .totbig { display:flex; justify-content:space-between; font-size:12px; font-weight:900; margin-top:3px; padding:3px 0; border-top:2px solid #000; }
-    .footer { text-align:center; font-size:8px; margin-top:6px; }
-    @media print { * { color:#000 !important; background:#fff !important; } }
-  </style></head><body>
-  <div class="title">${shopName || 'CKBPOS'}</div>
-  <div class="sub">Caderno de Caixa</div>
-  <div class="sep"></div>
-  <div class="meta">
-    <div>Data: ${date_jour || '-'}</div>
-    <div>Impresso: ${printedAt || '-'}</div>
-  </div>
-  <div class="sep-d"></div>
-  ${rows || '<div class="center" style="padding:6px 0;font-size:9px;">Nenhum registo</div>'}
-  <div class="sep"></div>
-  <div class="totrow"><span>TOTAL +</span><span>+${fmtNum(totalPlus)} ${currency || 'Kz'}</span></div>
-  <div class="totrow"><span>TOTAL -</span><span>-${fmtNum(totalMoins)} ${currency || 'Kz'}</span></div>
-  ${dettes > 0 ? `<div class="totrow" style="color:#b00;"><span>D\u00edvidas pend.</span><span>-${fmtNum(dettes)} ${currency || 'Kz'}</span></div>` : ''}
-  <div class="totbig"><span>NET DO DIA</span><span>${net>=0?'+':''}${fmtNum(net)} ${currency || 'Kz'}</span></div>
-  <div class="sep-d"></div>
-  <div class="footer">CKBPOS \u2014 ${printedAt || '-'}</div>
-  </body></html>`;
-}
-
-
-// ============================================================
-// CONSOLE IN-APP — v1.4.1
-// Intercepte console.log/error/warn \u2192 envoie au renderer
-// Capture automatique des tags [LAN] [SYNC] [BEAT] [DB] etc.
-// ============================================================
-
-const MAX_LOG_BUFFER = 250;
-const _logBuffer     = [];
-
-const _origLog   = console.log.bind(console);
-const _origError = console.error.bind(console);
-const _origWarn  = console.warn.bind(console);
-
-function _pushLog(level, args) {
-  try {
-    const raw = args.map(a => {
-      if (a instanceof Error) return a.message;
-      if (typeof a === 'object') { try { return JSON.stringify(a); } catch(_e2) { return String(a); } }
-      return String(a);
-    }).join(' ');
-
-    // Extraire le tag [XXX] en début de message
-    const tagMatch = raw.match(/^(\[[A-Z0-9_]+\])\s*/);
-    const tag  = tagMatch ? tagMatch[1] : '[LOG]';
-    const msg  = tagMatch ? raw.slice(tagMatch[0].length) : raw;
-
-    const entry = {
-      time:  new Date().toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit', second:'2-digit' }),
-      tag, msg, level,
-    };
-    _logBuffer.push(entry);
-    if (_logBuffer.length > MAX_LOG_BUFFER) _logBuffer.shift();
-
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      try { mainWindow.webContents.send('debug-log', entry); } catch(_e2) {}
-    }
-  } catch(_e2) {}
-}
-
-console.log   = (...a) => { _origLog(...a);   _pushLog('info',    a); };
-console.error = (...a) => { _origError(...a); _pushLog('error',   a); };
-console.warn  = (...a) => { _origWarn(...a);  _pushLog('warn',    a); };
-
-ipcMain.handle('debug-logs-get', () => ({ success: true, data: [..._logBuffer] }));
+// HTML Templates — extracted to src/main/templates.js
+// In-App Console — extracted to src/main/console.js
 
 // ============================================================
 // RÉSEAU P2P LAN — v1.4.0
 // WebSocket server (port 41234) + UDP broadcast discovery (port 41235)
+// ✅ CKBPOS Standard — ports standard, isolés du réseau LAN CKBPOS-PRO
+//    (53611/53612) pour éviter toute synchro croisée entre les deux apps.
 // ============================================================
 
 const WebSocket = require('ws');
@@ -2026,6 +1517,10 @@ const os        = require('os');
 
 const WS_PORT  = 41234;
 const UDP_PORT = 41235;
+const UDP_ALT_PORT = 41236;
+
+// ✅ Identifiant produit — Standard = 'CKBPOS', isolé de CKBPOS-PRO
+const PRODUCT_ID = 'CKBPOS';
 
 // Peers actifs en mémoire : machine_id \u2192 { ws, machine_label, ip, lastSeen }
 const peersMap = new Map();
@@ -2064,13 +1559,14 @@ function getMachineInfo() {
     const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
     return {
       type:          'CKBPOS_INFO',
+      product:       PRODUCT_ID,
       machine_id:    MACHINE_ID,
       machine_label: labelRow?.value || 'CKBPOS',
       port:          WS_PORT,
       network_key:   getNetworkKey(),
     };
   } catch(_e) {
-    return { type: 'CKBPOS_INFO', machine_id: MACHINE_ID, machine_label: 'CKBPOS', port: WS_PORT, network_key: '' };
+    return { type: 'CKBPOS_INFO', product: PRODUCT_ID, machine_id: MACHINE_ID, machine_label: 'CKBPOS', port: WS_PORT, network_key: '' };
   }
 }
 
@@ -2105,6 +1601,51 @@ function broadcastPeersUpdate() {
   }
 }
 
+// ── v5.1 — Chiffrement applicatif AES-256-GCM (LAN) ──────────
+const _encCrypto = require('crypto');
+let _encDerivedKey = null;
+let _encLastKeyHash = null;
+
+function _getDerivedKey() {
+  const networkKey = getNetworkKey();
+  if (!networkKey) return null;
+  const keyHash = _encCrypto.createHash('sha256').update(networkKey).digest('hex');
+  if (keyHash === _encLastKeyHash && _encDerivedKey) return _encDerivedKey;
+  _encDerivedKey = _encCrypto.scryptSync(networkKey, 'ckbpos-lan-v1', 32);
+  _encLastKeyHash = keyHash;
+  return _encDerivedKey;
+}
+
+function encryptPayload(obj) {
+  const key = _getDerivedKey();
+  if (!key) return JSON.stringify(obj);
+  const iv = _encCrypto.randomBytes(12);
+  const cipher = _encCrypto.createCipheriv('aes-256-gcm', key, iv);
+  const plaintext = JSON.stringify(obj);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return JSON.stringify({ _enc: true, iv: iv.toString('base64'), d: encrypted.toString('base64'), t: tag.toString('base64') });
+}
+
+function decryptPayload(raw) {
+  try {
+    const obj = JSON.parse(raw.toString());
+    if (!obj._enc) return obj;
+    const key = _getDerivedKey();
+    if (!key) return null;
+    const iv = Buffer.from(obj.iv, 'base64');
+    const decipher = _encCrypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(Buffer.from(obj.t, 'base64'));
+    const decrypted = Buffer.concat([decipher.update(Buffer.from(obj.d, 'base64')), decipher.final()]);
+    return JSON.parse(decrypted.toString('utf8'));
+  } catch(e) { return null; }
+}
+
+function secureSend(ws, obj) {
+  try { ws.send(encryptPayload(obj)); } catch(_e) {}
+}
+// ── Fin chiffrement LAN ──────────────────────────────────────
+
 // ── Serveur WebSocket — écoute les connexions entrantes ────
 function startWsServer() {
   try {
@@ -2116,14 +1657,21 @@ function startWsServer() {
       let peerMachineId = null;
 
       // Envoyer immédiatement nos informations
-      try { ws.send(JSON.stringify(getMachineInfo())); } catch(_e) {}
+      try { secureSend(ws, getMachineInfo()); } catch(_e) {}
 
       ws.on('message', (raw) => {
         try {
-          const msg = JSON.parse(raw.toString());
+          const msg = decryptPayload(raw);
+          if (!msg) return;
 
           if (msg.type === 'CKBPOS_INFO') {
             if (msg.machine_id === MACHINE_ID) { ws.close(); return; }
+            // \u2705 Isolation produit — rejeter toute machine d'une autre app
+            // (ex: CKBPOS standard) même sur le même réseau/port.
+            if (msg.product && msg.product !== PRODUCT_ID) {
+              console.warn('[LAN] Refusé (produit différent: ' + msg.product + '): ' + (msg.machine_label || msg.machine_id) + ' @ ' + peerIp);
+              ws.close(); return;
+            }
             // ── v1.8.0 Clé réseau — isoler les entreprises sur le même LAN ──
             // Exception : accepter si la machine distante n'a pas encore de clé (setup en cours)
             if (!networkKeyMatches(msg.network_key) && msg.network_key) {
@@ -2146,7 +1694,7 @@ function startWsServer() {
             if (global._ckbSyncHandlers) global._ckbSyncHandlers.onPeerRegistered(peerMachineId);
 
           } else if (msg.type === 'PING') {
-            ws.send(JSON.stringify({ type: 'PONG', machine_id: MACHINE_ID }));
+            secureSend(ws, { type: 'PONG', machine_id: MACHINE_ID });
             if (peerMachineId) {
               const p = peersMap.get(peerMachineId);
               if (p) p.lastSeen = Date.now();
@@ -2214,16 +1762,22 @@ function connectToPeer(ip, port) {
     let peerMachineId = null;
 
     ws.on('open', () => {
-      try { ws.send(JSON.stringify(getMachineInfo())); } catch(_e) {}
+      try { secureSend(ws, getMachineInfo()); } catch(_e) {}
     });
 
     ws.on('message', (raw) => {
       try {
-        const msg = JSON.parse(raw.toString());
+        const msg = decryptPayload(raw);
+        if (!msg) return;
         if (msg.type === 'CKBPOS_INFO') {
           if (msg.machine_id === MACHINE_ID) { ws.close(); return; }
           // Eviter les doublons (connexion entrante peut deja exister)
           if (peersMap.has(msg.machine_id)) { ws.close(); return; }
+          // \u2705 Isolation produit
+          if (msg.product && msg.product !== PRODUCT_ID) {
+            console.warn('[LAN] Refusé (produit différent: ' + msg.product + '): ' + msg.machine_id);
+            ws.close(); return;
+          }
           // ── v1.8.0 Clé réseau ──
           // Exception : accepter si la machine distante n'a pas encore de clé (setup en cours)
           if (!networkKeyMatches(msg.network_key) && msg.network_key) {
@@ -2237,7 +1791,7 @@ function connectToPeer(ip, port) {
           // v1.5.0 — déclencher sync après connexion
           if (global._ckbSyncHandlers) global._ckbSyncHandlers.onPeerRegistered(peerMachineId);
         } else if (msg.type === 'PING') {
-          ws.send(JSON.stringify({ type: 'PONG', machine_id: MACHINE_ID }));
+          secureSend(ws, { type: 'PONG', machine_id: MACHINE_ID });
         } else if (msg.type === 'PONG') {
           if (peerMachineId) {
             const p = peersMap.get(peerMachineId);
@@ -2277,9 +1831,12 @@ function startUdpDiscovery() {
 
         // ── Setup mode : répondre aux scans de nouvelles machines sans clé ──
         if (msg.type === 'CKBPOS_DISCOVER' && msg.setup_mode) {
+          // \u2705 Isolation produit
+          if (msg.product && msg.product !== PRODUCT_ID) return;
           const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
           const reply = Buffer.from(JSON.stringify({
             type: 'CKBPOS_DISCOVER_REPLY',
+            product: PRODUCT_ID,
             machine_id: MACHINE_ID,
             machine_label: labelRow?.value || 'CKBPOS',
             port: WS_PORT,
@@ -2289,9 +1846,12 @@ function startUdpDiscovery() {
           const replyPort = msg.reply_port || rinfo.port;
           udpSocket.send(reply, replyPort, rinfo.address, () => {});
           // Aussi envoyer en broadcast pour maximiser les chances
-          try { udpSocket.send(reply, 41235, rinfo.address, () => {}); } catch(_e) {}
+          try { udpSocket.send(reply, UDP_PORT, rinfo.address, () => {}); } catch(_e) {}
           return;
         }
+
+        // \u2705 Isolation produit — ignorer toute machine d'une autre app
+        if (msg.product && msg.product !== PRODUCT_ID) return;
 
         // ── v1.8.0 Clé réseau — ignorer les broadcasts d'autres entreprises ──
         // Exception : accepter les machines sans clé (setup en cours, pas encore configurées)
@@ -2494,7 +2054,7 @@ function startNetworkServices() {
 
   // Heartbeat — PING tous les pairs connectés toutes les 5s
   heartbeatInterval = setInterval(() => {
-    const ping = JSON.stringify({ type: 'PING', machine_id: MACHINE_ID });
+    const ping = encryptPayload({ type: 'PING', machine_id: MACHINE_ID });
     const now  = Date.now();
     for (const [id, peer] of peersMap.entries()) {
       try {
@@ -2577,7 +2137,7 @@ function sendSyncRequest(peerMachineId, ws) {
     if (ws?.readyState !== WebSocket.OPEN) return;
     const state    = db.prepare('SELECT last_seq FROM sync_state WHERE machine_id=?').get(peerMachineId);
     const last_seq = state?.last_seq || 0;
-    ws.send(JSON.stringify({ type: 'SYNC_REQUEST', machine_id: MACHINE_ID, last_seq }));
+    secureSend(ws, { type: 'SYNC_REQUEST', machine_id: MACHINE_ID, last_seq });
     console.log('[SYNC] SYNC_REQUEST \u2192 ' + peerMachineId + ' (seq ' + last_seq + ')');
     if (mainWindow && !mainWindow.isDestroyed()) {
       try { mainWindow.webContents.send('sync-status-changed', { status: 'syncing', pending: -1, online: peersMap.size }); } catch(_e) {}
@@ -2613,7 +2173,7 @@ function handleSyncRequest(ws, msg) {
       : db.prepare('SELECT * FROM sync_log WHERE machine_id=? AND id>? ORDER BY id LIMIT ?').all(MACHINE_ID, last_seq, SYNC_LIMIT);
 
     if (entries.length === 0) {
-      ws.send(JSON.stringify({ type: 'SYNC_DELTA', machine_id: MACHINE_ID, last_id: last_seq || 0, entries: [] }));
+      secureSend(ws, { type: 'SYNC_DELTA', machine_id: MACHINE_ID, last_id: last_seq || 0, entries: [] });
       // v1.9.1 — sync bidir : même si delta vide, contre-sync pour envoyer NOS données
       scheduleCounterSync(machine_id);
       return;
@@ -2644,7 +2204,7 @@ function handleSyncRequest(ws, msg) {
     }
 
     const lastId = entries[entries.length - 1].id;
-    ws.send(JSON.stringify({ type: 'SYNC_DELTA', machine_id: MACHINE_ID, last_id: lastId, entries: enriched }));
+    secureSend(ws, { type: 'SYNC_DELTA', machine_id: MACHINE_ID, last_id: lastId, entries: enriched });
     console.log('[SYNC] SYNC_DELTA \u2192 ' + machine_id + ' : ' + enriched.length + ' entrees (seq ' + lastId + ')');
     // v1.9.1 — sync bidir : après avoir répondu à A, demander les données de A
     scheduleCounterSync(machine_id);
@@ -2664,7 +2224,7 @@ function handleSyncDelta(ws, msg) {
         db.prepare("INSERT OR REPLACE INTO sync_state (machine_id,last_sync_at,last_seq) VALUES (?,datetime('now','utc'),?)")
           .run(machine_id, ackSeq);
       } catch(_e) {}
-      try { ws.send(JSON.stringify({ type: 'SYNC_ACK', machine_id: MACHINE_ID, last_seq: ackSeq })); } catch(_e) {}
+      try { secureSend(ws, { type: 'SYNC_ACK', machine_id: MACHINE_ID, last_seq: ackSeq }); } catch(_e) {}
       return;
     }
 
@@ -2699,17 +2259,20 @@ function handleSyncDelta(ws, msg) {
                 db.prepare('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)').run(e.row.key, e.row.value);
               } else if (e.table_name === 'users') {
                 const row = e.row;
+                const known = knownCols('users');
+                const rowKeys = Object.keys(row).filter(k => known.has(k));
+                if (rowKeys.length === 0) { skipped++; continue; }
                 const existing = db.prepare('SELECT id FROM users WHERE email=?').get(row.email);
                 if (existing) {
                   const skip = new Set(['id','created_at']);
-                  const sets = Object.keys(row).filter(k=>!skip.has(k)).map(k=>'"'+k+'"=?').join(',');
-                  const vals = Object.keys(row).filter(k=>!skip.has(k)).map(k=>row[k]);
-                  db.prepare('UPDATE users SET '+sets+' WHERE email=?').run(...vals, row.email);
+                  const sets = rowKeys.filter(k=>!skip.has(k)).map(k=>'"'+k+'"=?').join(',');
+                  const vals = rowKeys.filter(k=>!skip.has(k)).map(k=>row[k]);
+                  if (sets) db.prepare('UPDATE users SET '+sets+' WHERE email=?').run(...vals, row.email);
                 } else {
                   const skip = new Set(['id']);
-                  const cols = Object.keys(row).filter(k=>!skip.has(k)).map(c=>'"'+c+'"').join(',');
-                  const phs  = Object.keys(row).filter(k=>!skip.has(k)).map(()=>'?').join(',');
-                  const vals = Object.keys(row).filter(k=>!skip.has(k)).map(k=>row[k]);
+                  const cols = rowKeys.filter(k=>!skip.has(k)).map(c=>'"'+c+'"').join(',');
+                  const phs  = rowKeys.filter(k=>!skip.has(k)).map(()=>'?').join(',');
+                  const vals = rowKeys.filter(k=>!skip.has(k)).map(k=>row[k]);
                   try { db.prepare('INSERT INTO users ('+cols+') VALUES ('+phs+')').run(...vals); }
                   catch(_eu) {}
                 }
@@ -2761,7 +2324,7 @@ function handleSyncDelta(ws, msg) {
       .run(machine_id, ackSeq);
 
     // Envoyer ACK
-    ws.send(JSON.stringify({ type: 'SYNC_ACK', machine_id: MACHINE_ID, last_seq: ackSeq }));
+    secureSend(ws, { type: 'SYNC_ACK', machine_id: MACHINE_ID, last_seq: ackSeq });
 
     // Notifier le renderer
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -2775,7 +2338,7 @@ function handleSyncDelta(ws, msg) {
     console.error('[SYNC] handleSyncDelta:', e.message);
     try { db.prepare("UPDATE settings SET value='0' WHERE key='sync_applying'").run(); } catch(_e2) {}
     // Envoyer ACK même en cas d'erreur pour éviter la boucle infinie seq=0
-    try { ws.send(JSON.stringify({ type: 'SYNC_ACK', machine_id: MACHINE_ID, last_seq: ackSeq })); } catch(_e3) {}
+    try { secureSend(ws, { type: 'SYNC_ACK', machine_id: MACHINE_ID, last_seq: ackSeq }); } catch(_e3) {}
   }
 }
 
@@ -2900,7 +2463,7 @@ function resignCoordinator() {
 
 function broadcastCoordAnnounce() {
   if (!_isCoordinator) return;
-  const msg = JSON.stringify({ type: 'COORD_ANNOUNCE', machine_id: MACHINE_ID, machine_label: _coordinatorLabel, ts: Date.now() });
+  const msg = encryptPayload({ type: 'COORD_ANNOUNCE', machine_id: MACHINE_ID, machine_label: _coordinatorLabel, ts: Date.now() });
   for (const peer of peersMap.values()) {
     if (peer.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(msg); } catch(_e) {}
   }
@@ -2978,7 +2541,7 @@ const _stockReserveCallbacks = new Map();
 
 function handleStockReserve(ws, msg) {
   if (!_isCoordinator) {
-    try { ws.send(JSON.stringify({ type: 'STOCK_RESERVED', reservation_id: msg.reservation_id, ok: false, reason: 'not_coordinator' })); } catch(_e) {}
+    try { secureSend(ws, { type: 'STOCK_RESERVED', reservation_id: msg.reservation_id, ok: false, reason: 'not_coordinator' }); } catch(_e) {}
     return;
   }
   try {
@@ -2994,18 +2557,18 @@ function handleStockReserve(ws, msg) {
     ).get(product_id)?.tot || 0;
     const available = stockReel - reservedQty;
     if (available < qty) {
-      ws.send(JSON.stringify({ type: 'STOCK_RESERVED', reservation_id, ok: false, reason: 'insufficient_stock', available }));
+      secureSend(ws, { type: 'STOCK_RESERVED', reservation_id, ok: false, reason: 'insufficient_stock', available });
       console.log('[COORD] STOCK refusé prod=' + product_id + ' dispo=' + available + ' demandé=' + qty);
       return;
     }
     const expiresAt = new Date(Date.now() + RESERVATION_TTL_S * 1000).toISOString().replace('T',' ').slice(0,19);
     db.prepare('INSERT INTO stock_reservations (reservation_id,product_id,variant_id,qty_reserved,machine_id,expires_at) VALUES (?,?,?,?,?,?)')
       .run(reservation_id, product_id, variant_id || null, qty, machine_id, expiresAt);
-    ws.send(JSON.stringify({ type: 'STOCK_RESERVED', reservation_id, ok: true, available: available - qty }));
+    secureSend(ws, { type: 'STOCK_RESERVED', reservation_id, ok: true, available: available - qty });
     console.log('[COORD] STOCK réservé ' + reservation_id.slice(0,8) + ' prod=' + product_id + ' qty=' + qty);
   } catch(e) {
     console.error('[COORD] handleStockReserve:', e.message);
-    try { ws.send(JSON.stringify({ type: 'STOCK_RESERVED', reservation_id: msg.reservation_id, ok: false, reason: 'error' })); } catch(_e) {}
+    try { secureSend(ws, { type: 'STOCK_RESERVED', reservation_id: msg.reservation_id, ok: false, reason: 'error' }); } catch(_e) {}
   }
 }
 
@@ -3048,7 +2611,7 @@ function requestStockReservation(product_id, variant_id, qty) {
       resolve({ ok: true, reservation_id: null, degraded: true });
     }, 3000);
     _stockReserveCallbacks.set(reservation_id, { resolve, reject, timer });
-    coordPeer.ws.send(JSON.stringify({ type: 'STOCK_RESERVE', reservation_id, product_id, variant_id, qty, machine_id: MACHINE_ID }));
+    coordPeer.secureSend(ws, { type: 'STOCK_RESERVE', reservation_id, product_id, variant_id, qty, machine_id: MACHINE_ID });
   });
 }
 
@@ -3060,7 +2623,7 @@ function releaseStockReservation(reservation_id, consumed = true) {
   }
   const coordPeer = peersMap.get(_coordinatorId);
   if (coordPeer?.ws?.readyState === WebSocket.OPEN) {
-    try { coordPeer.ws.send(JSON.stringify({ type: 'STOCK_RELEASE', reservation_id, consumed })); } catch(_e) {}
+    try { coordPeer.secureSend(ws, { type: 'STOCK_RELEASE', reservation_id, consumed }); } catch(_e) {}
   }
 }
 
@@ -3156,12 +2719,12 @@ function notifyPrintDone(job_id, sourceMachineId, success, error) {
     return;
   }
   const peer = peersMap.get(sourceMachineId);
-  if (peer?.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(JSON.stringify({ type: 'PRINT_DONE', job_id, success, error: error || null })); } catch(_e) {}
+  if (peer?.ws?.readyState === WebSocket.OPEN) try { peer.secureSend(ws, { type: 'PRINT_DONE', job_id, success, error: error || null }); } catch(_e) {}
 }
 
 function handlePrintEnqueue(ws, msg) {
   if (!_isCoordinator) {
-    try { ws.send(JSON.stringify({ type: 'PRINT_QUEUED', job_id: msg.job_id, position: -1, error: 'not_coordinator' })); } catch(_e) {}
+    try { secureSend(ws, { type: 'PRINT_QUEUED', job_id: msg.job_id, position: -1, error: 'not_coordinator' }); } catch(_e) {}
     return;
   }
   try {
@@ -3169,11 +2732,11 @@ function handlePrintEnqueue(ws, msg) {
     db.prepare('INSERT OR IGNORE INTO print_queue (job_id,print_type,data_json,priority,machine_source) VALUES (?,?,?,?,?)')
       .run(job_id, print_type, JSON.stringify(data), priority || 5, machine_source || MACHINE_ID);
     const position = db.prepare("SELECT COUNT(*) as c FROM print_queue WHERE status='queued' AND id<=(SELECT id FROM print_queue WHERE job_id=?)").get(job_id)?.c || 1;
-    ws.send(JSON.stringify({ type: 'PRINT_QUEUED', job_id, position }));
+    secureSend(ws, { type: 'PRINT_QUEUED', job_id, position });
     console.log('[PRINT] Enqueued job=' + job_id.slice(0,8) + ' pos=' + position);
   } catch(e) {
     console.error('[PRINT] handlePrintEnqueue:', e.message);
-    try { ws.send(JSON.stringify({ type: 'PRINT_QUEUED', job_id: msg.job_id, position: -1, error: e.message })); } catch(_e) {}
+    try { secureSend(ws, { type: 'PRINT_QUEUED', job_id: msg.job_id, position: -1, error: e.message }); } catch(_e) {}
   }
 }
 
@@ -3215,7 +2778,7 @@ function enqueuePrintJob(print_type, data, priority) {
       resolve({ success: false, degraded: true, job_id, error: 'timeout' });
     }, 3000);
     _printQueuedCallbacks.set(job_id, { resolve, timer });
-    coordPeer.ws.send(JSON.stringify({ type: 'PRINT_ENQUEUE', job_id, print_type, data, priority: priority || 5, machine_source: MACHINE_ID }));
+    coordPeer.secureSend(ws, { type: 'PRINT_ENQUEUE', job_id, print_type, data, priority: priority || 5, machine_source: MACHINE_ID });
   });
 }
 
@@ -3309,6 +2872,88 @@ ipcMain.handle('print-caderno', async (_, data) => {
     await printHTML(generateCadernoTicketHTML({ ...data, ticketSizeMm }), 1, true);
     return { success: true };
   } catch(e) { console.error('[print-caderno]', e.message); return { success: true, error: e.message }; }
+});
+
+// ============================================================
+// RAPPORT COMPTABLE — Impression du compte de résultat
+// ============================================================
+ipcMain.handle('print-rapport-comptable', async (_, data) => {
+  try {
+    const { ca, cmv, depenses, cadernoPlus, cadernoMoins, capitalInitial, currency, shopName, shopAddress, shopPhone, shopNif, printedAt, period } = data;
+    const beneficeBrut = (ca || 0) - (cmv || 0);
+    const resultatNet = beneficeBrut - (depenses || 0);
+    const soldeFinal = (capitalInitial || 0) + (ca || 0) + (cadernoPlus || 0) - (cmv || 0) - (depenses || 0);
+    const cur = currency || 'Kz';
+
+    const depensesData = data.depensesParCategorie || [];
+    const depRows = depensesData.map(d => `
+      <tr>
+        <td style="padding:4px 8px;">${d.motivo}</td>
+        <td style="padding:4px 8px;text-align:right;font-weight:700;">${fmtNum(d.total)} ${cur}</td>
+      </tr>`).join('');
+
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <style>
+      @page { size: A4; margin: 15mm 12mm; }
+      * { margin:0; padding:0; box-sizing:border-box; }
+      body { font-family:Arial,Helvetica,sans-serif; font-size:11px; color:#000; background:#fff; }
+      .header { border-bottom:3px solid #000; padding-bottom:8px; margin-bottom:12px; }
+      .title { font-size:18px; font-weight:900; text-transform:uppercase; }
+      .subtitle { font-size:12px; color:#444; margin-top:2px; }
+      .section { margin-bottom:14px; }
+      .section-title { font-size:12px; font-weight:900; text-transform:uppercase; border-bottom:1px solid #ccc; padding-bottom:4px; margin-bottom:8px; }
+      .row { display:flex; justify-content:space-between; padding:4px 0; font-size:11px; }
+      .row.bold { font-weight:700; font-size:12px; }
+      .row.total { border-top:2px solid #000; padding-top:6px; margin-top:4px; font-weight:900; font-size:13px; }
+      .row.positive { color:#16a34a; }
+      .row.negative { color:#dc2626; }
+      table { width:100%; border-collapse:collapse; font-size:11px; }
+      th { text-align:left; padding:4px 8px; border-bottom:2px solid #000; font-size:10px; text-transform:uppercase; }
+      td { padding:4px 8px; border-bottom:1px solid #eee; }
+      .footer { margin-top:16px; font-size:9px; color:#888; border-top:1px solid #ccc; padding-top:6px; text-align:center; }
+    </style></head><body>
+    <div class="header">
+      <div class="title">${shopName || 'CKBPOS'}</div>
+      <div class="subtitle">Rapport Comptable — ${period || 'Période'}</div>
+      ${shopNif ? `<div style="font-size:10px;color:#666;">NIF: ${shopNif}</div>` : ''}
+    </div>
+    <div style="font-size:10px;color:#666;margin-bottom:12px;">Imprimé le: ${printedAt || '-'}</div>
+
+    <div class="section">
+      <div class="section-title">Compte de Résultat</div>
+      <div class="row"><span>Chiffre d'affaires (CA)</span><span style="font-weight:700;">${fmtNum(ca || 0)} ${cur}</span></div>
+      <div class="row"><span style="color:#666;">- Coût des marchandises vendues (CMV)</span><span style="color:#dc2626;">-${fmtNum(cmv || 0)} ${cur}</span></div>
+      <div class="row bold"><span>= Résultat Brut</span><span class="${beneficeBrut >= 0 ? 'positive' : 'negative'}" style="font-weight:900;">${beneficeBrut >= 0 ? '+' : ''}${fmtNum(beneficeBrut)} ${cur}</span></div>
+      <div class="row"><span style="color:#666;">- Dépenses de fonctionnement</span><span style="color:#dc2626;">-${fmtNum(depenses || 0)} ${cur}</span></div>
+      <div class="row total"><span>= RÉSULTAT NET</span><span class="${resultatNet >= 0 ? 'positive' : 'negative'}" style="font-size:14px;">${resultatNet >= 0 ? '+' : ''}${fmtNum(resultatNet)} ${cur}</span></div>
+    </div>
+
+    ${depensesData.length > 0 ? `
+    <div class="section">
+      <div class="section-title">Dépenses par catégorie</div>
+      <table>
+        <thead><tr><th>Catégorie</th><th style="text-align:right;">Montant</th></tr></thead>
+        <tbody>${depRows}</tbody>
+        <tfoot><tr><td style="font-weight:900;">TOTAL</td><td style="text-align:right;font-weight:900;">${fmtNum(depenses || 0)} ${cur}</td></tr></tfoot>
+      </table>
+    </div>` : ''}
+
+    <div class="section">
+      <div class="section-title">Flux de Trésorerie</div>
+      <div class="row"><span>Capital initial</span><span style="font-weight:700;">${fmtNum(capitalInitial || 0)} ${cur}</span></div>
+      <div class="row"><span style="color:#16a34a;">+ Ventes</span><span style="color:#16a34a;">+${fmtNum(ca || 0)} ${cur}</span></div>
+      <div class="row"><span style="color:#16a34a;">+ Entrées caderno</span><span style="color:#16a34a;">+${fmtNum(cadernoPlus || 0)} ${cur}</span></div>
+      <div class="row"><span style="color:#dc2626;">- Dépenses</span><span style="color:#dc2626;">-${fmtNum(depenses || 0)} ${cur}</span></div>
+      <div class="row total"><span>SOLDE FINAL</span><span class="${soldeFinal >= 0 ? 'positive' : 'negative'}" style="font-size:14px;">${fmtNum(soldeFinal)} ${cur}</span></div>
+    </div>
+
+    <div class="footer">CKBPOS — Rapport généré le ${printedAt || '-'}</div>
+    </body></html>`;
+
+    const { ticketSizeMm } = getPrintSettings();
+    await printHTML(html, 1, false);
+    return { success: true };
+  } catch(e) { console.error('[print-rapport-comptable]', e.message); return { success: false, error: e.message }; }
 });
 
 // ============================================================
@@ -3484,6 +3129,31 @@ async function handlePrintRequest(ws, msg) {
       const copies = data?.copies || copiesTicket || 2;
       const flags = getTicketFlags();
       result = await printHTML(generateTicketHTML({ ...(data||{}), qrDataUrl, flags, ticketSizeMm }), copies, true);
+    } else if (print_type === 'factura-fiscal') {
+      const shopRows = db.prepare("SELECT key,value FROM settings WHERE key IN ('shop_name','shop_address','shop_phone','shop_nif')").all();
+      const shop = {}; shopRows.forEach(r => { shop[r.key] = r.value; });
+      const cfg = db.prepare("SELECT * FROM fiscal_config WHERE id=1").get() || {};
+      let qrDataUrl = '';
+      if (QRCode && data) {
+        try {
+          const qrText = [data.numeroFacture||'N/A', `${data.total} ${data.currency}`, data.date, data.seller].join('|');
+          qrDataUrl = await QRCode.toDataURL(qrText, { width:128, margin:2, errorCorrectionLevel:'L', color:{dark:'#000000',light:'#ffffff'} });
+        } catch(_e) {}
+      }
+      const { copiesTicket, ticketSizeMm } = getPrintSettings();
+      const copies = data?.copies || copiesTicket || 2;
+      const flags = getTicketFlags();
+      const enriched = {
+        ...(data||{}),
+        shopName:    data?.shopName    || shop.shop_name    || '',
+        shopAddress: data?.shopAddress || shop.shop_address || '',
+        shopPhone:   data?.shopPhone   || shop.shop_phone   || '',
+        shopNif:     data?.shopNif     || shop.shop_nif     || '',
+        regimeIva:   data?.regimeIva   || cfg.regime_iva    || 'geral',
+        taxaIva:     data?.taxaIva     ?? cfg.taxa_iva      ?? 14,
+        qrDataUrl, flags, ticketSizeMm,
+      };
+      result = await printHTML(generateFacturaFiscalTicketHTML(enriched), copies, true);
     } else if (print_type === 'shift') {
       const { copiesShift, ticketSizeMm } = getPrintSettings();
       const copies = data?.copies || copiesShift || 1;
@@ -3500,7 +3170,7 @@ async function handlePrintRequest(ws, msg) {
   }
   // Répondre à la machine source
   try {
-    ws.send(JSON.stringify({ type: 'PRINT_RESPONSE', machine_id: MACHINE_ID, request_id, success: result.success, error: result.error || null }));
+    secureSend(ws, { type: 'PRINT_RESPONSE', machine_id: MACHINE_ID, request_id, success: result.success, error: result.error || null });
   } catch(_e) {}
 }
 
@@ -3529,7 +3199,7 @@ function sendPrintRequest(targetMachineId, print_type, data) {
       reject(new Error('Timeout impression distante (10s)'));
     }, 10000);
     _printResponseCallbacks.set(request_id, { resolve, reject, timer });
-    peer.ws.send(JSON.stringify({ type: 'PRINT_REQUEST', machine_id: MACHINE_ID, print_type, data, request_id }));
+    peer.secureSend(ws, { type: 'PRINT_REQUEST', machine_id: MACHINE_ID, print_type, data, request_id });
     console.log('[PRINT] PRINT_REQUEST \u2192 ' + targetMachineId + ' (type: ' + print_type + ', req: ' + request_id + ')');
   });
 }
@@ -4082,7 +3752,7 @@ ipcMain.handle('lan-scan-for-snapshot', async () => {
       }
     }
 
-    // 2. Broadcast UDP actif — double écoute: port aléatoire + port 41235
+    // 2. Broadcast UDP actif — double écoute: port aléatoire + port UDP_PORT
     const discovered = await new Promise((resolve) => {
       const found = new Map();
       const dgram = require('dgram');
@@ -4101,6 +3771,8 @@ ipcMain.handle('lan-scan-for-snapshot', async () => {
       const handleMsg = (buf, rinfo) => {
         try {
           const msg = JSON.parse(buf.toString());
+          // \u2705 Isolation produit — ignorer toute machine d'une autre app
+          if (msg.product && msg.product !== PRODUCT_ID) return;
           if ((msg.type === 'CKBPOS_DISCOVERY' || msg.type === 'CKBPOS_DISCOVER_REPLY' || msg.type === 'CKBPOS_DISCOVER') 
               && msg.machine_id && msg.machine_id !== MACHINE_ID) {
             found.set(msg.machine_id, {
@@ -4117,26 +3789,27 @@ ipcMain.handle('lan-scan-for-snapshot', async () => {
       recvSock.on('error', () => {});
       recvSock.on('message', handleMsg);
 
-      // Socket 2: écouter aussi sur 41235 pour les broadcasts de réponse
+      // Socket 2: écouter aussi sur UDP_PORT pour les broadcasts de réponse
       const recvSock2 = dgram.createSocket({ type:'udp4', reuseAddr:true });
       recvSock2.on('error', () => {});
       recvSock2.on('message', handleMsg);
 
-      // Socket 3: écouter sur udpSocket principal (réponses broadcast de NLANDU etc.)
+      // Socket 3: écouter sur udpSocket principal (réponses broadcast des pairs)
       if (udpSocket) udpSocket.on('message', handleMsg);
 
       recvSock.bind(0, () => {
         const recvPort = recvSock.address().port;
 
-        // Tenter de binder sur 41235 aussi
+        // Tenter de binder sur le port alternatif aussi
         try {
-          recvSock2.bind(41236, () => {}); // port alternatif pour réponses
+          recvSock2.bind(UDP_ALT_PORT, () => {}); // port alternatif pour réponses
         } catch(_e) {}
 
         const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
         const nkRow = db.prepare("SELECT value FROM settings WHERE key='network_key'").get();
         const discover = Buffer.from(JSON.stringify({
           type: 'CKBPOS_DISCOVER',
+          product: PRODUCT_ID,
           machine_id: MACHINE_ID,
           machine_label: labelRow?.value || 'CKBPOS',
           port: WS_PORT,
@@ -4152,7 +3825,7 @@ ipcMain.handle('lan-scan-for-snapshot', async () => {
           // Envoyer plusieurs fois avec délai pour maximiser les chances
           const targets = ['255.255.255.255','10.55.173.255','10.55.255.255','192.168.1.255','192.168.0.255','192.168.43.255','192.168.137.255'];
           const doSend = () => targets.forEach(addr => {
-            sendSock.send(discover, 41235, addr, () => {});
+            sendSock.send(discover, UDP_PORT, addr, () => {});
           });
           doSend();
           setTimeout(doSend, 1000); // Renvoyer après 1s
@@ -4168,7 +3841,7 @@ ipcMain.handle('lan-scan-for-snapshot', async () => {
       if (!merged.find(p => p.machine_id === d.machine_id)) merged.push(d);
       try {
         db.prepare(`INSERT OR REPLACE INTO network_peers (machine_id, machine_label, ip, port, last_seen, actif) VALUES (?,?,?,?,datetime('now'),1)`)
-          .run(d.machine_id, d.machine_label, d.ip, 41234);
+          .run(d.machine_id, d.machine_label, d.ip, WS_PORT);
       } catch(_e) {}
     }
 
@@ -4202,7 +3875,7 @@ function handleSnapshotRequest(ws, msg) {
   const codeValid = codeEntry && codeEntry.expires > Date.now();
   const keyValid  = network_key && myKey && network_key === myKey;
   if (!codeValid && !keyValid) {
-    try { ws.send(JSON.stringify({ type: 'SNAPSHOT_DENIED', reason: 'invalid_auth' })); } catch(_e) {}
+    try { secureSend(ws, { type: 'SNAPSHOT_DENIED', reason: 'invalid_auth' }); } catch(_e) {}
     console.warn('[SETUP] SNAPSHOT_REQUEST refusé — auth invalide');
     return;
   }
@@ -4232,15 +3905,15 @@ function handleSnapshotRequest(ws, msg) {
     const json = JSON.stringify({ type: 'SNAPSHOT_DATA', snapshot, network_key: getNetworkKey() });
     const CHUNK = 480 * 1024;
     if (json.length <= CHUNK) {
-      ws.send(json);
+      secureSend(ws, JSON.parse(json));
     } else {
       const total = Math.ceil(json.length / CHUNK);
       for (let i = 0; i < total; i++) {
-        ws.send(JSON.stringify({
+        secureSend(ws, {
           type: 'SNAPSHOT_CHUNK',
           index: i, total,
           data: json.slice(i * CHUNK, (i + 1) * CHUNK),
-        }));
+        });
       }
     }
     console.log('[SETUP] Snapshot envoyé — ' + Object.values(snapshot).reduce((s,a) => s + a.length, 0) + ' enregistrements');
@@ -4354,7 +4027,7 @@ ipcMain.handle('request-snapshot', async (_, { machine_id, invite_code, network_
       const info = db.prepare('SELECT ip, port FROM network_peers WHERE machine_id=?').get(machine_id);
       if (info?.ip) {
         console.log('[SETUP] Machine hors peersMap — tentative connexion directe: ' + info.ip);
-        connectToPeer(info.ip, info.port || 41234);
+        connectToPeer(info.ip, info.port || WS_PORT);
         // Attendre jusqu'à 4 secondes que la connexion s'établisse
         await new Promise(resolve => {
           let tries = 0;
@@ -4374,7 +4047,7 @@ ipcMain.handle('request-snapshot', async (_, { machine_id, invite_code, network_
     }
 
     _snapshotChunks = [];
-    peer.ws.send(JSON.stringify({ type: 'SNAPSHOT_REQUEST', invite_code: invite_code || '', network_key: network_key || '' }));
+    peer.secureSend(ws, { type: 'SNAPSHOT_REQUEST', invite_code: invite_code || '', network_key: network_key || '' });
     return { success: true };
   } catch(e) { return { success: false, error: e.message }; }
 });
@@ -4430,7 +4103,7 @@ ipcMain.handle('chat-send', (_, { to, content, userNom, msgType, audioData }) =>
     db.prepare('INSERT INTO messages (from_machine, from_label, from_user_nom, to_machine, content, msg_type, audio_data, ts, client_id) VALUES (?,?,?,?,?,?,?,?,?)')
       .run(MACHINE_ID, fromLabel, userNom || null, to || 'all', msgContent, type, audioData || null, ts, clientId);
     // Diffuser via WS
-    const wsMsg = JSON.stringify({ type: 'CHAT_MESSAGE', from: MACHINE_ID, fromLabel, fromUserNom: userNom || null, to: to || 'all', content: msgContent, msgType: type, audioData: audioData || null, ts, clientId });
+    const wsMsg = encryptPayload({ type: 'CHAT_MESSAGE', from: MACHINE_ID, fromLabel, fromUserNom: userNom || null, to: to || 'all', content: msgContent, msgType: type, audioData: audioData || null, ts, clientId });
     if (to === 'all' || !to) {
       for (const peer of peersMap.values()) {
         if (peer.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(wsMsg); } catch(_e) {}
@@ -4481,7 +4154,7 @@ ipcMain.handle('chat-delete-message', (_, { client_id, scope }) => {
     if (!row) return { success: false, error: 'not_found' };
     db.prepare('DELETE FROM messages WHERE client_id=?').run(client_id);
     if (scope === 'all' && row.from_machine === MACHINE_ID) {
-      const wsMsg = JSON.stringify({ type: 'CHAT_DELETE', clientId: client_id });
+      const wsMsg = encryptPayload({ type: 'CHAT_DELETE', clientId: client_id });
       if (row.to_machine === 'all' || !row.to_machine) {
         for (const peer of peersMap.values()) {
           if (peer.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(wsMsg); } catch(_e) {}
@@ -4507,7 +4180,7 @@ ipcMain.handle('chat-delete-conversation', (_, { peerId, scope }) => {
     if (scope === 'all') {
       const peer = peersMap.get(peerId);
       if (peer?.ws?.readyState === WebSocket.OPEN) {
-        try { peer.ws.send(JSON.stringify({ type: 'CHAT_DELETE_CONV', from: MACHINE_ID })); } catch(_e) {}
+        try { peer.secureSend(ws, { type: 'CHAT_DELETE_CONV', from: MACHINE_ID }); } catch(_e) {}
       }
     }
     return { success: true };
@@ -4564,213 +4237,13 @@ function chatNotifyPeer(label, event) {
 }
 
 // ============================================================
-// AUDIT LOG — v4.2.0
-// Journal centralisé de toutes les actions
+// Audit Log + Email + Excel — extracted to src/main/audit.js, email.js, excel.js
 // ============================================================
-
-try {
-  db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    user_nom TEXT,
-    action TEXT NOT NULL,
-    details TEXT,
-    machine_id TEXT,
-    machine_label TEXT,
-    ts TEXT DEFAULT (datetime('now','utc'))
-  )`);
-} catch(_e) {}
-
-function insertAuditLog(user_id, user_nom, action, details) {
-  try {
-    const labelRow = db.prepare("SELECT value FROM settings WHERE key='machine_label'").get();
-    const ml = labelRow?.value || 'CKBPOS';
-    db.prepare('INSERT INTO audit_log (user_id, user_nom, action, details, machine_id, machine_label) VALUES (?,?,?,?,?,?)')
-      .run(user_id || null, user_nom || 'system', action, details || null, MACHINE_ID, ml);
-  } catch(_e) {}
-}
-global._ckbAuditLog = insertAuditLog;
-
-ipcMain.handle('audit-list', (_, { limit, offset, user_id, action, date_from, date_to }) => {
-  try {
-    let sql = 'SELECT * FROM audit_log WHERE 1=1';
-    const params = [];
-    if (user_id) { sql += ' AND user_id=?'; params.push(user_id); }
-    if (action)  { sql += ' AND action=?';  params.push(action); }
-    if (date_from) { sql += ' AND ts >= ?'; params.push(date_from + ' 00:00:00'); }
-    if (date_to)   { sql += ' AND ts <= ?'; params.push(date_to + ' 23:59:59'); }
-    sql += ' ORDER BY id DESC LIMIT ? OFFSET ?';
-    params.push(limit || 100, offset || 0);
-    const data = db.prepare(sql).all(...params);
-    const total = db.prepare('SELECT COUNT(*) as c FROM audit_log WHERE 1=1' +
-      (user_id ? ' AND user_id=?' : '') +
-      (action  ? ' AND action=?'  : '') +
-      (date_from ? ' AND ts >= ?' : '') +
-      (date_to   ? ' AND ts <= ?' : '')
-    ).get(...params.slice(0, -2))?.c || 0;
-    return { success: true, data, total };
-  } catch(e) { return { success: false, data: [], total: 0 }; }
-});
-
-ipcMain.handle('audit-actions', () => {
-  try {
-    const rows = db.prepare('SELECT DISTINCT action FROM audit_log ORDER BY action').all();
-    return { success: true, data: rows.map(r => r.action) };
-  } catch(e) { return { success: false, data: [] }; }
-});
-
-// ============================================================
-// RAPPORT EMAIL — v4.3.0
-// nodemailer + Gmail SMTP
-// ============================================================
-
-ipcMain.handle('email-report-send', async (_, { to, subject, html }) => {
-  try {
-    let nodemailer;
-    try { nodemailer = require('nodemailer'); } catch(_e) {
-      return { success: false, error: 'nodemailer non installé — npm install nodemailer' };
-    }
-    const gmailUser = db.prepare("SELECT value FROM settings WHERE key='email_gmail_user'").get()?.value;
-    const gmailPass = db.prepare("SELECT value FROM settings WHERE key='email_gmail_pass'").get()?.value;
-    if (!gmailUser || !gmailPass) return { success: false, error: 'Gmail SMTP non configuré' };
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: gmailUser, pass: gmailPass },
-    });
-    await transporter.sendMail({
-      from: `"CKBPOS" <${gmailUser}>`,
-      to: to || gmailUser,
-      subject: subject || 'Rapport journalier CKBPOS',
-      html: html || '<p>Rapport CKBPOS</p>',
-    });
-    console.log('[EMAIL] Rapport envoyé à', to);
-    return { success: true };
-  } catch(e) { console.error('[EMAIL]', e.message); return { success: false, error: e.message }; }
-});
-
-ipcMain.handle('email-config-get', () => {
-  try {
-    const user = db.prepare("SELECT value FROM settings WHERE key='email_gmail_user'").get()?.value || '';
-    const configured = !!user && !!db.prepare("SELECT value FROM settings WHERE key='email_gmail_pass'").get()?.value;
-    return { success: true, email: user, configured };
-  } catch(e) { return { success: false, email: '', configured: false }; }
-});
-
-ipcMain.handle('email-config-set', (_, { gmailUser, gmailPass }) => {
-  try {
-    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('email_gmail_user',?)").run(gmailUser || '');
-    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('email_gmail_pass',?)").run(gmailPass || '');
-    return { success: true };
-  } catch(e) { return { success: false, error: e.message }; }
-});
-
-// Générer HTML rapport journalier
-ipcMain.handle('email-report-build', (_, { date }) => {
-  try {
-    const d = date || new Date().toISOString().slice(0,10);
-    const shop = db.prepare("SELECT value FROM settings WHERE key='shop_name'").get()?.value || 'CKBPOS';
-    const currency = db.prepare("SELECT value FROM settings WHERE key='currency'").get()?.value || 'Kz';
-    const ventes = db.prepare("SELECT COUNT(*) as cnt, COALESCE(SUM(total),0) as tot FROM ventes WHERE date(date_vente)=? AND statut!='annule'").get(d) || { cnt:0, tot:0 };
-    const annule = db.prepare("SELECT COUNT(*) as cnt FROM ventes WHERE date(date_vente)=? AND statut='annule'").get(d)?.cnt || 0;
-    const topProds = db.prepare(`
-      SELECT p.nom, SUM(vi.quantite) as qte, SUM(vi.sous_total) as total
-      FROM vente_items vi JOIN ventes v ON vi.vente_id=v.id JOIN products p ON vi.product_id=p.id
-      WHERE date(v.date_vente)=? AND v.statut!='annule'
-      GROUP BY p.id ORDER BY total DESC LIMIT 5`).all(d);
-    const stockAlerte = db.prepare("SELECT nom, stock_cartons FROM products WHERE actif=1 AND stock_cartons<=COALESCE(stock_alerte,2) ORDER BY stock_cartons ASC LIMIT 10").all();
-    const rows = topProds.map(p => `<tr><td>${p.nom}</td><td>${Math.round(p.qte*100)/100}</td><td><strong>${Number(p.total).toLocaleString('fr-FR')} ${currency}</strong></td></tr>`).join('');
-    const alertRows = stockAlerte.map(p => `<tr style="color:#cc0000"><td>${p.nom}</td><td>${Math.round(p.stock_cartons*100)/100} cx</td></tr>`).join('');
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#333">
-<h1 style="color:#e8c547;border-bottom:2px solid #e8c547;padding-bottom:8px">${shop}</h1>
-<h2 style="color:#555">Rapport journalier — ${d}</h2>
-<div style="display:flex;gap:20px;margin:20px 0">
-  <div style="flex:1;background:#f5f5f5;padding:16px;border-radius:8px;text-align:center">
-    <div style="font-size:28px;font-weight:bold;color:#22c55e">${ventes.cnt}</div>
-    <div style="font-size:12px;color:#666">Ventes confirmées</div>
-  </div>
-  <div style="flex:1;background:#f5f5f5;padding:16px;border-radius:8px;text-align:center">
-    <div style="font-size:28px;font-weight:bold;color:#e8c547">${Number(ventes.tot).toLocaleString('fr-FR')} ${currency}</div>
-    <div style="font-size:12px;color:#666">Chiffre d'affaires</div>
-  </div>
-  <div style="flex:1;background:#f5f5f5;padding:16px;border-radius:8px;text-align:center">
-    <div style="font-size:28px;font-weight:bold;color:#ef4444">${annule}</div>
-    <div style="font-size:12px;color:#666">Annulées</div>
-  </div>
-</div>
-${topProds.length ? `<h3>Top Produits</h3><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#333;color:#fff"><th style="padding:8px;text-align:left">Produit</th><th style="padding:8px;text-align:left">Qté</th><th style="padding:8px;text-align:left">Total</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
-${stockAlerte.length ? `<h3 style="color:#cc0000">\u26A0\uFE0F Stock en alerte</h3><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#cc0000;color:#fff"><th style="padding:8px;text-align:left">Produit</th><th style="padding:8px;text-align:left">Stock</th></tr></thead><tbody>${alertRows}</tbody></table>` : ''}
-<p style="color:#999;font-size:11px;margin-top:30px;border-top:1px solid #eee;padding-top:10px">CKBPOS v${APP_VERSION} — Rapport généré automatiquement</p>
-</body></html>`;
-    return { success: true, html, subject: `Rapport CKBPOS — ${shop} — ${d}` };
-  } catch(e) { return { success: false, error: e.message }; }
-});
-
-// ============================================================
-// EXPORT EXCEL — v4.5.0
-// xlsx via sheetjs (xlsx package)
-// ============================================================
-
-ipcMain.handle('excel-export-sales', async (_, { date_from, date_to, user_id }) => {
-  try {
-    let XLSX;
-    try { XLSX = require('xlsx'); } catch(_e) {
-      return { success: false, error: 'xlsx non installé — npm install xlsx' };
-    }
-    let sql = `SELECT v.id, v.date_vente, u.nom as vendeur, v.client_nom, v.client_nif,
-      v.total, v.mode_paiement, v.montant_dinheiro, v.montant_express, v.statut, v.facture_num, v.machine_id
-      FROM ventes v LEFT JOIN users u ON v.user_id=u.id WHERE 1=1`;
-    const params = [];
-    if (date_from) { sql += ' AND date(v.date_vente)>=?'; params.push(date_from); }
-    if (date_to)   { sql += ' AND date(v.date_vente)<=?'; params.push(date_to); }
-    if (user_id)   { sql += ' AND v.user_id=?'; params.push(user_id); }
-    sql += ' ORDER BY v.id DESC LIMIT 10000';
-    const rows = db.prepare(sql).all(...params);
-    const wsData = [
-      ['#','Data','Vendedor','Cliente','NIF','Total','Pagamento','Numerário','Express','Status','Factura','Máquina'],
-      ...rows.map(r => [r.id, r.date_vente, r.vendeur||'', r.client_nom||'', r.client_nif||'', r.total, r.mode_paiement||'', r.montant_dinheiro||0, r.montant_express||0, r.statut||'', r.facture_num||'', r.machine_id||''])
-    ];
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    ws['!cols'] = [5,16,14,20,16,10,12,10,10,10,20,14].map(w => ({ wch: w }));
-    XLSX.utils.book_append_sheet(wb, ws, 'Vendas');
-    const fileName = `ckbpos_vendas_${date_from||'all'}_${Date.now()}.xlsx`;
-    const savePath = path.join(app.getPath('downloads'), fileName);
-    XLSX.writeFile(wb, savePath);
-    try { require('electron').shell.openPath(path.dirname(savePath)); } catch(_e) {}
-    return { success: true, path: savePath, count: rows.length };
-  } catch(e) { console.error('[EXCEL]', e.message); return { success: false, error: e.message }; }
-});
-
-ipcMain.handle('excel-export-stock', async () => {
-  try {
-    let XLSX;
-    try { XLSX = require('xlsx'); } catch(_e) {
-      return { success: false, error: 'xlsx non installé — npm install xlsx' };
-    }
-    const products = db.prepare(`
-      SELECT p.nom, p.stock_cartons, COALESCE(p.unites,1) as unites,
-        p.prix_vente, p.prix_demi, p.prix_unite,
-        p.stock_alerte, p.actif,
-        COALESCE((SELECT SUM(r.qty_reserved) FROM stock_reservations r WHERE r.product_id=p.id AND r.status='active'),0) as reserved
-      FROM products p WHERE p.actif=1 ORDER BY p.nom`).all();
-    const wsData = [
-      ['Produto','Stock (cartons)','Unidades/Caixa','Reservado','Disponível','Preço venda','Preço demi','Preço unitário','Alerta'],
-      ...products.map(p => {
-        const dispo = (p.stock_cartons||0) - (p.reserved||0);
-        return [p.nom, p.stock_cartons||0, p.unites||1, p.reserved||0, Math.max(0,dispo), p.prix_vente||0, p.prix_demi||0, p.prix_unite||0, p.stock_alerte||2];
-      })
-    ];
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    ws['!cols'] = [22,14,14,10,10,12,12,12,8].map(w => ({ wch: w }));
-    XLSX.utils.book_append_sheet(wb, ws, 'Stock');
-    const fileName = `ckbpos_stock_${new Date().toISOString().slice(0,10)}.xlsx`;
-    const savePath = path.join(app.getPath('downloads'), fileName);
-    XLSX.writeFile(wb, savePath);
-    try { require('electron').shell.openPath(path.dirname(savePath)); } catch(_e) {}
-    return { success: true, path: savePath, count: products.length };
-  } catch(e) { console.error('[EXCEL]', e.message); return { success: false, error: e.message }; }
-});
+auditModule.ensureTable();
+auditModule.registerIPC(ipcMain);
+emailModule.registerIPC(ipcMain);
+excelModule.registerIPC(ipcMain);
+global._ckbAuditLog = auditModule.insertAuditLog;
 
 // Étendre handleSyncMessage pour les messages chat
 const _v4HandlerBase = global._ckbSyncHandlers.handleSyncMessage;
@@ -4858,7 +4331,7 @@ ipcMain.handle('coord-broadcast-msg', (_, { content, fromLabel }) => {
     const ts = new Date().toISOString().replace('T',' ').slice(0,19);
     db.prepare('INSERT INTO messages (from_machine, from_label, to_machine, content, ts) VALUES (?,?,?,?,?)')
       .run(MACHINE_ID, fl, 'all', content, ts);
-    const wsMsg = JSON.stringify({ type: 'CHAT_MESSAGE', from: MACHINE_ID, fromLabel: fl, to: 'all', content, ts });
+    const wsMsg = encryptPayload({ type: 'CHAT_MESSAGE', from: MACHINE_ID, fromLabel: fl, to: 'all', content, ts });
     for (const peer of peersMap.values()) {
       if (peer.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(wsMsg); } catch(_e) {}
     }
