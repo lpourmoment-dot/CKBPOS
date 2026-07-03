@@ -44,8 +44,8 @@ const CRITICAL_FILES = [
   { path: 'src/utils/printer-detect.js', required: true, category: 'Print Engine', desc: 'Printer detection' },
   { path: 'src/utils/escpos.js', required: true, category: 'Print Engine', desc: 'ESC/POS command generator' },
 
-  // React Build Output
-  { path: 'build/index.html', required: true, category: 'React Build', desc: 'Built React app' },
+  // React Build Output (created by npm run react-build, absent before build)
+  { path: 'build/index.html', required: false, category: 'React Build', desc: 'Built React app' },
 
   // Assets
   { path: 'assets/icon.ico', required: true, category: 'Assets', desc: 'Windows app icon' },
@@ -271,8 +271,14 @@ function phase3_config() {
         if (baseDir && fileExists(baseDir)) {
           pass(`build.files: "${pattern}" → dossier existe`);
         } else if (baseDir) {
-          fail(`build.files: "${pattern}" → dossier "${baseDir}" introuvable`);
-          errors++;
+          // build/ est créé par react-build — warning avant le build, error après
+          if (baseDir === 'build') {
+            warn(`build.files: "${pattern}" → dossier "${baseDir}" introuvable (normal avant react-build)`);
+            warnings++;
+          } else {
+            fail(`build.files: "${pattern}" → dossier "${baseDir}" introuvable`);
+            errors++;
+          }
         }
       } else {
         // Exact file
