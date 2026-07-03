@@ -32,6 +32,13 @@ jobs:
       - name: Rebuild native modules for Electron
         run: npx electron-rebuild -f -w better-sqlite3
 
+      - name: Create placeholder license-keys.json if missing
+        run: |
+          if not exist license-keys.json (
+            echo {"aesKey":"","currentVersion":"v1","publicKeys":{},"supabaseUrl":"","supabaseAnonKey":""} > license-keys.json
+          )
+        shell: cmd
+
       - name: Pre-build verification
         run: node scripts/verify-build.js
         shell: cmd
@@ -79,6 +86,13 @@ jobs:
 
       - name: Rebuild native modules for Electron
         run: npx electron-rebuild -f -w better-sqlite3
+
+      - name: Create placeholder license-keys.json if missing
+        run: |
+          if not exist license-keys.json (
+            echo {"aesKey":"","currentVersion":"v1","publicKeys":{},"supabaseUrl":"","supabaseAnonKey":""} > license-keys.json
+          )
+        shell: cmd
 
       - name: Full pre-build verification
         run: node scripts/verify-build.js
