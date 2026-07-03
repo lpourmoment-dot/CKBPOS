@@ -114,7 +114,7 @@ function DataSharingSection() {
 
         {peers.length === 0 ? (
           <div style={{ padding:'12px 14px', borderRadius:8, background:'var(--bg-hover)', border:'1px solid var(--border)', fontSize:12, color:'var(--text-muted)', textAlign:'center' }}>
-            {scanning ? 'Recherche en cours...' : 'Aucune machine détectée – assurez-vous que les autres machines sont connectées au même réseau'}
+            {scanning ? t('settings','scanning') : t('settings','noMachinesFound')}
           </div>
         ) : (
           <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
@@ -128,7 +128,7 @@ function DataSharingSection() {
                 <span style={{ fontSize:10, padding:'2px 8px', borderRadius:10,
                   background: peer.status==='online'||peer.actif ? 'rgba(34,197,94,0.12)' : 'rgba(107,114,128,0.12)',
                   color: peer.status==='online'||peer.actif ? '#22c55e' : '#6b7280' }}>
-                  {peer.status==='online'||peer.actif ? 'En ligne' : 'Hors ligne'}
+                  {peer.status==='online'||peer.actif ? t('settings','online') : t('settings','offline')}
                 </span>
                 <button onClick={() => handleRequestSnapshot(peer)} disabled={!!requesting}
                   style={{ padding:'5px 12px', borderRadius:7, border:'1px solid var(--accent)', background:'rgba(232,197,71,0.08)', color:'var(--accent)', fontSize:11, fontWeight:600, cursor: requesting ? 'not-allowed' : 'pointer', fontFamily:'inherit', whiteSpace:'nowrap', opacity: requesting ? 0.6 : 1 }}>
@@ -237,6 +237,14 @@ export default function SettingsPage() {
   const [printerMachines, setPrinterMachines]   = useState([]);
   const [printerTargetId, setPrinterTargetId]   = useState('');
   const [printerModeSaved, setPrinterModeSaved] = useState(false);
+  // ── v5.0 — Adaptive Print Engine ──────────────────────
+  const [printMethod, setPrintMethod]           = useState('auto');
+  const [printerPaperWidth, setPrinterPaperWidth] = useState('auto');
+  const [printerConnection, setPrinterConnection] = useState('auto');
+  const [printerCaps, setPrinterCaps]           = useState(null);
+  const [isDetecting, setIsDetecting]           = useState(false);
+  const [isTestPrinting, setIsTestPrinting]     = useState(false);
+  const [testPrintMsg, setTestPrintMsg]         = useState('');
 
   // \u2705 Accordéons –" sections ouvertes par défaut : Loja + Impressora
   // -- Caderno de Caixa v1.2.7 -----------------------------
@@ -447,6 +455,15 @@ export default function SettingsPage() {
     if (pCopT.data?.value !== undefined) setCopiesTicket(parseInt(pCopT.data.value) || 2);
     if (pCopS.data?.value !== undefined) setCopiesShift(parseInt(pCopS.data.value) || 1);
     if (pSize.data?.value !== undefined) setTicketSizeMm(parseInt(pSize.data.value) || 72);
+    // v5.0 — Load adaptive print settings
+    try {
+      const pMethod = await window.electron.dbGet("SELECT value FROM settings WHERE key='printer_method'");
+      const pPaper  = await window.electron.dbGet("SELECT value FROM settings WHERE key='printer_paper_width'");
+      const pConn   = await window.electron.dbGet("SELECT value FROM settings WHERE key='printer_connection'");
+      if (pMethod.data?.value) setPrintMethod(pMethod.data.value);
+      if (pPaper.data?.value)  setPrinterPaperWidth(pPaper.data.value);
+      if (pConn.data?.value)   setPrinterConnection(pConn.data.value);
+    } catch(_e) {}
     // v1.9.1 –" charger mode impression partagée
     try {
       const modeRes = await window.electron.getPrinterMode();
@@ -465,11 +482,53 @@ export default function SettingsPage() {
     setTimeout(() => setPrinterModeSaved(false), 2000);
   };
 
+  // v5.0 — Detect printer capabilities
+  const handleDetectPrinter = async () => {
+    if (!printerName) return;
+    setIsDetecting(true);
+    setPrinterCaps(null);
+    try {
+      const res = await window.electron.detectPrinter(printerName);
+      if (res?.success && res.data) {
+        setPrinterCaps(res.data);
+        // Auto-update settings based on detection
+        if (res.data.estimatedWidth && printerPaperWidth === 'auto') {
+          setTicketSizeMm(res.data.estimatedWidth);
+        }
+      }
+    } catch(e) { console.error('Detection error:', e); }
+    setIsDetecting(false);
+  };
+
+  // v5.0 — Test print
+  const handleTestPrint = async () => {
+    setIsTestPrinting(true);
+    setTestPrintMsg('');
+    try {
+      const res = await window.electron.testPrint({ printerName, method: printMethod });
+      if (res?.success) {
+        setTestPrintMsg(`OK — ${res.method || 'success'} (${res.elapsed || 0}ms)`);
+      } else {
+        setTestPrintMsg(`Erro: ${res?.error || 'desconhecido'}`);
+      }
+    } catch(e) {
+      setTestPrintMsg(`Erro: ${e.message}`);
+    }
+    setIsTestPrinting(false);
+    setTimeout(() => setTestPrintMsg(''), 4000);
+  };
+
   const savePrinterSettings = async () => {
     await window.electron.dbQuery("UPDATE settings SET value=? WHERE key='printer_name'", [printerName]);
     await window.electron.dbQuery("UPDATE settings SET value=? WHERE key='printer_copies_ticket'", [String(copiesTicket)]);
     await window.electron.dbQuery("UPDATE settings SET value=? WHERE key='printer_copies_shift'", [String(copiesShift)]);
     await window.electron.dbQuery("INSERT OR REPLACE INTO settings (key,value) VALUES ('ticket_size_mm',?)", [String(ticketSizeMm)]);
+    // v5.0 — Save adaptive print settings
+    await window.electron.dbQuery("INSERT OR REPLACE INTO settings (key,value) VALUES ('printer_method',?)", [printMethod]);
+    await window.electron.dbQuery("INSERT OR REPLACE INTO settings (key,value) VALUES ('printer_paper_width',?)", [printerPaperWidth]);
+    await window.electron.dbQuery("INSERT OR REPLACE INTO settings (key,value) VALUES ('printer_connection',?)", [printerConnection]);
+    // Clear print cache so new settings take effect
+    if (window.electron.printCacheReset) await window.electron.printCacheReset();
     setPrinterSaved(true);
     setTimeout(() => setPrinterSaved(false), 2000);
   };
@@ -894,7 +953,7 @@ export default function SettingsPage() {
                 {'\u2B07'} Pull
               </button>
               <button onClick={handleSupabaseDisconnect} className="btn btn-secondary">
-                <CloudOff size={14}/> Desconectar
+                <CloudOff size={14}/> {t('settings','disconnect')}
               </button>
             </>
           )}
@@ -911,7 +970,7 @@ export default function SettingsPage() {
 
         {/* Info migration SQL */}
         <div style={{ fontSize:11, color:'var(--text-muted)', lineHeight:1.8, background:'var(--bg-hover)', padding:'10px 12px', borderRadius:6, marginTop:6 }}>
-          <div style={{ fontWeight:700, marginBottom:4, color:'var(--text-secondary)' }}> Setup requis sur supabase.com</div>
+          <div style={{ fontWeight:700, marginBottom:4, color:'var(--text-secondary)' }}> {t('settings','supabaseSetup')}</div>
           <div>1. Créer un projet sur <strong>supabase.com</strong></div>
           <div>2. Project Settings {'\u2192'} API {'\u2192'} copier URL + anon key</div>
           <div>3. Onglet SQL Editor {'\u2192'} exécuter :</div>
@@ -938,32 +997,72 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
       </Accordion>
 
       <Accordion id="impressora" icon={<Printer size={16}/>} title={t('settings','accPrinter')} openSections={openSections} toggleSection={toggleSection}>
+        {/* Printer Selection */}
         <div style={{ marginBottom:14 }}>
           <label className="form-label">{t('settings','printerLabel')}</label>
-          <select className="form-input" value={printerName} onChange={e=>setPrinterName(e.target.value)}>
-            <option value="">{t('settings','printerSelect')}</option>
-            {printers.map(p => (
-              <option key={p.name} value={p.name}>
-                {p.isDefault ? '\uD83D\uDDA5\uFE0F ' : '\uD83D\uDDA8\uFE0F '}{p.name}
-              </option>
-            ))}
-          </select>
+          <div style={{ display:'flex', gap:8 }}>
+            <select className="form-input" style={{ flex:1 }} value={printerName} onChange={e=>{ setPrinterName(e.target.value); setPrinterCaps(null); }}>
+              <option value="">{t('settings','printerSelect')}</option>
+              {printers.map(p => (
+                <option key={p.name} value={p.name}>
+                  {'🖨️ '}{p.name}
+                  {p.type === 'thermal' ? ' [Thermal]' : p.type === 'virtual' ? ' [Virtual]' : ''}
+                </option>
+              ))}
+            </select>
+            <button onClick={handleDetectPrinter} disabled={!printerName || isDetecting}
+              className="btn btn-secondary" style={{ fontSize:11, whiteSpace:'nowrap' }}>
+              {isDetecting ? '...' : 'Detectar'}
+            </button>
+          </div>
           <p style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>
             {t('settings','printerSilent')}
           </p>
         </div>
+
+        {/* v5.0 — Printer Capability Info */}
+        {printerCaps && (
+          <div style={{ marginBottom:14, padding:'10px 12px', background:'var(--bg-hover)', borderRadius:6, fontSize:11, lineHeight:1.8 }}>
+            <div style={{ fontWeight:700, marginBottom:4, color:'var(--accent)' }}>{t('settings','printerDetected')}</div>
+            <div>Tipo: <strong>{printerCaps.type === 'thermal' ? 'Termica' : printerCaps.type === 'regular' ? 'Regular' : printerCaps.type === 'virtual' ? 'Virtual' : 'Desconhecido'}</strong></div>
+            <div>Conexao: <strong>{printerCaps.connection === 'usb' ? 'USB' : printerCaps.connection === 'bluetooth' ? 'Bluetooth' : printerCaps.connection === 'network' ? 'Rede' : printerCaps.connection === 'serial' ? 'Serie' : 'Auto'}</strong></div>
+            <div>{t('settings','estWidth')}: <strong>{printerCaps.estimatedWidth ? printerCaps.estimatedWidth + 'mm' : 'N/D'}</strong></div>
+            <div>ESC/POS: <strong>{printerCaps.supportsESCPOS ? 'Sim' : 'Nao'}</strong></div>
+            <div>Metodo recom.: <strong>{printerCaps.recommendedMethod === 'escpos' ? 'ESC/POS' : printerCaps.recommendedMethod === 'pdf' ? 'PDF' : 'Driver Windows'}</strong></div>
+          </div>
+        )}
+
+        {/* v5.0 — Print Method Selection */}
         <div style={{ marginBottom:14 }}>
-          <label className="form-label">{t('settings','ticketWidthLabel')}</label>
-          <select className="form-input" value={ticketSizeMm} onChange={e=>setTicketSizeMm(parseInt(e.target.value))}>
-            <option value={52}>52mm</option>
-            <option value={60}>60mm</option>
-            <option value={72}>72mm –" POS-80C (actuel)</option>
-            <option value={80}>80mm</option>
+          <label className="form-label" style={{ fontSize:12 }}>Metodo de Impressao</label>
+          <select className="form-input" value={printMethod} onChange={e=>setPrintMethod(e.target.value)}>
+            <option value="auto">Auto (detecao inteligente)</option>
+            <option value="escpos">ESC/POS (impressora termica)</option>
+            <option value="windows">Driver Windows</option>
+            <option value="pdf">PDF (salvar e imprimir)</option>
           </select>
-          <p style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>
-            Adapte la largeur du ticket   votre imprimante thermique. Actuel : {ticketSizeMm}mm.
+          <p style={{ fontSize:10, color:'var(--text-muted)', marginTop:2 }}>
+            Auto detecta o melhor metodo para sua impressora.
           </p>
         </div>
+
+        {/* v5.0 — Paper Width */}
+        <div style={{ marginBottom:14 }}>
+          <label className="form-label" style={{ fontSize:12 }}>Largura do Papel</label>
+          <select className="form-input" value={ticketSizeMm} onChange={e=>setTicketSizeMm(parseInt(e.target.value))}>
+            <option value={0}>Auto</option>
+            <option value={52}>52mm</option>
+            <option value={58}>58mm</option>
+            <option value={60}>60mm</option>
+            <option value={72}>72mm (POS-80C)</option>
+            <option value={80}>80mm</option>
+          </select>
+          <p style={{ fontSize:10, color:'var(--text-muted)', marginTop:2 }}>
+            Largura do ticket. Auto usa a deteccao. Atual: {ticketSizeMm || 'auto'}mm.
+          </p>
+        </div>
+
+        {/* Copies */}
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
           <div>
             <label className="form-label" style={{ fontSize:12 }}>{t('settings','copiesTicket')}</label>
@@ -984,9 +1083,21 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
             </div>
           </div>
         </div>
-        <button onClick={savePrinterSettings} className="btn btn-primary">
-          <Save size={14}/> {printerSaved ? '\u2705 ' + t('settings','saved2') : t('settings','printerSave')}
-        </button>
+
+        {/* Save + Test Print */}
+        <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+          <button onClick={savePrinterSettings} className="btn btn-primary">
+            <Save size={14}/> {printerSaved ? '\u2705 Guardado!' : t('settings','printerSave')}
+          </button>
+          <button onClick={handleTestPrint} disabled={!printerName || isTestPrinting} className="btn btn-secondary" style={{ fontSize:12 }}>
+            {isTestPrinting ? 'Imprimindo...' : 'Testar Impressao'}
+          </button>
+        </div>
+        {testPrintMsg && (
+          <p style={{ fontSize:11, marginTop:6, color: testPrintMsg.startsWith('OK') ? 'var(--success)' : 'var(--danger)' }}>
+            {testPrintMsg}
+          </p>
+        )}
 
         {/* -- v1.9.1 Impression partagée -- */}
         <div style={{ marginTop:20, paddingTop:16, borderTop:'1px solid var(--border)' }}>
@@ -1129,7 +1240,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
                     setSavingNetKey(false);
                   }}
                   style={{ padding:'6px 14px', borderRadius:8, border:'1px solid var(--accent)', background:'rgba(240,192,64,0.1)', color:'var(--accent)', fontWeight:700, fontSize:12, cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap' }}>
-                  {savingNetKey ? 'Saving...' : 'Enregistrer'}
+                  {savingNetKey ? t('settings','saving') : t('settings','save')}
                 </button>
               </div>
 

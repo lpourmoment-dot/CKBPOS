@@ -20,9 +20,20 @@ export default function LicensePage({ onActivated }) {
   const [error, setError] = useState('');
   const [status, setStatus] = useState(null);
 
+  // ── v5 — Achat de licenca en self-service ──
+  const [purchaseTiers, setPurchaseTiers] = useState([]);
+  const [purchaseTier, setPurchaseTier] = useState('');
+  const [purchaseName, setPurchaseName] = useState('');
+  const [purchaseEmail, setPurchaseEmail] = useState('');
+  const [purchaseWhatsapp, setPurchaseWhatsapp] = useState('');
+  const [comprovativo, setComprovativo] = useState(null); // { base64, name, mime }
+  const [purchaseSubmitting, setPurchaseSubmitting] = useState(false);
+  const [purchaseSuccess, setPurchaseSuccess] = useState(false);
+
   const onActivatedRef = useRef(null);
   const unsubscribeRef = useRef(null);
   const fileInputRef = useRef(null);
+  const comprovativoInputRef = useRef(null);
 
   useEffect(() => {
     onActivatedRef.current = onActivated;
@@ -79,6 +90,66 @@ export default function LicensePage({ onActivated }) {
     e.target.value = '';
   }, [t]);
 
+  // ── v5 — Achat de licenca en self-service ──
+  useEffect(() => {
+    if (tab !== 'purchase' || purchaseTiers.length > 0) return;
+    window.electron.purchaseTiersList().then((res) => {
+      if (res?.ok && res.data) setPurchaseTiers(res.data.filter((t) => t.tier !== 'FREE'));
+    });
+  }, [tab, purchaseTiers.length]);
+
+  const handleComprovativoSelect = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      const base64 = dataUrl.split(',')[1] || '';
+      setComprovativo({ base64, name: file.name, mime: file.type });
+    };
+    reader.onerror = () => setError(t('licensing', 'invalidLicense'));
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  }, [t]);
+
+  const handlePurchaseSubmit = useCallback(async () => {
+    setError('');
+    if (!purchaseEmail.trim() || !purchaseTier || !comprovativo) {
+      setError(t('licensing', 'purchaseMissingFields'));
+      return;
+    }
+    setPurchaseSubmitting(true);
+    try {
+      const res = await window.electron.purchaseRequestSubmit({
+        email: purchaseEmail.trim(),
+        client_name: purchaseName.trim() || null,
+        whatsapp: purchaseWhatsapp.trim() || null,
+        tier: purchaseTier,
+        comprovativoBase64: comprovativo.base64,
+        comprovativoName: comprovativo.name,
+        comprovativoMime: comprovativo.mime,
+      });
+      if (res?.ok === false) {
+        setError(res.error || t('licensing', 'purchaseError'));
+        return;
+      }
+      setPurchaseSuccess(true);
+      // Demarre automatiquement l'ecoute realtime pour cet email : sans ca,
+      // le client n'est abonne a aucun canal et ne recevra jamais la licence
+      // au moment ou l'admin confirme la demande.
+      try {
+        await window.electron.licenseListenRealtime(purchaseEmail.trim());
+        setListening(true);
+      } catch (_e) {
+        // non bloquant — le check au prochain "Receber automaticamente" recuperera quand meme la livraison persistee
+      }
+    } catch (err) {
+      setError(t('licensing', 'purchaseError'));
+    } finally {
+      setPurchaseSubmitting(false);
+    }
+  }, [purchaseEmail, purchaseName, purchaseWhatsapp, purchaseTier, comprovativo, t]);
+
   const handleListen = useCallback(async () => {
     setError('');
     if (!email.trim()) {
@@ -125,7 +196,7 @@ export default function LicensePage({ onActivated }) {
         <div className="ticket-perf ticket-perf--top" aria-hidden="true" />
 
         <div className="ticket-body">
-          {status?.valid && (
+          {(status?.valid || purchaseSuccess) && (
             <button
               className="btn-secondary"
               style={{ marginBottom: 16, width: 'auto', padding: '6px 14px', fontSize: 12 }}
@@ -200,6 +271,14 @@ export default function LicensePage({ onActivated }) {
             >
               {t('licensing', 'tabRealtime')}
             </button>
+            <button
+              role="tab"
+              aria-selected={tab === 'purchase'}
+              className={tab === 'purchase' ? 'active' : ''}
+              onClick={() => setTab('purchase')}
+            >
+              {t('licensing', 'tabPurchase')}
+            </button>
           </div>
 
           {tab === 'manual' && (
@@ -246,6 +325,77 @@ export default function LicensePage({ onActivated }) {
                   <p className="license-listening">{t('licensing', 'listening')}</p>
                   <button className="btn-secondary" onClick={handleStopListen}>
                     {t('licensing', 'stopListen')}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {tab === 'purchase' && (
+            <div className="license-tab-content">
+              {purchaseSuccess ? (
+                <p className="license-listening">{t('licensing', 'purchaseSubmitted')}</p>
+              ) : (
+                <>
+                  <label>{t('licensing', 'purchaseTierLabel')}</label>
+                  <select
+                    value={purchaseTier}
+                    onChange={(e) => setPurchaseTier(e.target.value)}
+                    style={{ width: '100%', marginBottom: 14 }}
+                  >
+                    <option value="">{t('licensing', 'purchaseTierPlaceholder')}</option>
+                    {purchaseTiers.map((tc) => (
+                      <option key={tc.tier} value={tc.tier}>
+                        {tc.tier} — {tc.price?.toLocaleString('pt-PT')} Kz
+                      </option>
+                    ))}
+                  </select>
+
+                  <label>{t('licensing', 'purchaseNameLabel')}</label>
+                  <input
+                    type="text"
+                    value={purchaseName}
+                    onChange={(e) => setPurchaseName(e.target.value)}
+                    placeholder={t('licensing', 'purchaseNamePlaceholder')}
+                  />
+
+                  <label>{t('licensing', 'emailLabel')}</label>
+                  <input
+                    type="email"
+                    value={purchaseEmail}
+                    onChange={(e) => setPurchaseEmail(e.target.value)}
+                    placeholder={t('licensing', 'emailPlaceholder')}
+                  />
+
+                  <label>{t('licensing', 'purchaseWhatsappLabel')}</label>
+                  <input
+                    type="text"
+                    value={purchaseWhatsapp}
+                    onChange={(e) => setPurchaseWhatsapp(e.target.value)}
+                    placeholder={t('licensing', 'purchaseWhatsappPlaceholder')}
+                  />
+
+                  <input
+                    ref={comprovativoInputRef}
+                    type="file"
+                    accept="image/*,.pdf"
+                    style={{ display: 'none' }}
+                    onChange={handleComprovativoSelect}
+                  />
+                  <button
+                    className="btn-secondary"
+                    style={{ marginBottom: 10 }}
+                    onClick={() => comprovativoInputRef.current?.click()}
+                  >
+                    {comprovativo ? comprovativo.name : t('licensing', 'purchaseUploadBtn')}
+                  </button>
+
+                  <button
+                    className="btn-primary"
+                    onClick={handlePurchaseSubmit}
+                    disabled={purchaseSubmitting}
+                  >
+                    {purchaseSubmitting ? t('licensing', 'purchaseSubmitting') : t('licensing', 'purchaseSubmitBtn')}
                   </button>
                 </>
               )}

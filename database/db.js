@@ -4,6 +4,20 @@ const { app } = require('electron');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
+// ── Database Encryption (AES-256-GCM au repos) ──
+let _dbPath, _machineIdForEnc;
+try {
+  const enc = require('../scripts/db-encryption');
+  // On ne peut pas déchiffrer ici car on n'a pas encore le machine_id
+  // On stocke le path pour déchiffrer plus tard
+  _dbPath = null; // défini plus bas
+  module.exports._decryptIfNeeded = enc.decryptDbIfNeeded;
+  module.exports._encryptOnExit = enc.encryptDbOnExit;
+} catch(_e) {
+  module.exports._decryptIfNeeded = () => {};
+  module.exports._encryptOnExit = () => {};
+}
+
 // ── Générer un UUID v4 simple sans dépendance externe ──
 function generateUUID() {
   return crypto.randomBytes(16).toString('hex').replace(
@@ -147,45 +161,76 @@ db.exec(`
   );
 `);
 
-// Migrations
-[
-  "ALTER TABLE products ADD COLUMN prix_demi REAL",
-  "ALTER TABLE products ADD COLUMN prix_unite REAL",
-  "ALTER TABLE products ADD COLUMN prix_demi_manual INTEGER DEFAULT 0",
-  "ALTER TABLE products ADD COLUMN prix_unite_manual INTEGER DEFAULT 0",
-  "ALTER TABLE products ADD COLUMN stock_alerte REAL DEFAULT 2",
-  "ALTER TABLE products ADD COLUMN has_variants INTEGER DEFAULT 0",
-  "ALTER TABLE ventes ADD COLUMN client_id INTEGER",
-  "ALTER TABLE ventes ADD COLUMN client_nom TEXT",
-  "ALTER TABLE ventes ADD COLUMN statut TEXT DEFAULT 'normal'",
-  "ALTER TABLE ventes ADD COLUMN mode_paiement TEXT DEFAULT 'dinheiro'",
-  "ALTER TABLE ventes ADD COLUMN montant_dinheiro REAL DEFAULT 0",
-  "ALTER TABLE ventes ADD COLUMN montant_express REAL DEFAULT 0",
-  "ALTER TABLE vente_items ADD COLUMN statut TEXT DEFAULT 'normal'",
-  "ALTER TABLE vente_items ADD COLUMN variant_id INTEGER",
-  "ALTER TABLE users ADD COLUMN peut_modifier_factures INTEGER DEFAULT 0",
-  "ALTER TABLE users ADD COLUMN question_secreta TEXT",
-  "ALTER TABLE users ADD COLUMN resposta_secreta TEXT",
-  "ALTER TABLE users ADD COLUMN tentativas_login INTEGER DEFAULT 0",
-  "ALTER TABLE shifts ADD COLUMN total_dinheiro REAL DEFAULT 0",
-  "ALTER TABLE shifts ADD COLUMN total_express REAL DEFAULT 0",
-  "ALTER TABLE shifts ADD COLUMN argent_en_main REAL DEFAULT 0",
-  "ALTER TABLE shifts ADD COLUMN argent_envoye REAL DEFAULT 0",
-  "ALTER TABLE shifts ADD COLUMN note TEXT",
-  "ALTER TABLE stock_mouvements ADD COLUMN variant_id INTEGER",
-  "ALTER TABLE stock_mouvements ADD COLUMN type_mesure TEXT DEFAULT 'carton'",
-  "ALTER TABLE stock_mouvements ADD COLUMN quantite_cartons REAL",
-  "ALTER TABLE stock_mouvements ADD COLUMN motif TEXT",
-  // ── v1.0.9 ──────────────────────────────────────────────
-  "ALTER TABLE ventes ADD COLUMN client_nif TEXT DEFAULT 'CONSUMIDOR FINAL'",
-  "ALTER TABLE ventes ADD COLUMN facture_num TEXT",
-  "ALTER TABLE ventes ADD COLUMN reservation_id INTEGER",
-  "ALTER TABLE users ADD COLUMN pin TEXT",
-  // ── v1.1.2 ──────────────────────────────────────────────
-  "ALTER TABLE ventes ADD COLUMN machine_id TEXT DEFAULT 'LOCAL'",
-  // ── v1.2.3 — code-barres produits ───────────────────────
-  "ALTER TABLE products ADD COLUMN barcode TEXT",
-].forEach(sql => { try { db.exec(sql); } catch(e){} });
+// ── Migrateur versionné (schema_version table) ────────────────
+db.exec("CREATE TABLE IF NOT EXISTS schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL DEFAULT 0)");
+const _sv = db.prepare("SELECT version FROM schema_version WHERE id = 1").get();
+let _currentVersion = _sv ? _sv.version : 0;
+if (!_sv) db.prepare("INSERT INTO schema_version (id, version) VALUES (1, 0)").run();
+
+const _migrations = [
+  // ── Base (pre-v1.0.9) ──
+  { v: 1,  sql: "ALTER TABLE products ADD COLUMN prix_demi REAL" },
+  { v: 2,  sql: "ALTER TABLE products ADD COLUMN prix_unite REAL" },
+  { v: 3,  sql: "ALTER TABLE products ADD COLUMN prix_demi_manual INTEGER DEFAULT 0" },
+  { v: 4,  sql: "ALTER TABLE products ADD COLUMN prix_unite_manual INTEGER DEFAULT 0" },
+  { v: 5,  sql: "ALTER TABLE products ADD COLUMN stock_alerte REAL DEFAULT 2" },
+  { v: 6,  sql: "ALTER TABLE products ADD COLUMN has_variants INTEGER DEFAULT 0" },
+  { v: 7,  sql: "ALTER TABLE ventes ADD COLUMN client_id INTEGER" },
+  { v: 8,  sql: "ALTER TABLE ventes ADD COLUMN client_nom TEXT" },
+  { v: 9,  sql: "ALTER TABLE ventes ADD COLUMN statut TEXT DEFAULT 'normal'" },
+  { v: 10, sql: "ALTER TABLE ventes ADD COLUMN mode_paiement TEXT DEFAULT 'dinheiro'" },
+  { v: 11, sql: "ALTER TABLE ventes ADD COLUMN montant_dinheiro REAL DEFAULT 0" },
+  { v: 12, sql: "ALTER TABLE ventes ADD COLUMN montant_express REAL DEFAULT 0" },
+  { v: 13, sql: "ALTER TABLE vente_items ADD COLUMN statut TEXT DEFAULT 'normal'" },
+  { v: 14, sql: "ALTER TABLE vente_items ADD COLUMN variant_id INTEGER" },
+  { v: 15, sql: "ALTER TABLE users ADD COLUMN peut_modifier_factures INTEGER DEFAULT 0" },
+  { v: 16, sql: "ALTER TABLE users ADD COLUMN question_secreta TEXT" },
+  { v: 17, sql: "ALTER TABLE users ADD COLUMN resposta_secreta TEXT" },
+  { v: 18, sql: "ALTER TABLE users ADD COLUMN tentativas_login INTEGER DEFAULT 0" },
+  { v: 19, sql: "ALTER TABLE shifts ADD COLUMN total_dinheiro REAL DEFAULT 0" },
+  { v: 20, sql: "ALTER TABLE shifts ADD COLUMN total_express REAL DEFAULT 0" },
+  { v: 21, sql: "ALTER TABLE shifts ADD COLUMN argent_en_main REAL DEFAULT 0" },
+  { v: 22, sql: "ALTER TABLE shifts ADD COLUMN argent_envoye REAL DEFAULT 0" },
+  { v: 23, sql: "ALTER TABLE shifts ADD COLUMN note TEXT" },
+  { v: 24, sql: "ALTER TABLE stock_mouvements ADD COLUMN variant_id INTEGER" },
+  { v: 25, sql: "ALTER TABLE stock_mouvements ADD COLUMN type_mesure TEXT DEFAULT 'carton'" },
+  { v: 26, sql: "ALTER TABLE stock_mouvements ADD COLUMN quantite_cartons REAL" },
+  { v: 27, sql: "ALTER TABLE stock_mouvements ADD COLUMN motif TEXT" },
+  // ── v1.0.9 ──
+  { v: 28, sql: "ALTER TABLE ventes ADD COLUMN client_nif TEXT DEFAULT 'CONSUMIDOR FINAL'" },
+  { v: 29, sql: "ALTER TABLE ventes ADD COLUMN facture_num TEXT" },
+  { v: 30, sql: "ALTER TABLE ventes ADD COLUMN reservation_id INTEGER" },
+  { v: 31, sql: "ALTER TABLE users ADD COLUMN pin TEXT" },
+  // ── v1.1.2 ──
+  { v: 32, sql: "ALTER TABLE ventes ADD COLUMN machine_id TEXT DEFAULT 'LOCAL'" },
+  // ── v1.2.3 — code-barres produits ──
+  { v: 33, sql: "ALTER TABLE products ADD COLUMN barcode TEXT" },
+  // ── Caderno catégories de dépenses ──
+  { v: 34, sql: "ALTER TABLE caderno_entries ADD COLUMN categorie_depense TEXT DEFAULT NULL" },
+  // ── Stock prix d'achat variable + fournisseur ──
+  { v: 35, sql: "ALTER TABLE stock_mouvements ADD COLUMN cout_entree REAL DEFAULT 0" },
+  { v: 36, sql: "ALTER TABLE stock_mouvements ADD COLUMN fournisseur TEXT DEFAULT ''" },
+  // ── v4.9.5 — UUID cross-machine pour ventes (dedup LAN) ──
+  { v: 37, sql: "ALTER TABLE ventes ADD COLUMN uuid TEXT" },
+];
+
+for (const m of _migrations) {
+  if (m.v > _currentVersion) {
+    try { db.exec(m.sql); } catch(e) {}
+  }
+}
+db.prepare("UPDATE schema_version SET version = ? WHERE id = 1").run(_migrations[_migrations.length - 1].v);
+console.log('[CKBPOS] schema_version migré vers', _migrations[_migrations.length - 1].v);
+
+// Backfill UUID pour ventes existantes sans uuid
+try {
+  const orphanVentes = db.prepare("SELECT id FROM ventes WHERE uuid IS NULL OR uuid = ''").all();
+  if (orphanVentes.length > 0) {
+    const backfill = db.prepare("UPDATE ventes SET uuid = ? WHERE id = ?");
+    for (const v of orphanVentes) { backfill.run(generateUUID(), v.id); }
+    console.log('[CKBPOS] ' + orphanVentes.length + ' ventes sans uuid → UUID générés');
+  }
+} catch(e) {}
 
 // ── Tables v1.0.9 (CREATE IF NOT EXISTS = safe sur toute DB) ──
 db.exec(`
@@ -267,13 +312,28 @@ db.exec(`
   );
 `);
 
-// ── Motivos par défaut (INSERT OR IGNORE = safe) ──
+// ── Motivos par défaut — catégories professionnelles (INSERT OR IGNORE = safe) ──
 [
-  ['\u{1F37D}', 'Almoço',                 'sortie', 0, 'Geral'],
-  ['\u{1F4B8}', 'Kilape',                 'sortie', 1, 'Geral'],
+  // Entrées
   ['\u{1F4E6}', 'Produto não registrado', 'entree', 0, 'Geral'],
-  ['\u{1F53B}', 'Retirada de caixa',      'sortie', 0, 'Admin'],
-  ['\u26A0',  'Sem pagar',             'perte',  1, 'Geral'],
+  ['\u{1F4B5}', 'Kilape remboursado',    'entree', 0, 'Geral'],
+  ['\u{1F4E5}', 'Outra entrada',         'entree', 0, 'Geral'],
+  // Dépenses — catégories professionnelles
+  ['\u{1F37D}', 'Almoço / Repas',        'sortie', 0, 'Geral'],
+  ['\u{1F697}', 'Transport / Livraison', 'sortie', 0, 'Geral'],
+  ['\u{1F4A1}', 'Électricité',           'sortie', 0, 'Geral'],
+  ['\u{1F310}', 'Internet',              'sortie', 0, 'Geral'],
+  ['\u{1F4A7}', 'Eau',                   'sortie', 0, 'Geral'],
+  ['\u{1F4F1}', 'Téléphone / Crédit',    'sortie', 0, 'Geral'],
+  ['\u{1F4C4}', 'Fournitures',           'sortie', 0, 'Geral'],
+  ['\u{1F527}', 'Réparation / Maintenance','sortie', 0, 'Geral'],
+  ['\u{1F4B0}', 'Salaires',              'sortie', 0, 'Admin'],
+  ['\u{1F4E6}', 'Achat de stock',        'sortie', 0, 'Admin'],
+  ['\u{1F3F7}', 'Divers',                'sortie', 0, 'Geral'],
+  // Dettes
+  ['\u{1F4B8}', 'Kilape (dette)',         'sortie', 1, 'Geral'],
+  // Pertes
+  ['\u26A0',    'Sem pagar / Perte',      'perte',  1, 'Geral'],
 ].forEach(([icone, label, direction, est_dette, role]) => {
   db.prepare('INSERT OR IGNORE INTO caderno_motivos (icone,label,direction,est_dette,role) VALUES (?,?,?,?,?)')
     .run(icone, label, direction, est_dette, role);
@@ -303,9 +363,14 @@ try {
 const adminExists = db.prepare("SELECT id FROM users WHERE role='admin'").get();
 if (!adminExists) {
   const hash = bcrypt.hashSync('admin123', 10);
-  db.prepare("INSERT INTO users (nom,email,role,password_hash,peut_modifier_factures) VALUES (?,?,'admin',?,1)")
+  db.prepare("INSERT INTO users (nom,email,role,password_hash,peut_modifier_factures,tentativas_login) VALUES (?,?,'admin',?,1,0)")
     .run('Administrador','admin@ckbpos.com',hash);
 }
+// Forcer le reset du mot de passe admin par défaut au prochain login
+try {
+  db.prepare("UPDATE users SET tentativas_login = 0, last_login = NULL WHERE email = 'admin@ckbpos.com' AND password_hash = ?")
+    .run(bcrypt.hashSync('admin123', 10));
+} catch(e) {}
 
 // Settings par defaut — incluant les nouveaux champs loja
 [
