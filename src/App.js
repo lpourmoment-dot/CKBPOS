@@ -228,6 +228,13 @@ function App() {
     : license?.valid ? true
     : (license?.payload == null) && (license?.salesUsed || 0) < 30;
 
+  const hasFeature = (featureName) => {
+    if (!license?.valid) return true;
+    const features = license?.payload?.features;
+    if (!features) return true;
+    return features[featureName] !== false;
+  };
+
   return (
     <LangProvider>
       <ThemeContext.Provider value={{ theme, toggleTheme }}>
@@ -264,11 +271,11 @@ function App() {
                   <Route path="historique"element={<HistoriquePage/>} />
                   <Route path="users"     element={user?.role==='admin' ? <UsersPage/>     : <Navigate to="/"/>} />
                   <Route path="settings"  element={user?.role==='admin' ? <SettingsPage/>  : <Navigate to="/"/>} />
-                  <Route path="caderno"   element={<CadernoPage/>} />
+                  <Route path="caderno"   element={hasFeature('caderno') ? <CadernoPage/> : <Navigate to="/"/>} />
                   {/* v3.5.0 — Dashboard Coordenador */}
-                  <Route path="coord"     element={user?.role==='admin' ? <CoordDashboardPage/> : <Navigate to="/"/>} />
+                  <Route path="coord"     element={user?.role==='admin' && hasFeature('lanCoordination') ? <CoordDashboardPage/> : <Navigate to="/"/>} />
                   {/* v5 — Audit & Mensagens */}
-                <Route path="audit"     element={user?.role==='admin' ? <AuditLogPage/> : <Navigate to="/"/>} />
+                <Route path="audit"     element={user?.role==='admin' && hasFeature('audit') ? <AuditLogPage/> : <Navigate to="/"/>} />
                 <Route path="messaging" element={<MessagingPage/>} />
               </Route>
               {/* Fallback */}

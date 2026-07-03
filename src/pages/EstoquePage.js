@@ -25,6 +25,8 @@ export default function EstoquePage() {
   const [quantite, setQuantite] = useState('');
   const [motif, setMotif] = useState('');
   const [note, setNote] = useState('');
+  const [coutEntree, setCoutEntree] = useState('');
+  const [fournisseur, setFournisseur] = useState('');
   const [loading, setLoading] = useState(false);
   const [alertas, setAlertas] = useState([]);
 
@@ -119,8 +121,8 @@ export default function EstoquePage() {
       }
 
       await window.electron.dbQuery(
-        "INSERT INTO stock_mouvements (product_id,variant_id,user_id,type,type_mesure,quantite,quantite_cartons,stock_avant,stock_apres,motif,note) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        [selectedProduct.id, selectedVariant?.id||null, user.id, modalType, typeMesure, qty, cartonsQty, stockAntes, stockDepois, motif||null, noteText||null]
+        "INSERT INTO stock_mouvements (product_id,variant_id,user_id,type,type_mesure,quantite,quantite_cartons,stock_avant,stock_apres,motif,note,cout_entree,fournisseur) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [selectedProduct.id, selectedVariant?.id||null, user.id, modalType, typeMesure, qty, cartonsQty, stockAntes, stockDepois, motif||null, noteText||null, parseFloat(coutEntree)||0, fournisseur||null]
       );
       await window.electron.dbQuery(
         "INSERT INTO historique_modifications (user_id,table_name,record_id,action,details) VALUES (?,?,?,?,?)",
@@ -129,7 +131,7 @@ export default function EstoquePage() {
          `${selectedProduct.nom}${selectedVariant?' '+selectedVariant.nom:''}: ${modalType==='entree'?'+':'-'}${qty} ${typeMesure}${noteText?' ('+noteText+')':''}`]
       );
 
-      setShowModal(false); loadProducts(); loadMouvements();
+      setShowModal(false); setCoutEntree(''); setFournisseur(''); loadProducts(); loadMouvements();
     } catch(e) {
       // \u2705 Remplacé alert() natif \u2192 showAlert React
       showAlert(t('stock','error'), e.message, 'error');
@@ -392,6 +394,23 @@ export default function EstoquePage() {
                         {m.label}
                       </button>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Prix d'achat + Fournisseur (entrée seulement) */}
+              {modalType === 'entree' && (
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                  <div className="form-group">
+                    <label className="form-label">{t('stock','purchasePrice')}</label>
+                    <input type="number" className="form-input" value={coutEntree}
+                      onChange={e=>setCoutEntree(e.target.value)} placeholder="0"
+                      style={{ fontFamily:'monospace', fontWeight:600 }}/>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">{t('stock','supplier')}</label>
+                    <input type="text" className="form-input" value={fournisseur}
+                      onChange={e=>setFournisseur(e.target.value)} placeholder="Ex: Fornecedor X"/>
                   </div>
                 </div>
               )}

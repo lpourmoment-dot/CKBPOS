@@ -1,13 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import translations from './translations';
 
-// ── DEBUG : vérifier que caderno est bien chargé ──
-console.log('[useLang] Sections pt-BR:', Object.keys(translations['pt-BR'] || {}));
-console.log('[useLang] Sections fr:', Object.keys(translations['fr'] || {}));
-console.log('[useLang] caderno.title pt-BR:', translations['pt-BR']?.caderno?.title);
-console.log('[useLang] caderno.title fr:', translations['fr']?.caderno?.title);
-console.log('[useLang] caderno.title en:', translations['en']?.caderno?.title);
-
 const LangContext = createContext(null);
 
 export function LangProvider({ children }) {
@@ -44,7 +37,6 @@ export function LangProvider({ children }) {
   }, []);
 
   const changeLang = useCallback(async (newLang) => {
-    console.log('[useLang] changeLang →', newLang);
     setLang(newLang);
     try {
       await window.electron.dbQuery(

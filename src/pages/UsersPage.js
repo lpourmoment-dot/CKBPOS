@@ -120,10 +120,10 @@ export default function UsersPage() {
       if (res.success) {
         loadUsers();
       } else {
-        showAlert('Erreur suppression', res.error, 'error');
+        showAlert(t('users','deleteError'), res.error, 'error');
       }
     } catch(e) {
-      showAlert('Erro', e.message, 'error');
+      showAlert('Error', e.message, 'error');
     }
   };
 
