@@ -63,7 +63,7 @@ function registerLicenseIPC(db, ipcMain, machineId) {
   setInterval(periodicLicenseCheck, 30 * 60 * 1000);
 
   function activate(ckbContent) {
-    const payload = validateCkbContent(ckbContent);
+    const payload = validateCkbContent(ckbContent, machineId);
     setSetting(db, 'license_payload', JSON.stringify(payload));
     setSetting(db, 'license_ckb_raw', ckbContent);
     return payload;
@@ -187,6 +187,64 @@ function registerLicenseIPC(db, ipcMain, machineId) {
       realtimeChannel = null;
     }
     return { ok: true };
+  });
+
+  function ensureSupabaseClient() {
+    if (!supabaseClient) {
+      const { url, anonKey } = getSupabaseConfig();
+      supabaseClient = createClient(url, anonKey, { realtime: { transport: WebSocket } });
+    }
+    return supabaseClient;
+  }
+
+  // ── v5 — Achat de licenca en self-service (sans WhatsApp) ──
+  // Tarifs lus depuis tier_config_cloud (synchronises par CKBPOS-ADMIN),
+  // accessibles meme si l'app Admin est fermee.
+  ipcMain.handle('purchase-tiers-list', async () => {
+    try {
+      const client = ensureSupabaseClient();
+      const { data, error } = await client.from('tier_config_cloud').select('*').order('price', { ascending: true });
+      if (error) throw new Error(error.message);
+      return { ok: true, data };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  // Soumet une demande d'achat : upload du comprovativo (image/PDF) dans le
+  // bucket Storage 'comprovativos', puis insertion dans purchase_requests.
+  // L'admin la verra dans l'onglet "Solicitacoes de compra" et pourra
+  // confirmer -> licence generee + livree automatiquement (pipeline existant).
+  ipcMain.handle('purchase-request-submit', async (e, req) => {
+    try {
+      const { email, client_name, whatsapp, tier, comprovativoBase64, comprovativoName, comprovativoMime } = req;
+      if (!email || !tier || !comprovativoBase64) throw new Error('Dados incompletos');
+
+      const client = ensureSupabaseClient();
+      const cleanEmail = email.toLowerCase().trim();
+      const buffer = Buffer.from(comprovativoBase64, 'base64');
+      const safeName = `${Date.now()}_${(comprovativoName || 'comprovativo').replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+      const path = `${cleanEmail.replace(/[^a-z0-9]/g, '_')}/${safeName}`;
+
+      const { error: upErr } = await client.storage
+        .from('comprovativos')
+        .upload(path, buffer, { contentType: comprovativoMime || 'application/octet-stream' });
+      if (upErr) throw new Error(upErr.message);
+
+      const { error: insErr } = await client.from('purchase_requests').insert({
+        email: cleanEmail,
+        client_name: client_name || null,
+        whatsapp: whatsapp || null,
+        tier,
+        machine_id: machineId,
+        comprovativo_path: path,
+      });
+      if (insErr) throw new Error(insErr.message);
+
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
   });
 }
 

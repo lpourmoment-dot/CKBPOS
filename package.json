@@ -1,6 +1,6 @@
 {
   "name": "ckbpos",
-  "version": "4.9.6",
+  "version": "5.0.0",
   "description": "CKBPOS - Application Point de Vente Professionnelle",
   "main": "main.js",
   "author": "CKB",
@@ -13,7 +13,9 @@
     "publish-update": "electron-builder --win --publish always",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "electron-rebuild -f -w better-sqlite3",
-    "predist": "npm run react-build && npm run rebuild"
+    "verify": "node scripts/verify-build.js",
+    "verify:post-build": "node scripts/verify-build.js --post-build",
+    "predist": "npm run verify && npm run react-build && npm run rebuild"
   },
   "build": {
     "appId": "com.ckb.pos",
@@ -41,9 +43,16 @@
       "build/**/*",
       "main.js",
       "preload.js",
+      "license-ipc.js",
+      "licensing.js",
+      "license-keys.json",
+      "integrity-manifest.json",
+      "package.json",
+      "src/utils/adaptive-print.js",
+      "src/utils/printer-detect.js",
+      "src/utils/escpos.js",
       "database/**/*",
-      "assets/**/*",
-      "credentials.json"
+      "assets/**/*"
     ],
     "asar": true,
     "asarUnpack": [
@@ -62,7 +71,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^9.4.3",
+    "better-sqlite3": "^12.11.1",
     "date-fns": "^3.3.1",
     "electron-store": "^8.1.0",
     "electron-updater": "^6.3.4",
@@ -81,10 +90,11 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@electron/rebuild": "^3.6.0",
+    "@electron/rebuild": "^4.1.0",
     "concurrently": "^8.2.2",
-    "electron": "^29.4.6",
+    "electron": "^41.0.0",
     "electron-builder": "^24.13.3",
+    "node-abi": "^4.32.0",
     "wait-on": "^7.2.0"
   },
   "homepage": "./",
