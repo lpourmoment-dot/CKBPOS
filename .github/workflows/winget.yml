@@ -1,0 +1,15 @@
+name: Publish to WinGet
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: lpourmoment-dot.ckbpos
+          installers-regex: 'CKBPOS-Setup-.*\.exe$'
+          token: ${{ secrets.WINGET_GITHUB_TOKEN }}
