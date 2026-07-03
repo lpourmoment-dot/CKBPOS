@@ -45,34 +45,14 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      const res = await window.electron.dbGet(
-        "SELECT * FROM users WHERE email=? AND actif=1", [email]
-      );
-      if (!res.success || !res.data) {
-        setError(t('login','wrongCredentials2'));
+      // Auth centralisée côté serveur (brute-force protection)
+      const result = await window.electron.authLogin(email, password);
+      if (!result.success) {
+        setError(result.error || t('login','wrongCredentials2'));
         setLoading(false);
         return;
       }
-      const user = res.data;
-      const verifyRes = await window.electron.authVerifyPassword(password, user.password_hash);
-      const valid = !!verifyRes?.data;
-      if (!valid) {
-        const newTentativas = (user.tentativas_login || 0) + 1;
-        await window.electron.dbQuery(
-          "UPDATE users SET tentativas_login=? WHERE id=?", [newTentativas, user.id]
-        );
-        setTentativas(newTentativas);
-        if (newTentativas >= 3 && user.role === 'admin') {
-          setError(`3 ${t('login','attempts')}`);
-        } else {
-          setError(`${t('login','attemptsPrefix')} ${newTentativas}/3`);
-        }
-        setLoading(false);
-        return;
-      }
-      await window.electron.dbQuery(
-        "UPDATE users SET last_login=datetime('now'), tentativas_login=0 WHERE id=?", [user.id]
-      );
+      const user = result.data;
       setPendingUser({ id:user.id, nom:user.nom, email:user.email, role:user.role, peut_modifier_factures:user.peut_modifier_factures });
       setShowFundo(true);
     } catch(err) { setError(t('login','connectionError2')); }
