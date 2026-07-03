@@ -84,25 +84,45 @@ function isEncrypted(filePath) {
 
 /**
  * Déchiffre la BDD AVANT ouverture. À appeler au tout début de main.js.
+ * Si le déchiffrement échoue (empreinte hardware changée), garde le fichier
+ * tel quel et désactive le chiffrement à l'arrêt pour éviter la perte de données.
  */
+let _decryptionOk = false;
+
 function preDecryptDb(dbPath) {
   if (!fs.existsSync(dbPath)) return;
-  if (!isEncrypted(dbPath)) return;
+  if (!isEncrypted(dbPath)) { _decryptionOk = true; return; }
   try {
     const key = deriveKey();
     const encrypted = fs.readFileSync(dbPath);
     const decrypted = decryptBuffer(encrypted, key);
     fs.writeFileSync(dbPath, decrypted);
+    _decryptionOk = true;
     console.log('[DB-ENC] Base de données déchiffrée au démarrage');
   } catch (err) {
-    console.error('[DB-ENC] Erreur déchiffrement:', err.message);
+    console.error('[DB-ENC] Déchiffrement échoué (empreinte hardware changée ?):', err.message);
+    console.error('[DB-ENC] Le chiffrement à l\'arrêt sera désactivé pour éviter la perte de données.');
+    // Ne pas écraser le fichier — garder la version chiffrée comme backup
+    // Renommer en .db.encrypted pour que l'app puisse créer une nouvelle BDD
+    try {
+      const backupPath = dbPath + '.encrypted';
+      if (!fs.existsSync(backupPath)) {
+        fs.copyFileSync(dbPath, backupPath);
+        console.log('[DB-ENC] Backup chiffré sauvegardé:', backupPath);
+      }
+    } catch(_e) {}
   }
 }
 
 /**
  * Chiffre la BDD à l'arrêt. À appeler dans before-quit.
+ * Ne chiffre PAS si le déchiffrement a échoué au démarrage.
  */
 function encryptDbOnExit(dbPath) {
+  if (!_decryptionOk) {
+    console.log('[DB-ENC] Chiffrement désactivé (déchiffrement avait échoué)');
+    return;
+  }
   if (!fs.existsSync(dbPath)) return;
   if (isEncrypted(dbPath)) return;
   try {
