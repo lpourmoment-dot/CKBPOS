@@ -33,7 +33,6 @@ const CRITICAL_FILES = [
   { path: 'preload.js', required: true, category: 'Main Process', desc: 'IPC bridge' },
   { path: 'license-ipc.js', required: true, category: 'Main Process', desc: 'License IPC handlers' },
   { path: 'licensing.js', required: true, category: 'Main Process', desc: 'License validation logic' },
-  { path: 'license-keys.json', required: true, category: 'Main Process', desc: 'RSA keys + Supabase config' },
   { path: 'package.json', required: true, category: 'Main Process', desc: 'Project manifest' },
 
   // Database
