@@ -277,4 +277,7 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.on('license-sales-updated', handler);
     return () => ipcRenderer.removeListener('license-sales-updated', handler);
   },
+
+  // ── Facture numérotation ─────────────────────────────────────────
+  nextFactureNum: () => ipcRenderer.invoke('next-facture-num'),
 });

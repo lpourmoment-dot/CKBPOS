@@ -1,5 +1,6 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
 const { app } = require('electron');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
@@ -30,7 +31,35 @@ const dbPath = app
   ? path.join(app.getPath('userData'), 'ckbpos.db')
   : path.join(__dirname, 'ckbpos.db');
 
-const db = new Database(dbPath);
+let db;
+try {
+  db = new Database(dbPath);
+} catch (err) {
+  // Ne JAMAIS créer une DB vide — alerter l'utilisateur et quitter
+  console.error('[DB] Ouverture échouée:', err.message);
+  try {
+    const { dialog } = require('electron');
+    dialog.showMessageBoxSync(app, {
+      type: 'error',
+      title: 'CKBPOS — Base de données',
+      message: 'Impossible d\'ouvrir la base de données',
+      detail: [
+        'Le fichier de base de données est inaccessible :',
+        err.message,
+        '',
+        'Vos données sont sauvegardées dans :',
+        dbPath + '.encrypted',
+        '',
+        'Ne supprimez pas ce fichier.',
+        'Contactez le support CKBPOS pour récupérer vos données.',
+      ].join('\n'),
+      buttons: ['Quitter'],
+      defaultId: 0,
+      noLink: true,
+    });
+  } catch(_e) { console.error('[DB] Fatal:', err.message); }
+  app.exit(1);
+}
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
