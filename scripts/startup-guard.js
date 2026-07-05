@@ -1,12 +1,13 @@
 /**
  * CKBPOS Startup Guard
  * ====================
- * Validates critical files exist AND their integrity (SHA-256 hash)
- * BEFORE main.js loads any modules.
+ * Validates critical files exist BEFORE main.js loads any modules.
  * Only runs when the app is packaged (app.isPackaged === true).
- * 
- * If files are missing or tampered, shows a professional Electron dialog
+ *
+ * If files are missing, shows a professional Electron dialog
  * and exits gracefully — never crashes with a Node.js exception.
+ *
+ * SHA-256 integrity check is logged as warning but does NOT block the app.
  */
 
 'use strict';
@@ -43,29 +44,39 @@ function loadManifest(appDir) {
 }
 
 /**
+ * Resolve the app root directory inside the asar archive.
+ */
+function resolveAppDir(app) {
+  try { return app.getAppPath(); }
+  catch {}
+  try { return path.join(process.resourcesPath, 'app.asar'); }
+  catch {}
+  try { return path.dirname(app.getPath('exe')); }
+  catch {}
+  return null;
+}
+
+/**
  * Check if critical files exist AND verify SHA-256 integrity.
+ * Missing files → block app. Tampered files → log warning only.
  */
 function checkStartupFiles(app) {
   if (!app.isPackaged) return { ok: true, missing: [], tampered: [] };
 
-  let appDir;
-  try { appDir = path.dirname(app.getPath('exe')); }
-  catch {
-    try { appDir = process.resourcesPath || path.dirname(process.execPath); }
-    catch { return { ok: true, missing: [], tampered: [] }; }
-  }
+  const appDir = resolveAppDir(app);
+  if (!appDir) return { ok: true, missing: [], tampered: [] };
 
   const missing = [];
   const tampered = [];
 
-  // Vérifier l'existence des fichiers
+  // Check file existence
   for (const file of CRITICAL_FILES) {
     try {
       if (!fs.existsSync(path.join(appDir, file))) missing.push(file);
     } catch { missing.push(file); }
   }
 
-  // Vérifier l'intégrité via le manifest SHA-256
+  // Check SHA-256 integrity (warning only, does not block)
   const manifest = loadManifest(appDir);
   if (manifest && manifest.files) {
     for (const [relativePath, expectedHash] of Object.entries(manifest.files)) {
@@ -74,11 +85,17 @@ function checkStartupFiles(app) {
         if (!fs.existsSync(fullPath)) continue;
         const actualHash = computeHash(fullPath);
         if (actualHash !== expectedHash) tampered.push(relativePath);
-      } catch { tampered.push(relativePath); }
+      } catch {}
     }
   }
 
-  return { ok: missing.length === 0 && tampered.length === 0, missing, tampered };
+  // Log tampered files as warning (non-blocking)
+  if (tampered.length > 0) {
+    console.warn('[STARTUP-Guard] Fichiers modifiés (avertissement) :', tampered.join(', '));
+  }
+
+  // Only block on missing files
+  return { ok: missing.length === 0, missing, tampered };
 }
 
 /**
@@ -90,37 +107,29 @@ function showStartupError(app, missing, tampered) {
   catch { app.exit(1); return; }
 
   const missingList = (missing || []).map(f => `  • ${f}`).join('\n');
-  const tamperedList = (tampered || []).map(f => `  • ${f}`).join('\n');
-
-  const sections = [];
-  if (missingList) sections.push('Fichiers introuvables :\n' + missingList);
-  if (tamperedList) sections.push('Fichiers modifiés (intégrité compromise) :\n' + tamperedList);
 
   const detail = [
-    'CKBPOS a détecté une anomalie de sécurité.',
+    'CKBPOS a détecté une anomalie.',
     '',
-    ...sections,
+    'Fichiers introuvables :',
+    missingList,
     '',
     '──────────────────────────────',
     '',
     'Cause probable :',
-    tamperedList
-      ? 'L\'application a été modifiée non autorisée.'
-      : 'L\'installation est corrompue ou incomplète.',
+    'L\'installation est corrompue ou incomplète.',
     '',
     'Solution :',
     '1. Désinstallez CKBPOS depuis les Paramètres Windows',
     '2. Téléchargez la dernière version depuis GitHub Releases',
     '3. Réinstallez l\'application',
-    '',
-    'Si le problème persiste, contactez le support CKBPOS.',
   ].join('\n');
 
   try {
     dialog.showMessageBoxSync(app, {
       type: 'error',
-      title: 'CKBPOS — Erreur de sécurité',
-      message: tamperedList ? 'Intégrité compromise' : 'Fichiers critiques manquants',
+      title: 'CKBPOS — Fichiers manquants',
+      message: 'Fichiers critiques manquants',
       detail,
       buttons: ['Quitter'],
       defaultId: 0,

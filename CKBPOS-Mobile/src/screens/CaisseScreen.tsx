@@ -1,12 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, Alert, Modal } from 'react-native';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, Alert, Modal, ActivityIndicator } from 'react-native';
 import { COLORS, SPACING, RADIUS } from '../theme';
 import { t } from '../i18n';
 import { useCartStore, CartItem } from '../stores/cartStore';
 import { useAuthStore } from '../stores/authStore';
 import { dbAll, dbRun, getSetting } from '../db/sqlite';
 import { Ionicons } from '@expo/vector-icons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+
+const CameraView = lazy(() => import('expo-camera').then(m => ({ default: m.CameraView })));
+let useCameraPermissions: any = null;
+try { useCameraPermissions = require('expo-camera').useCameraPermissions; } catch {}
 
 export default function CaisseScreen() {
   const { user } = useAuthStore();
@@ -22,7 +25,6 @@ export default function CaisseScreen() {
   const [currency, setCurrency] = useState('Kz');
   const [shopName, setShopName] = useState('');
   const [machineId, setMachineId] = useState('');
-  const [permission, requestPermission] = useCameraPermissions();
   const lastScannedRef = useRef<string>('');
   const scanCooldownRef = useRef(false);
 
@@ -91,12 +93,16 @@ export default function CaisseScreen() {
   };
 
   const openScanner = async () => {
-    if (!permission?.granted) {
-      const result = await requestPermission();
-      if (!result.granted) {
+    try {
+      const { Camera } = require('expo-camera');
+      const { status } = await Camera.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
         Alert.alert(t('common.error'), 'Permission caméra requise pour scanner');
         return;
       }
+    } catch (e) {
+      Alert.alert(t('common.error'), 'Module caméra non disponible');
+      return;
     }
     setShowScanner(true);
   };
@@ -319,11 +325,13 @@ export default function CaisseScreen() {
               <Ionicons name="close" size={28} color={COLORS.white} />
             </TouchableOpacity>
           </View>
-          <CameraView
-            style={styles.camera}
-            barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'ean8', 'code128', 'code39', 'upc_a', 'upc_e'] }}
-            onBarcodeScanned={showScanner ? handleBarcodeScanned : undefined}
-          />
+          <Suspense fallback={<View style={styles.camera}><ActivityIndicator size="large" color={COLORS.primary} /></View>}>
+            <CameraView
+              style={styles.camera}
+              barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'ean8', 'code128', 'code39', 'upc_a', 'upc_e'] }}
+              onBarcodeScanned={showScanner ? handleBarcodeScanned : undefined}
+            />
+          </Suspense>
           <View style={styles.scannerOverlay}>
             <View style={styles.scannerFrame} />
             <Text style={styles.scannerHint}>Placez le code-barres dans le cadre</Text>

@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "CKBPOS",
+    "slug": "CKBPOS-Mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0f0f0f"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ckb.pos"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0f0f0f",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "package": "com.ckb.pos",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-sqlite",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "CKBPOS a besoin de la caméra pour scanner les codes-barres."
+        }
+      ],
+      [
+        "expo-secure-store",
+        {}
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "f381b0d8-864e-4528-b280-dbd7718dc446"
+      }
+    },
+    "owner": "ckbpos"
+  }
+}

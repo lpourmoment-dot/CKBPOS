@@ -101,14 +101,17 @@ function preDecryptDb(dbPath) {
     console.log('[DB-ENC] Base de données déchiffrée au démarrage');
   } catch (err) {
     console.error('[DB-ENC] Déchiffrement échoué (empreinte hardware changée ?):', err.message);
-    console.error('[DB-ENC] Le chiffrement à l\'arrêt sera désactivé pour éviter la perte de données.');
-    // Ne pas écraser le fichier — garder la version chiffrée comme backup
-    // Renommer en .db.encrypted pour que l'app puisse créer une nouvelle BDD
+    // Ne JAMAIS supprimer le fichier chiffré — backup horodaté uniquement
     try {
+      const ts = Date.now();
       const backupPath = dbPath + '.encrypted';
       if (!fs.existsSync(backupPath)) {
-        fs.copyFileSync(dbPath, backupPath);
-        console.log('[DB-ENC] Backup chiffré sauvegardé:', backupPath);
+        fs.renameSync(dbPath, backupPath);
+        console.log('[DB-ENC] Fichier chiffré déplacé vers:', backupPath);
+      } else {
+        const datedBackup = dbPath + '.encrypted.' + ts;
+        fs.renameSync(dbPath, datedBackup);
+        console.log('[DB-ENC] Backup daté:', datedBackup);
       }
     } catch(_e) {}
   }
@@ -119,10 +122,10 @@ function preDecryptDb(dbPath) {
  * Ne chiffre PAS si le déchiffrement a échoué au démarrage.
  */
 function encryptDbOnExit(dbPath) {
-  if (!_decryptionOk) {
-    console.log('[DB-ENC] Chiffrement désactivé (déchiffrement avait échoué)');
-    return;
-  }
+  // Chiffrement désactivé — les empreintes hardware changent trop souvent
+  // entre machines/pro et causent des pertes de données
+  console.log('[DB-ENC] Chiffrement désactivé (sécurité données)');
+  return;
   if (!fs.existsSync(dbPath)) return;
   if (isEncrypted(dbPath)) return;
   try {

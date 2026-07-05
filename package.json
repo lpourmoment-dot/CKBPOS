@@ -1,6 +1,6 @@
 {
   "name": "ckbpos",
-  "version": "5.0.0",
+  "version": "5.0.6",
   "description": "CKBPOS - Application Point de Vente Professionnelle",
   "main": "main.js",
   "author": "CKB",
@@ -48,6 +48,8 @@
       "license-keys.json",
       "integrity-manifest.json",
       "package.json",
+      "scripts/**/*",
+      "src/main/**/*",
       "src/utils/adaptive-print.js",
       "src/utils/printer-detect.js",
       "src/utils/escpos.js",
@@ -92,7 +94,7 @@
   "devDependencies": {
     "@electron/rebuild": "^4.1.0",
     "concurrently": "^8.2.2",
-    "electron": "^41.0.0",
+    "electron": "^41.7.1",
     "electron-builder": "^24.13.3",
     "node-abi": "^4.32.0",
     "wait-on": "^7.2.0"

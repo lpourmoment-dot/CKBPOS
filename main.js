@@ -1,12 +1,7 @@
 // ── STARTUP GUARD ──────────────────────────────────────────────
-// Vérifie les fichiers critiques AVANT de charger les modules.
-// Si un fichier manque ou a été modifié, affiche une dialogue et quitte.
+// Les checks sont déclenchés dans app.whenReady() — app.getAppPath() n'est
+// pas fiable avant que le processus principal ne soit prêt.
 const { checkStartupFiles, showStartupError } = require('./scripts/startup-guard');
-const _startupCheck = checkStartupFiles(require('electron').app);
-if (!_startupCheck.ok) {
-  showStartupError(require('electron').app, _startupCheck.missing, _startupCheck.tampered);
-  // app.exit(1) est appelé dans showStartupError — le code ci-dessous ne s'exécute jamais
-}
 // ── FIN STARTUP GUARD ──────────────────────────────────────────
 
 const { registerLicenseIPC, incrementSalesCounter } = require('./license-ipc');
@@ -247,6 +242,12 @@ ipcMain.handle('update-install', () => {
 });
 
 app.whenReady().then(() => {
+  // Startup guard — vérifier les fichiers critiques après que app est prêt
+  const _startupCheck = checkStartupFiles(require('electron').app);
+  if (!_startupCheck.ok) {
+    showStartupError(require('electron').app, _startupCheck.missing, _startupCheck.tampered);
+    return;
+  }
   createWindow();
   // Certificate pinning pour Supabase (anti-MITM)
   try { const { setupCertPinning } = require('./scripts/cert-pinning'); setupCertPinning(require('electron').session); } catch(_e) {}
@@ -1097,6 +1098,20 @@ ipcMain.handle('reservation-anular', async (_, { id }) => {
     db.prepare("UPDATE reservations SET statut='anulada' WHERE id=?").run(id);
     return { success: true };
   } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ── Numérotation facture ─────────────────────────────────────────
+ipcMain.handle('next-facture-num', async () => {
+  try {
+    const year = new Date().getFullYear();
+    const rowSeq = db.prepare("SELECT COALESCE(MAX(id),0) as maxId FROM ventes").get();
+    const seq = (rowSeq?.maxId || 0) + 1;
+    const shortId = MACHINE_ID.slice(0,8).toUpperCase();
+    const numeroFacture = `FR CKB${year}/${shortId}-${String(seq).padStart(4,'0')}`;
+    return { success: true, numero: numeroFacture };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
 });
 
 // Backup local
@@ -4262,15 +4277,6 @@ global._ckbSyncHandlers.onPeerRegistered = (peerMachineId) => {
   const label = peer?.machine_label || peerMachineId.slice(0,8);
   setTimeout(() => chatNotifyPeer(label, 'connected'), 800);
 };
-
-// ── Audit login/logout (v4.2.0) ─────────────────────────────
-ipcMain.handle('audit-login', (_, { user_id, user_nom, action, details }) => {
-  try {
-    insertAuditLog(user_id || null, user_nom || 'unknown', action || 'LOGIN', details || null);
-    return { success: true };
-  } catch(e) { return { success: false }; }
-});
-
 
 ipcMain.handle('print-audit-pdf', async (_, { html, filename }) => {
   try {
