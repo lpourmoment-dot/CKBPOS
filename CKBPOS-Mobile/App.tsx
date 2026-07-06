@@ -1,3 +1,4 @@
+import './src/crypto-polyfill';
 import React, { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { View, Text, StyleSheet, ActivityIndicator, Image } from 'react-native';
