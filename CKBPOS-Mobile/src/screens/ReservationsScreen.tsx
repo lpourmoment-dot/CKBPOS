@@ -93,7 +93,7 @@ const styles = StyleSheet.create({
   statusBadge: { borderRadius: RADIUS.sm, paddingHorizontal: SPACING.sm, paddingVertical: 2 },
   statusText: { fontSize: 12, fontWeight: '600' },
   cardClient: { color: COLORS.text, fontSize: 14, marginBottom: 4 },
-  cardTotal: { color: COLORS.primary, fontWeight: 'bold', fontSize: 18 },
+  cardTotal: { color: COLORS.primary, fontWeight: 'bold', fontSize: 18, flexShrink: 1 },
   cardDate: { color: COLORS.textMuted, fontSize: 12, marginTop: 4 },
   cardActions: { flexDirection: 'row', gap: SPACING.md, marginTop: SPACING.md },
   actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },

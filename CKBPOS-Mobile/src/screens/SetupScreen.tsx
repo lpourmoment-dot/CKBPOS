@@ -5,9 +5,14 @@ import { t } from '../i18n';
 import { useAuthStore } from '../stores/authStore';
 import { hashPassword } from '../stores/authStore';
 import { dbRun, setSetting, generateMachineId } from '../db/sqlite';
+import JoinNetworkScreen from './JoinNetworkScreen';
+import ImportDbScreen from './ImportDbScreen';
+
+type ViewMode = 'choice' | 'new' | 'join' | 'importdb';
 
 export default function SetupScreen() {
   const { checkSetup } = useAuthStore();
+  const [view, setView] = useState<ViewMode>('choice');
   const [step, setStep] = useState(0);
   const [shopName, setShopName] = useState('');
   const [shopAddress, setShopAddress] = useState('');
@@ -22,32 +27,26 @@ export default function SetupScreen() {
 
   const handleFinish = async () => {
     try {
-      // Shop info
       if (shopName) await setSetting('shop_name', shopName);
       if (shopAddress) await setSetting('shop_address', shopAddress);
       if (shopPhone) await setSetting('shop_phone', shopPhone);
       if (shopNif) await setSetting('shop_nif', shopNif);
       await setSetting('currency', currency);
 
-      // Machine identity
       const machineId = generateMachineId();
       await setSetting('machine_id', machineId);
       await setSetting('machine_label', machineLabel);
 
-      // Network key
       const nk = networkKey || `CKB-${generateMachineId()}-${generateMachineId()}`.slice(0, 13);
       await setSetting('network_key', nk);
 
-      // Admin user — bcrypt hash compatible avec Desktop
       const adminHash = await hashPassword(adminPassword || 'admin123');
       await dbRun(
         'INSERT OR REPLACE INTO users (nom, email, role, password_hash, peut_modifier_factures, tentativas_login) VALUES (?, ?, ?, ?, ?, ?)',
         [adminName, adminEmail.toLowerCase().trim(), 'admin', adminHash, 1, 0]
       );
 
-      // Mark setup as done
       await setSetting('setup_done', '1');
-
       await checkSetup();
       Alert.alert(t('setup.complete'), '', [{ text: t('common.ok') }]);
     } catch (e: any) {
@@ -55,14 +54,60 @@ export default function SetupScreen() {
     }
   };
 
-  const renderStep = () => {
-    switch (step) {
-      case 0: // Welcome
-        return (
+  // Render sub-screens for join/import
+  if (view === 'join') {
+    return <JoinNetworkScreen onBack={() => setView('choice')} />;
+  }
+  if (view === 'importdb') {
+    return <ImportDbScreen onBack={() => setView('choice')} />;
+  }
+
+  // Choice screen
+  if (view === 'choice') {
+    return (
+      <View style={styles.container}>
+        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <View style={styles.stepContainer}>
             <Text style={styles.welcomeEmoji}>🏪</Text>
             <Text style={styles.title}>{t('setup.welcome')}</Text>
-            <Text style={styles.subtitle}>{t('setup.shopInfo')}</Text>
+            <Text style={styles.subtitle}>{t('setup.title')}</Text>
+          </View>
+
+          <TouchableOpacity style={styles.choiceBtn} onPress={() => setView('new')}>
+            <Text style={styles.choiceIcon}>🆕</Text>
+            <View style={styles.choiceTextWrap}>
+              <Text style={styles.choiceTitle}>{t('setup.newStore')}</Text>
+              <Text style={styles.choiceDesc}>{t('setup.newStoreDesc')}</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.choiceBtn} onPress={() => setView('join')}>
+            <Text style={styles.choiceIcon}>🌐</Text>
+            <View style={styles.choiceTextWrap}>
+              <Text style={styles.choiceTitle}>{t('setup.joinNetwork')}</Text>
+              <Text style={styles.choiceDesc}>{t('setup.joinNetworkDesc')}</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.choiceBtn} onPress={() => setView('importdb')}>
+            <Text style={styles.choiceIcon}>💾</Text>
+            <View style={styles.choiceTextWrap}>
+              <Text style={styles.choiceTitle}>{t('setup.restoreDb')}</Text>
+              <Text style={styles.choiceDesc}>{t('setup.restoreDbDesc')}</Text>
+            </View>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // New store wizard
+  const renderStep = () => {
+    switch (step) {
+      case 0:
+        return (
+          <View style={styles.stepContainer}>
+            <Text style={styles.title}>{t('setup.shopInfo')}</Text>
             <TextInput style={styles.input} placeholder={t('settings.shopName')} placeholderTextColor={COLORS.textMuted} value={shopName} onChangeText={setShopName} />
             <TextInput style={styles.input} placeholder={t('settings.shopAddress')} placeholderTextColor={COLORS.textMuted} value={shopAddress} onChangeText={setShopAddress} />
             <TextInput style={styles.input} placeholder={t('settings.shopPhone')} placeholderTextColor={COLORS.textMuted} value={shopPhone} onChangeText={setShopPhone} keyboardType="phone-pad" />
@@ -70,7 +115,7 @@ export default function SetupScreen() {
             <TextInput style={styles.input} placeholder={t('settings.currency')} placeholderTextColor={COLORS.textMuted} value={currency} onChangeText={setCurrency} />
           </View>
         );
-      case 1: // Machine
+      case 1:
         return (
           <View style={styles.stepContainer}>
             <Text style={styles.title}>{t('setup.machineInfo')}</Text>
@@ -79,7 +124,7 @@ export default function SetupScreen() {
             <Text style={styles.hint}>Laissez vide pour générer automatiquement</Text>
           </View>
         );
-      case 2: // Admin
+      case 2:
         return (
           <View style={styles.stepContainer}>
             <Text style={styles.title}>{t('setup.adminAccount')}</Text>
@@ -89,7 +134,7 @@ export default function SetupScreen() {
             <Text style={styles.hint}>Mot de passe par défaut: admin123</Text>
           </View>
         );
-      case 3: // Complete
+      case 3:
         return (
           <View style={styles.stepContainer}>
             <Text style={styles.doneEmoji}>✅</Text>
@@ -107,6 +152,9 @@ export default function SetupScreen() {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <TouchableOpacity style={styles.backToChoice} onPress={() => setView('choice')}>
+          <Text style={styles.backToChoiceText}>← {t('common.back')}</Text>
+        </TouchableOpacity>
         {renderStep()}
         <View style={styles.buttons}>
           {step > 0 && (
@@ -140,17 +188,29 @@ const styles = StyleSheet.create({
   stepContainer: { alignItems: 'center', marginBottom: SPACING.xl },
   welcomeEmoji: { fontSize: 64, marginBottom: SPACING.md },
   doneEmoji: { fontSize: 64, marginBottom: SPACING.md },
-  title: { fontSize: 28, fontWeight: 'bold', color: COLORS.text, textAlign: 'center', marginBottom: SPACING.sm },
+  title: { fontSize: 24, fontWeight: 'bold', color: COLORS.text, textAlign: 'center', marginBottom: SPACING.sm },
   subtitle: { fontSize: 16, color: COLORS.textSecondary, textAlign: 'center', marginBottom: SPACING.sm },
   hint: { fontSize: 12, color: COLORS.textMuted, textAlign: 'center', marginTop: SPACING.xs },
   input: { width: '100%', backgroundColor: COLORS.input, color: COLORS.text, borderRadius: RADIUS.md, padding: SPACING.md, fontSize: 16, marginBottom: SPACING.md, borderWidth: 1, borderColor: COLORS.border },
-  buttons: { flexDirection: 'row', justifyContent: 'center', gap: SPACING.md },
-  backBtn: { paddingVertical: SPACING.md, paddingHorizontal: SPACING.xl, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border },
+  buttons: { flexDirection: 'row', justifyContent: 'center', gap: SPACING.md, flexWrap: 'wrap' },
+  backBtn: { paddingVertical: SPACING.md, paddingHorizontal: SPACING.lg, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border },
   backBtnText: { color: COLORS.textSecondary, fontSize: 16, fontWeight: '600' },
-  nextBtn: { paddingVertical: SPACING.md, paddingHorizontal: SPACING.xl, borderRadius: RADIUS.md, backgroundColor: COLORS.primary },
+  nextBtn: { paddingVertical: SPACING.md, paddingHorizontal: SPACING.lg, borderRadius: RADIUS.md, backgroundColor: COLORS.primary },
   finishBtn: { backgroundColor: COLORS.success },
   nextBtnText: { color: COLORS.black, fontSize: 16, fontWeight: '700' },
   dots: { flexDirection: 'row', justifyContent: 'center', marginTop: SPACING.lg, gap: SPACING.sm },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.border },
   dotActive: { backgroundColor: COLORS.primary, width: 24 },
+  // Choice screen
+  choiceBtn: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md, padding: SPACING.lg, marginBottom: SPACING.md,
+    borderWidth: 1, borderColor: COLORS.border, width: '100%',
+  },
+  choiceIcon: { fontSize: 36, marginRight: SPACING.md },
+  choiceTextWrap: { flex: 1 },
+  choiceTitle: { fontSize: 18, fontWeight: 'bold', color: COLORS.text, marginBottom: 4 },
+  choiceDesc: { fontSize: 14, color: COLORS.textSecondary },
+  backToChoice: { alignSelf: 'flex-start', marginBottom: SPACING.lg },
+  backToChoiceText: { color: COLORS.primary, fontSize: 16, fontWeight: '600' },
 });

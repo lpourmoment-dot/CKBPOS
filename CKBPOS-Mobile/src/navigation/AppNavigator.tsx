@@ -20,6 +20,9 @@ import SettingsScreen from '../screens/SettingsScreen';
 import UsersScreen from '../screens/UsersScreen';
 import ReservationsScreen from '../screens/ReservationsScreen';
 import LicenseScreen from '../screens/LicenseScreen';
+import AuditLogScreen from '../screens/AuditLogScreen';
+import MessagingScreen from '../screens/MessagingScreen';
+import CoordDashboardScreen from '../screens/CoordDashboardScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -73,6 +76,9 @@ export default function AppNavigator() {
             <Stack.Screen name="Users" component={UsersScreen} options={{ headerShown: true, headerStyle: { backgroundColor: COLORS.surface }, headerTintColor: COLORS.text, title: t('nav.users') }} />
             <Stack.Screen name="Reservations" component={ReservationsScreen} options={{ headerShown: true, headerStyle: { backgroundColor: COLORS.surface }, headerTintColor: COLORS.text, title: t('nav.reservations') }} />
             <Stack.Screen name="License" component={LicenseScreen} options={{ headerShown: true, headerStyle: { backgroundColor: COLORS.surface }, headerTintColor: COLORS.text, title: t('nav.license') }} />
+            <Stack.Screen name="AuditLog" component={AuditLogScreen} options={{ headerShown: true, headerStyle: { backgroundColor: COLORS.surface }, headerTintColor: COLORS.text, title: 'Audit Log' }} />
+            <Stack.Screen name="Messaging" component={MessagingScreen} options={{ headerShown: true, headerStyle: { backgroundColor: COLORS.surface }, headerTintColor: COLORS.text, title: t('messaging.title') }} />
+            <Stack.Screen name="CoordDashboard" component={CoordDashboardScreen} options={{ headerShown: true, headerStyle: { backgroundColor: COLORS.surface }, headerTintColor: COLORS.text, title: t('coord.title') }} />
           </>
         )}
       </Stack.Navigator>

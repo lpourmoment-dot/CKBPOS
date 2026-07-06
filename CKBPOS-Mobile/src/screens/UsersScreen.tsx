@@ -125,7 +125,7 @@ const styles = StyleSheet.create({
   list: { padding: SPACING.md },
   card: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.md, marginBottom: SPACING.sm },
   cardInfo: { flex: 1 },
-  cardName: { fontSize: 16, fontWeight: '700', color: COLORS.text },
+  cardName: { fontSize: 16, fontWeight: '700', color: COLORS.text, flexShrink: 1 },
   cardEmail: { fontSize: 12, color: COLORS.textMuted },
   cardMeta: { flexDirection: 'row', gap: SPACING.sm, marginTop: SPACING.xs },
   roleBadge: { backgroundColor: COLORS.surfaceLight, borderRadius: RADIUS.sm, paddingHorizontal: SPACING.sm, paddingVertical: 2 },

@@ -98,7 +98,7 @@ export default function LicenseScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background, padding: SPACING.md },
   statusCard: { backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.lg, alignItems: 'center', borderLeftWidth: 4, marginBottom: SPACING.md },
-  statusText: { fontSize: 20, fontWeight: 'bold', marginTop: SPACING.sm },
+  statusText: { fontSize: 20, fontWeight: 'bold', marginTop: SPACING.sm, flexShrink: 1 },
   tierText: { color: COLORS.textSecondary, fontSize: 14, marginTop: 4 },
   expiresText: { color: COLORS.textMuted, fontSize: 12, marginTop: 4 },
   freeCard: { backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.md, marginBottom: SPACING.md },

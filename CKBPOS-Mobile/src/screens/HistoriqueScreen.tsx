@@ -37,20 +37,20 @@ export default function HistoriqueScreen() {
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View style={styles.headerRow}>
-            <Text style={[styles.headerCell, { width: 40 }]}>#</Text>
-            <Text style={[styles.headerCell, { flex: 1 }]}>Data</Text>
-            <Text style={[styles.headerCell, { width: 40 }]}>Pag</Text>
-            <Text style={[styles.headerCell, { width: 45 }]}>Stat</Text>
-            <Text style={[styles.headerCell, { width: 80, textAlign: 'right' }]}>{currency}</Text>
+            <Text style={[styles.headerCell, { flex: 0.8 }]}>#</Text>
+            <Text style={[styles.headerCell, { flex: 2.5 }]}>Data</Text>
+            <Text style={[styles.headerCell, { flex: 0.8 }]}>Pag</Text>
+            <Text style={[styles.headerCell, { flex: 1 }]}>Stat</Text>
+            <Text style={[styles.headerCell, { flex: 1.2, textAlign: 'right' }]}>{currency}</Text>
           </View>
         }
         renderItem={({ item }) => (
           <View style={styles.row}>
-            <Text style={[styles.cell, { width: 40, color: COLORS.primary }]}>{item.id}</Text>
-            <Text style={[styles.cell, { flex: 1 }]}>{new Date(item.date_vente).toLocaleDateString('pt-BR')} {new Date(item.date_vente).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</Text>
-            <Text style={[styles.cell, { width: 40 }]}>{payLabel[item.mode_paiement] || 'NUM'}</Text>
-            <Text style={[styles.cell, { width: 45, fontWeight: 'bold', color: item.statut === 'annule' ? COLORS.error : COLORS.success }]}>{statutLabel[item.statut] || 'OK'}</Text>
-            <Text style={[styles.cell, { width: 80, textAlign: 'right', fontWeight: '700', color: item.statut === 'annule' ? COLORS.error : COLORS.text }]}>{item.total?.toLocaleString('fr-FR')}</Text>
+            <Text style={[styles.cell, { flex: 0.8, color: COLORS.primary }]}>{item.id}</Text>
+            <Text style={[styles.cell, { flex: 2.5 }]} numberOfLines={1}>{new Date(item.date_vente).toLocaleDateString('pt-BR')} {new Date(item.date_vente).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</Text>
+            <Text style={[styles.cell, { flex: 0.8 }]}>{payLabel[item.mode_paiement] || 'NUM'}</Text>
+            <Text style={[styles.cell, { flex: 1, fontWeight: 'bold', color: item.statut === 'annule' ? COLORS.error : COLORS.success }]}>{statutLabel[item.statut] || 'OK'}</Text>
+            <Text style={[styles.cell, { flex: 1.2, textAlign: 'right', fontWeight: '700', color: item.statut === 'annule' ? COLORS.error : COLORS.text }]}>{item.total?.toLocaleString('fr-FR')}</Text>
           </View>
         )}
       />
@@ -67,5 +67,5 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: 'row', paddingVertical: SPACING.sm, borderBottomWidth: 2, borderBottomColor: COLORS.border },
   headerCell: { fontSize: 11, fontWeight: 'bold', color: COLORS.textMuted, textTransform: 'uppercase' },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: SPACING.sm, borderBottomWidth: 1, borderBottomColor: COLORS.border + '40' },
-  cell: { fontSize: 12, color: COLORS.textSecondary },
+  cell: { fontSize: 12, color: COLORS.textSecondary, flexShrink: 1 },
 });

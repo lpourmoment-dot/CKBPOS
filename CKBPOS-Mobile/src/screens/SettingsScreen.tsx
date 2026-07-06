@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { COLORS, SPACING, RADIUS } from '../theme';
 import { t } from '../i18n';
 import { useI18n } from '../i18n';
-import { getSetting, setSetting, dbAll } from '../db/sqlite';
+import { getSetting, setSetting } from '../db/sqlite';
 import { useSyncStore } from '../stores/syncStore';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import * as DocumentPicker from 'expo-document-picker';
 
 export default function SettingsScreen() {
   const navigation = useNavigation<any>();
@@ -14,6 +17,8 @@ export default function SettingsScreen() {
   const { status: syncStatus, connect, disconnect } = useSyncStore();
   const [form, setForm] = useState({ shop_name: '', shop_address: '', shop_phone: '', shop_nif: '', currency: 'AOA', machine_id: '', machine_label: '', supabase_url: '', supabase_key: '' });
   const [saved, setSaved] = useState(false);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [restoreLoading, setRestoreLoading] = useState(false);
 
   useEffect(() => { loadSettings(); }, []);
 
@@ -36,6 +41,114 @@ export default function SettingsScreen() {
     } catch (e: any) {
       Alert.alert(t('common.error'), e.message);
     }
+  };
+
+  const handleBackup = async () => {
+    try {
+      setBackupLoading(true);
+      const dbPath = `${FileSystem.documentDirectory}SQLite/ckbpos.db`;
+
+      // Check if DB file exists
+      const info = await FileSystem.getInfoAsync(dbPath);
+      if (!info.exists) {
+        Alert.alert(t('common.error'), 'Base de dados não encontrada');
+        return;
+      }
+
+      // Copy DB to a shareable location
+      const backupDir = `${FileSystem.cacheDirectory}backups/`;
+      const dirInfo = await FileSystem.getInfoAsync(backupDir);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(backupDir, { intermediates: true });
+      }
+
+      const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const backupPath = `${backupDir}ckbpos_backup_${timestamp}.db`;
+      await FileSystem.copyAsync({ from: dbPath, to: backupPath });
+
+      // Share the backup file
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(backupPath, {
+          mimeType: 'application/octet-stream',
+          dialogTitle: 'Salvar backup CKBPOS',
+        });
+      } else {
+        Alert.alert('Backup criado', backupPath);
+      }
+    } catch (e: any) {
+      Alert.alert(t('common.error'), e.message);
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  const handleRestore = async () => {
+    Alert.alert(
+      'Restaurar backup',
+      'Isso vai SUBSTITUIR todos os dados atuais. Tem certeza?',
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: 'Restaurar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setRestoreLoading(true);
+
+              const result = await DocumentPicker.getDocumentAsync({
+                type: '*/*',
+                copyToCacheDirectory: true,
+              });
+
+              if (result.canceled || !result.assets?.[0]) {
+                setRestoreLoading(false);
+                return;
+              }
+
+              const file = result.assets[0];
+              const sourceUri = file.uri;
+
+              // Validate it's a SQLite DB
+              const content = await FileSystem.readAsStringAsync(sourceUri, { encoding: FileSystem.EncodingType.Base64 });
+              if (!content.startsWith('U1FMaXRlIGZvcm1hdCAz')) {
+                // Try as text
+                const textContent = await FileSystem.readAsStringAsync(sourceUri);
+                if (!textContent.includes('CREATE TABLE') && !textContent.includes('INSERT INTO')) {
+                  Alert.alert(t('setup.invalidDb'));
+                  setRestoreLoading(false);
+                  return;
+                }
+              }
+
+              // Get DB path
+              const dbDir = `${FileSystem.documentDirectory}SQLite`;
+              const dbRestorePath = `${dbDir}/ckbpos.db`;
+
+              // Copy imported file
+              await FileSystem.copyAsync({ from: sourceUri, to: dbRestorePath });
+
+              // Clean WAL/SHM
+              try {
+                const walPath = `${dbDir}/ckbpos.db-wal`;
+                const shmPath = `${dbDir}/ckbpos.db-shm`;
+                const walInfo = await FileSystem.getInfoAsync(walPath);
+                if (walInfo.exists) await FileSystem.deleteAsync(walPath);
+                const shmInfo = await FileSystem.getInfoAsync(shmPath);
+                if (shmInfo.exists) await FileSystem.deleteAsync(shmPath);
+              } catch {}
+
+              Alert.alert('Backup restaurado', 'O aplicativo vai reiniciar', [
+                { text: 'OK', onPress: () => { /* App will restart via reload */ } }
+              ]);
+            } catch (e: any) {
+              Alert.alert(t('common.error'), e.message);
+            } finally {
+              setRestoreLoading(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -77,6 +190,27 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Backup / Restore */}
+      <Text style={styles.sectionTitle}>Backup / Restore</Text>
+      <View style={styles.backupRow}>
+        <TouchableOpacity style={styles.backupBtn} onPress={handleBackup} disabled={backupLoading}>
+          {backupLoading ? (
+            <ActivityIndicator size="small" color={COLORS.primary} />
+          ) : (
+            <Ionicons name="cloud-upload" size={20} color={COLORS.primary} />
+          )}
+          <Text style={styles.backupBtnText}>Backup</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.backupBtn} onPress={handleRestore} disabled={restoreLoading}>
+          {restoreLoading ? (
+            <ActivityIndicator size="small" color={COLORS.warning} />
+          ) : (
+            <Ionicons name="cloud-download" size={20} color={COLORS.warning} />
+          )}
+          <Text style={styles.backupBtnText}>Restaurar</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Navigation Links */}
       <Text style={styles.sectionTitle}>Navigation</Text>
       <TouchableOpacity style={styles.navLink} onPress={() => navigation.navigate('Users')}>
@@ -112,7 +246,7 @@ const styles = StyleSheet.create({
   langRow: { flexDirection: 'row', gap: SPACING.sm, marginBottom: SPACING.md },
   langBtn: { flex: 1, padding: SPACING.sm, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, alignItems: 'center' },
   langActive: { borderColor: COLORS.primary, backgroundColor: COLORS.primary + '10' },
-  langText: { color: COLORS.textSecondary, fontWeight: '600' },
+  langText: { color: COLORS.textSecondary, fontWeight: '600', flexShrink: 1 },
   syncRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.md },
   syncStatus: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm },
   syncDot: { width: 8, height: 8, borderRadius: 4 },
@@ -121,6 +255,9 @@ const styles = StyleSheet.create({
   syncBtnText: { color: COLORS.primary, fontWeight: '600' },
   navLink: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.md, marginBottom: SPACING.sm, gap: SPACING.sm },
   navLinkText: { flex: 1, color: COLORS.text, fontSize: 16 },
+  backupRow: { flexDirection: 'row', gap: SPACING.md, marginBottom: SPACING.md },
+  backupBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.md, gap: SPACING.sm, borderWidth: 1, borderColor: COLORS.border },
+  backupBtnText: { color: COLORS.text, fontSize: 14, fontWeight: '600' },
   saveBtn: { backgroundColor: COLORS.primary, borderRadius: RADIUS.md, padding: SPACING.md, alignItems: 'center', marginTop: SPACING.lg },
   saveBtnSaved: { backgroundColor: COLORS.success },
   saveBtnText: { color: COLORS.black, fontSize: 16, fontWeight: '700' },
