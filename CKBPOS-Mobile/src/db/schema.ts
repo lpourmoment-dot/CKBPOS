@@ -229,6 +229,17 @@ export const INITIAL_SCHEMA = `
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_machine TEXT NOT NULL,
+    from_label TEXT,
+    from_user_nom TEXT,
+    to_machine TEXT DEFAULT 'all',
+    content TEXT NOT NULL,
+    msg_type TEXT DEFAULT 'text',
+    read_at TEXT,
+    created_at TEXT DEFAULT (datetime('now','utc'))
+  );
 `;
 
 // Triggers SQLite — sync delta pour cloud sync

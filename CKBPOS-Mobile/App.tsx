@@ -64,7 +64,7 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   loadingContainer: { flex: 1, backgroundColor: COLORS.background, justifyContent: 'center', alignItems: 'center' },
-  logo: { width: 180, height: 180 },
+  logo: { width: 160, height: 160, maxWidth: '50%' },
   loadingSubtext: { fontSize: 14, color: COLORS.textMuted, marginTop: 8 },
   errorText: { fontSize: 18, fontWeight: 'bold', color: COLORS.error, marginBottom: 8, marginTop: 16 },
   errorDetail: { fontSize: 12, color: COLORS.textMuted, textAlign: 'center', paddingHorizontal: 32 },

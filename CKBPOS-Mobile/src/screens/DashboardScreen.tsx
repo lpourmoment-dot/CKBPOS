@@ -1,13 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, useWindowDimensions } from 'react-native';
 import { COLORS, SPACING, RADIUS } from '../theme';
 import { t } from '../i18n';
 import { useAuthStore } from '../stores/authStore';
 import { useNavigation } from '@react-navigation/native';
 import { dbAll, getSetting } from '../db/sqlite';
 import { Ionicons } from '@expo/vector-icons';
-
-const { width } = Dimensions.get('window');
 
 interface DashboardData {
   todaySales: number;
@@ -19,6 +17,7 @@ interface DashboardData {
 }
 
 export default function DashboardScreen() {
+  const { width } = useWindowDimensions();
   const { user, logout } = useAuthStore();
   const navigation = useNavigation<any>();
   const [data, setData] = useState<DashboardData>({ todaySales: 0, todayRevenue: 0, totalProducts: 0, lowStockCount: 0, recentSales: [], topProducts: [] });
@@ -69,8 +68,10 @@ export default function DashboardScreen() {
     }
   };
 
+  const quickActionWidth = (width - SPACING.md * 2 - SPACING.md * 2) / 3;
+
   const QuickAction = ({ icon, label, onPress, badge }: { icon: string; label: string; onPress: () => void; badge?: number }) => (
-    <TouchableOpacity style={styles.quickAction} onPress={onPress}>
+    <TouchableOpacity style={[styles.quickAction, { width: quickActionWidth }]} onPress={onPress}>
       <View style={styles.quickActionIcon}>
         <Ionicons name={icon as any} size={24} color={COLORS.primary} />
         {badge ? <View style={styles.badge}><Text style={styles.badgeText}>{badge}</Text></View> : null}
@@ -164,16 +165,16 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   content: { padding: SPACING.md, paddingBottom: 100 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.lg, marginTop: SPACING.xxl },
-  greeting: { fontSize: 24, fontWeight: 'bold', color: COLORS.text },
+  greeting: { fontSize: 24, fontWeight: 'bold', color: COLORS.text, flexShrink: 1 },
   shopName: { fontSize: 14, color: COLORS.primary, marginTop: 2 },
   logoutBtn: { padding: SPACING.sm },
   statsRow: { flexDirection: 'row', gap: SPACING.md, marginBottom: SPACING.sm },
   statCard: { flex: 1, backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.md, borderLeftWidth: 3 },
-  statValue: { fontSize: 22, fontWeight: 'bold', color: COLORS.text },
+  statValue: { fontSize: 22, fontWeight: 'bold', color: COLORS.text, flexShrink: 1 },
   statLabel: { fontSize: 12, color: COLORS.textSecondary, marginTop: 4 },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text, marginTop: SPACING.lg, marginBottom: SPACING.sm },
   quickActions: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACING.md },
-  quickAction: { width: (width - SPACING.md * 2 - SPACING.md * 2) / 3, alignItems: 'center', padding: SPACING.md, backgroundColor: COLORS.card, borderRadius: RADIUS.md },
+  quickAction: { alignItems: 'center', padding: SPACING.md, backgroundColor: COLORS.card, borderRadius: RADIUS.md },
   quickActionIcon: { position: 'relative', marginBottom: SPACING.xs },
   badge: { position: 'absolute', top: -4, right: -8, backgroundColor: COLORS.error, borderRadius: 10, minWidth: 18, height: 18, justifyContent: 'center', alignItems: 'center' },
   badgeText: { color: COLORS.white, fontSize: 10, fontWeight: 'bold' },

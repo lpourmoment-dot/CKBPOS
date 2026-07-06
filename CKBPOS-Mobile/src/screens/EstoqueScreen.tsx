@@ -120,7 +120,7 @@ export default function EstoqueScreen() {
             <View style={styles.typeRow}>
               {types.map(tp => (
                 <TouchableOpacity key={tp.key} style={[styles.typeBtn, movForm.type === tp.key && { backgroundColor: tp.color + '30', borderColor: tp.color }]} onPress={() => setMovForm({ ...movForm, type: tp.key as any })}>
-                  <Text style={[styles.typeBtnText, movForm.type === tp.key && { color: tp.color }]}>{tp.label}</Text>
+                  <Text style={[styles.typeBtnText, movForm.type === tp.key && { color: tp.color }]} numberOfLines={1}>{tp.label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -146,7 +146,7 @@ const styles = StyleSheet.create({
   list: { padding: SPACING.md, paddingTop: 0 },
   stockCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.md, marginBottom: SPACING.sm },
   stockInfo: { flex: 1 },
-  stockName: { fontSize: 15, fontWeight: '600', color: COLORS.text },
+  stockName: { fontSize: 15, fontWeight: '600', color: COLORS.text, flexShrink: 1 },
   stockCat: { fontSize: 12, color: COLORS.textMuted },
   stockBadge: { flexDirection: 'row', alignItems: 'baseline', backgroundColor: COLORS.surfaceLight, borderRadius: RADIUS.sm, paddingHorizontal: SPACING.sm, paddingVertical: 4, marginRight: SPACING.sm },
   stockBadgeAlert: { backgroundColor: COLORS.error + '20' },
@@ -156,7 +156,7 @@ const styles = StyleSheet.create({
   movType: { width: 36, height: 36, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
   movTypeText: { color: COLORS.white, fontSize: 10, fontWeight: 'bold' },
   movInfo: { flex: 1 },
-  movProduct: { color: COLORS.text, fontWeight: '600', fontSize: 14 },
+  movProduct: { color: COLORS.text, fontWeight: '600', fontSize: 14, flexShrink: 1 },
   movDetail: { color: COLORS.textMuted, fontSize: 12 },
   movDate: { color: COLORS.textSecondary, fontSize: 12 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
@@ -164,8 +164,8 @@ const styles = StyleSheet.create({
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.md },
   modalTitle: { fontSize: 18, fontWeight: 'bold', color: COLORS.text },
   typeRow: { flexDirection: 'row', gap: SPACING.sm, marginBottom: SPACING.md },
-  typeBtn: { flex: 1, padding: SPACING.sm, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, alignItems: 'center' },
-  typeBtnText: { color: COLORS.textSecondary, fontSize: 12, fontWeight: '600' },
+  typeBtn: { flex: 1, padding: SPACING.sm, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, alignItems: 'center', minWidth: 0 },
+  typeBtnText: { color: COLORS.textSecondary, fontSize: 12, fontWeight: '600', flexShrink: 1 },
   input: { backgroundColor: COLORS.input, color: COLORS.text, borderRadius: RADIUS.md, padding: SPACING.md, fontSize: 16, marginBottom: SPACING.sm, borderWidth: 1, borderColor: COLORS.border },
   saveBtn: { backgroundColor: COLORS.primary, borderRadius: RADIUS.md, padding: SPACING.md, alignItems: 'center', marginTop: SPACING.sm },
   saveBtnText: { color: COLORS.black, fontSize: 16, fontWeight: '700' },
