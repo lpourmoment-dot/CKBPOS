@@ -1,6 +1,6 @@
 {
   "name": "ckbpos",
-  "version": "5.0.6",
+  "version": "5.0.9",
   "description": "CKBPOS - Application Point de Vente Professionnelle",
   "main": "main.js",
   "author": "CKB",
@@ -24,6 +24,15 @@
     "directories": {
       "output": "dist"
     },
+    "extraResources": [
+      {
+        "from": "resources/platform-tools",
+        "to": "platform-tools",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"

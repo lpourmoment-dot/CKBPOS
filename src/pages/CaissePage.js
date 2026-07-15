@@ -167,10 +167,25 @@ export default function CaissePage() {
     setReservations(res.data || []);
   };
 
+  useEffect(() => {
+    if (!window.electron?.onSyncUpdate) return undefined;
+    return window.electron.onSyncUpdate((payload) => {
+      if (payload?.status === 'syncing') return;
+      loadProducts();
+      loadReservations();
+    });
+  }, []);
+
   // \u2705 v1.2.3 — Traitement du code-barres scanné
   const handleBarcodeScanned = (code) => {
     // Chercher le produit par barcode exact
-    const product = products.find(p => p.barcode && p.barcode.trim() === code.trim());
+    const matches = products.filter(p => p.barcode && p.barcode.trim() === code.trim());
+    if (matches.length > 1) {
+      setScanFeedback({ type: 'error', msg: `Code-barres duplique : ${code}. Corrige les produits/saveurs.` });
+      setTimeout(() => setScanFeedback(null), 3000);
+      return;
+    }
+    const product = matches[0];
     if (!product) {
       setScanFeedback({ type: 'error', msg: `Code non trouvé : ${code}` });
       setTimeout(() => setScanFeedback(null), 2500);
@@ -196,7 +211,7 @@ export default function CaissePage() {
   };
 
   const getUnitsPerCarton = (p) => Math.max(1, Math.round(p.unites_par_carton));
-  const getStockInUnits   = (p) => Math.round(p.stock_cartons * getUnitsPerCarton(p));
+  const getStockInUnits   = (p) => Math.round((p.stock_cartons ?? 0) * getUnitsPerCarton(p) + 0.001);
   const getUnitsUsed = (item) => {
     if (item.type==='carton') return item.qty * item.unites;
     if (item.type==='demi')   return item.qty * Math.ceil(item.unites/2);
@@ -253,8 +268,8 @@ export default function CaissePage() {
     // Pour les variants, on utilise l'objet variant frais passé en paramètre (rechargé dans handleTypeClick)
     const freshProduct = products.find(p => p.id === product.id) || product;
     const stockUnits   = variant
-      ? Math.round((variant.stock_cartons ?? 0) * upc)
-      : Math.round((freshProduct.stock_cartons ?? 0) * upc);
+      ? Math.round((variant.stock_cartons ?? 0) * upc + 0.001)
+      : Math.round((freshProduct.stock_cartons ?? 0) * upc + 0.001);
 
     const usedUnits = cart
       .filter(i => i.productId === product.id && i.variantId === (variant?.id || null))
@@ -297,7 +312,7 @@ export default function CaissePage() {
       // FIX: lit le stock FRAIS depuis products[] — jamais item.stockUnits stale
       const freshProduct    = products.find(p => p.id === item.productId);
       const freshStockUnits = freshProduct
-        ? Math.round((freshProduct.stock_cartons ?? 0) * upc)
+        ? Math.round((freshProduct.stock_cartons ?? 0) * upc + 0.001)
         : item.stockUnits;
       const otherUsed = prev
         .filter(i => i.productId === item.productId && i.variantId === item.variantId && i.cartKey !== cartKey)
@@ -317,7 +332,7 @@ export default function CaissePage() {
       // \u2705 FIX STOCK STALE : relit le stock frais depuis products[] state
       const freshProduct  = products.find(p => p.id === item.productId);
       const freshStockUnits = freshProduct
-        ? Math.round((freshProduct.stock_cartons ?? 0) * upc)
+        ? Math.round((freshProduct.stock_cartons ?? 0) * upc + 0.001)
         : item.stockUnits; // fallback sur la valeur initiale si produit introuvable
 
       const otherUsed  = prev
@@ -365,6 +380,37 @@ export default function CaissePage() {
     }
   };
 
+  const assertFreshStockAvailable = async (cartItems) => {
+    const needed = new Map();
+    for (const item of cartItems) {
+      const key = `${item.productId}:${item.variantId || 'none'}`;
+      const unitsConsumed = item.type === 'carton'
+        ? item.qty * item.unites
+        : item.type === 'demi'
+          ? item.qty * Math.ceil(item.unites / 2)
+          : item.qty;
+      const cartonsToRemove = unitsConsumed / item.unites;
+      const current = needed.get(key) || {
+        productId: item.productId,
+        variantId: item.variantId || null,
+        nom: item.nom,
+        qty: 0,
+      };
+      current.qty += cartonsToRemove;
+      needed.set(key, current);
+    }
+
+    for (const item of needed.values()) {
+      const row = item.variantId
+        ? (await window.electron.dbGet("SELECT stock_cartons FROM product_variants WHERE id=?", [item.variantId])).data
+        : (await window.electron.dbGet("SELECT stock_cartons FROM products WHERE id=?", [item.productId])).data;
+      const available = Number(row?.stock_cartons) || 0;
+      if (available <= 0 || item.qty > available + 0.001) {
+        throw new Error(`${t('cashier','stockInsuf') || 'Stock insuffisant !'} ${item.nom} — Disponível: ${Math.max(0, available).toLocaleString(intlLocale)} cx`);
+      }
+    }
+  };
+
   const handleSale = async () => {
     if (isProcessing.current) return;
     // \u2705 Remplacé alert() natifs \u2192 showAlert React (les validations bloquantes sont déjà gérées
@@ -378,6 +424,7 @@ export default function CaissePage() {
     }
     setLoading(true); setShowPayment(false);
     try {
+      await assertFreshStockAvailable(cart);
       const frRes = await window.electron.nextFactureNum();
       const numeroFacture = frRes.success ? frRes.numero : '';
       let clientId=null;
@@ -701,7 +748,7 @@ export default function CaissePage() {
                       {availUnits<=0&&<span style={{fontSize:9,fontWeight:700,color:'var(--danger)',background:'rgba(239,68,68,0.12)',borderRadius:4,padding:'1px 5px',border:'1px solid rgba(239,68,68,0.3)'}}>RUPTURA</span>}
                     </div>
                   </div>
-                  {['carton','demi','unite'].map((type, tIdx)=>{
+                  {['carton','demi','unite'].filter(t => t === 'carton' || upc > 1).map((type, tIdx)=>{
                     const typeUnits=type==='carton'?upc:type==='demi'?Math.ceil(upc/2):1;
                     const canAdd=availUnits>=typeUnits;
                     return (

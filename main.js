@@ -262,8 +262,6 @@ app.whenReady().then(() => {
   // Auto-update : check au démarrage (5s après affichage, silencieux si rien)
   setupAutoUpdater();
   setTimeout(() => checkForUpdates(true), 5000);
-  // Check périodique : toutes les 30 minutes, même app en cours d'utilisation
-  setInterval(() => checkForUpdates(true), 30 * 60 * 1000);
   // \u2705 Licensing — enregistrement des IPC de licence (apres init complete du module)
   setTimeout(() => {
     try { registerLicenseIPC(db, ipcMain, MACHINE_ID); }
@@ -717,53 +715,32 @@ ipcMain.handle('caderno-entries-list', (_, { date_jour, user_id }) => {
   } catch(e) { return { success:false, error:e.message }; }
 });
 
-// ── Ajouter ou cumuler une entrée ──
-// Règle : même nom + même motivo + même date_jour \u2192 additionne le montant
+// ── Ajouter une entrée (toujours nouvelle ligne) ──
 ipcMain.handle('caderno-entries-add', (_, entry) => {
   try {
     const { nom, motivo, montant, montant_raw, note, direction, est_dette, user_id, machine_id, date_jour, categorie_depense } = entry;
 
-    // Chercher si une entrée identique existe déjà aujourd'hui
-    const existing = db.prepare(
-      'SELECT * FROM caderno_entries WHERE nom=? AND motivo=? AND date_jour=? LIMIT 1'
-    ).get(nom, motivo, date_jour);
+    const statutDette = est_dette ? 'pendente' : null;
+    const r = db.prepare(
+      `INSERT INTO caderno_entries
+       (nom, motivo, montant, montant_raw, note, direction, est_dette, statut_dette, user_id, machine_id, date_jour, categorie_depense)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).run(nom, motivo, montant||0, montant_raw||'', note||'', direction, est_dette?1:0, statutDette, user_id, machine_id||'LOCAL', date_jour, categorie_depense||null);
 
-    if (existing) {
-      // Cumuler
-      const newMontant = existing.montant + (montant || 0);
-      const newRaw = existing.montant_raw
-        ? existing.montant_raw + '+' + (montant_raw || montant)
-        : (montant_raw || String(montant));
-      db.prepare(
-        'UPDATE caderno_entries SET montant=?, montant_raw=?, note=? WHERE id=?'
-      ).run(newMontant, newRaw, note || existing.note, existing.id);
-      return { success:true, id:existing.id, cumul:true };
-    } else {
-      // Nouvelle entrée
-      const statutDette = est_dette ? 'pendente' : null;
-      const r = db.prepare(
-        `INSERT INTO caderno_entries
-         (nom, motivo, montant, montant_raw, note, direction, est_dette, statut_dette, user_id, machine_id, date_jour, categorie_depense)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).run(nom, motivo, montant||0, montant_raw||'', note||'', direction, est_dette?1:0, statutDette, user_id, machine_id||'LOCAL', date_jour, categorie_depense||null);
+    try {
+      const desc = `Caderno: ${motivo} — ${nom}`;
+      if (direction === 'entree') {
+        db.prepare(
+          "INSERT INTO lancamentos_contabilisticos (vente_id,descricao,conta_debito,conta_credito,valor,machine_id) VALUES (?,?,?,?,?,?)"
+        ).run(null, desc, '43', '711', montant||0, machine_id||'LOCAL');
+      } else {
+        db.prepare(
+          "INSERT INTO lancamentos_contabilisticos (vente_id,descricao,conta_debito,conta_credito,valor,machine_id) VALUES (?,?,?,?,?,?)"
+        ).run(null, desc, '612', '43', montant||0, machine_id||'LOCAL');
+      }
+    } catch(_pgc) {}
 
-      // Écriture comptable PGC automatique
-      try {
-        const entryId = r.lastInsertRowid;
-        const desc = `Caderno: ${motivo} — ${nom}`;
-        if (direction === 'entree') {
-          db.prepare(
-            "INSERT INTO lancamentos_contabilisticos (vente_id,descricao,conta_debito,conta_credito,valor,machine_id) VALUES (?,?,?,?,?,?)"
-          ).run(null, desc, '43', '711', montant||0, machine_id||'LOCAL');
-        } else {
-          db.prepare(
-            "INSERT INTO lancamentos_contabilisticos (vente_id,descricao,conta_debito,conta_credito,valor,machine_id) VALUES (?,?,?,?,?,?)"
-          ).run(null, desc, '612', '43', montant||0, machine_id||'LOCAL');
-        }
-      } catch(_pgc) {}
-
-      return { success:true, id:r.lastInsertRowid, cumul:false };
-    }
+    return { success:true, id:r.lastInsertRowid, cumul:false };
   } catch(e) { return { success:false, error:e.message }; }
 });
 
@@ -1381,92 +1358,7 @@ function printHTML(html, copies = 1, isTicket = false, ticketData = null) {
   });
 }
 
-ipcMain.handle('print-ticket', async (_, data) => {
-  try {
-    // ── v1.9.1 — Mode impression partagée ──
-    const printerMode = db.prepare("SELECT value FROM settings WHERE key='printer_mode'").get()?.value || 'local';
-    const targetId    = db.prepare("SELECT value FROM settings WHERE key='printer_machine_id'").get()?.value || '';
-    if (printerMode === 'shared' && targetId && targetId !== MACHINE_ID) {
-      const peer = peersMap.get(targetId);
-      if (peer?.ws?.readyState === WebSocket.OPEN) {
-        try {
-          await sendPrintRequest(targetId, 'ticket', data);
-          return { success: true, remote: true };
-        } catch(remoteErr) {
-          console.error('[PRINT] Fallback local (pair offline):', remoteErr.message);
-          // fallback local — continuer
-        }
-      } else {
-        console.warn('[PRINT] Machine cible hors ligne — fallback local');
-      }
-    }
-    // ── Mode local (défaut) ──
-    let qrDataUrl = '';
-    if (QRCode) {
-      try {
-        const qrText = [
-          data.numeroFacture || 'N/A',
-          `${data.total} ${data.currency}`,
-          data.date,
-          data.seller
-        ].join('|');
-        qrDataUrl = await QRCode.toDataURL(qrText, {
-          width: 128, margin: 2, errorCorrectionLevel: 'L',
-          color: { dark: '#000000', light: '#ffffff' }
-        });
-      } catch(e) { console.log('QR error:', e.message); }
-    }
-    const { copiesTicket, ticketSizeMm } = getPrintSettings();
-    const copies = data.copies || copiesTicket || 2;
-    const flags = getTicketFlags();
-    // v5.0 — Pass ticket data for ESC/POS generation
-    const ticketDataForESCPOS = {
-      shopName: data.shopName, shopAddress: data.shopAddress, shopPhone: data.shopPhone, shopNif: data.shopNif,
-      clientNom: data.clientNom, clientNif: data.clientNif,
-      items: data.items, total: data.total, cashGiven: data.cashGiven, change: data.change,
-      seller: data.seller, date: data.date, currency: data.currency,
-      payMode: data.payMode, montantDinheiro: data.montantDinheiro, montantExpress: data.montantExpress,
-      numeroFacture: data.numeroFacture, segundaVia: data.segundaVia, statut: data.statut,
-      flags, appVersion: APP_VERSION,
-    };
-    const result = await printHTML(generateTicketHTML({ ...data, qrDataUrl, flags, ticketSizeMm }), copies, true, ticketDataForESCPOS);
-    return { success: true, copies, ...(result || {}) };
-  }
-  catch(e) {
-    console.error('[print-ticket]', e.message);
-    return { success: true, error: e.message };
-  }
-});
-ipcMain.handle('print-shift-report', async (_, data) => {
-  try {
-    // ── v1.9.1 — Mode impression partagée ──
-    const printerMode = db.prepare("SELECT value FROM settings WHERE key='printer_mode'").get()?.value || 'local';
-    const targetId    = db.prepare("SELECT value FROM settings WHERE key='printer_machine_id'").get()?.value || '';
-    if (printerMode === 'shared' && targetId && targetId !== MACHINE_ID) {
-      const peer = peersMap.get(targetId);
-      if (peer?.ws?.readyState === WebSocket.OPEN) {
-        try { await sendPrintRequest(targetId, 'shift', data); return { success: true, remote: true }; }
-        catch(remoteErr) { console.error('[PRINT] Fallback local shift:', remoteErr.message); }
-      }
-    }
-    const { copiesShift, ticketSizeMm } = getPrintSettings();
-    const copies = data.copies || copiesShift || 1;
-    let cadernoResume = null;
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const rows = db.prepare('SELECT direction, montant, est_dette, statut_dette FROM caderno_entries WHERE date_jour=?').all(today);
-      if (rows.length > 0) {
-        const totalPlus  = rows.filter(e => e.direction === 'entree').reduce((s,e) => s + e.montant, 0);
-        const totalMoins = rows.filter(e => e.direction !== 'entree').reduce((s,e) => s + e.montant, 0);
-        const dettes     = rows.filter(e => e.est_dette && e.statut_dette !== 'pago').reduce((s,e) => s + e.montant, 0);
-        cadernoResume = { totalPlus, totalMoins, dettes, net: totalPlus - totalMoins };
-      }
-    } catch(err) { console.error('[shift caderno]', err.message); }
-    await printHTML(generateShiftHTML({ ...data, cadernoResume, ticketSizeMm }), copies, true);
-    return { success: true, copies };
-  }
-  catch(e) { return { success:false, error:e.message }; }
-});
+// v1.9.1 print-ticket / print-shift-report supprimés — remplacés par les versions v3 (queue coordinator) plus bas
 ipcMain.handle('print-produtos-report', async (_, data) => {
   try {
     const isTicket = data.format === 'ticket';
@@ -1493,28 +1385,7 @@ ipcMain.handle('print-historique-report', async (_, data) => {
   }
 });
 
-// v1.3.0 -- Impression Caderno de Caixa (résumé du jour)
-ipcMain.handle('print-caderno', async (_, data) => {
-  try {
-    // ── v1.9.1 — Mode impression partagée ──
-    const printerMode = db.prepare("SELECT value FROM settings WHERE key='printer_mode'").get()?.value || 'local';
-    const targetId    = db.prepare("SELECT value FROM settings WHERE key='printer_machine_id'").get()?.value || '';
-    if (printerMode === 'shared' && targetId && targetId !== MACHINE_ID) {
-      const peer = peersMap.get(targetId);
-      if (peer?.ws?.readyState === WebSocket.OPEN) {
-        try { await sendPrintRequest(targetId, 'caderno', data); return { success: true, remote: true }; }
-        catch(remoteErr) { console.error('[PRINT] Fallback local caderno:', remoteErr.message); }
-      }
-    }
-    const { ticketSizeMm } = getPrintSettings();
-    const html = generateCadernoTicketHTML({ ...data, ticketSizeMm });
-    await printHTML(html, 1, true);
-    return { success: true };
-  } catch(e) {
-    console.error('[print-caderno]', e.message);
-    return { success: true, error: e.message };
-  }
-});
+// v1.3.0 print-caderno supprimé — remplacé par la version v3 (queue coordinator) plus bas
 
 // HTML Templates — extracted to src/main/templates.js
 // In-App Console — extracted to src/main/console.js
@@ -1529,6 +1400,7 @@ ipcMain.handle('print-caderno', async (_, data) => {
 const WebSocket = require('ws');
 const dgram     = require('dgram');
 const os        = require('os');
+const { execFile } = require('child_process');
 
 const WS_PORT  = 41234;
 const UDP_PORT = 41235;
@@ -1659,6 +1531,131 @@ function decryptPayload(raw) {
 function secureSend(ws, obj) {
   try { ws.send(encryptPayload(obj)); } catch(_e) {}
 }
+
+function handleMobileProductQuery(ws, msg) {
+  const barcode = String(msg?.payload?.barcode || '').trim();
+  if (!barcode) {
+    secureSend(ws, { type: 'CKBPOS_PRODUCT_RESPONSE', payload: { barcode, product: null } });
+    return;
+  }
+
+  try {
+    const product = db.prepare(`
+      SELECT id, nom, categorie, prix_carton, prix_demi, prix_unite,
+             unites_par_carton, stock_cartons, stock_alerte, has_variants, barcode
+      FROM products
+      WHERE actif=1 AND barcode=?
+      LIMIT 1
+    `).get(barcode);
+
+    let variants = [];
+    if (product?.has_variants) {
+      variants = db.prepare(`
+        SELECT id, product_id, nom, prix_carton, prix_demi, prix_unite, stock_cartons
+        FROM product_variants
+        WHERE product_id=? AND actif=1
+        ORDER BY nom
+      `).all(product.id);
+    }
+
+    secureSend(ws, {
+      type: 'CKBPOS_PRODUCT_RESPONSE',
+      to: msg.from,
+      payload: { barcode, product: product ? { ...product, variants } : null },
+    });
+  } catch (e) {
+    console.error('[LAN] Product query mobile:', e.message);
+    secureSend(ws, {
+      type: 'CKBPOS_PRODUCT_RESPONSE',
+      to: msg.from,
+      payload: { barcode, product: null, error: e.message },
+    });
+  }
+}
+
+function handleMobileSaleSync(ws, msg, peerMachineId) {
+  const sale = msg?.payload || {};
+  const uuid = String(sale.uuid || '').trim();
+  if (!uuid) {
+    secureSend(ws, { type: 'CKBPOS_SALE_SYNC_ACK', payload: { uuid, success: false, error: 'UUID manquant' } });
+    return;
+  }
+
+  try {
+    const result = db.transaction(() => {
+      const existing = db.prepare('SELECT id, facture_num FROM ventes WHERE uuid=?').get(uuid);
+      if (existing) return { venteId: existing.id, factureNum: existing.facture_num, duplicate: true };
+
+      const venteRes = db.prepare(`
+        INSERT INTO ventes (
+          user_id, client_nom, client_nif, total, montant_recu, monnaie_rendue,
+          mode_paiement, montant_dinheiro, montant_express, facture_num,
+          machine_id, uuid, statut, date_vente
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        Number(sale.user_id) || 1,
+        sale.client_nom || 'CONSUMIDOR FINAL',
+        sale.client_nif || 'CONSUMIDOR FINAL',
+        Number(sale.total) || 0,
+        Number(sale.montant_recu) || 0,
+        Number(sale.monnaie_rendue) || 0,
+        sale.mode_paiement || 'dinheiro',
+        Number(sale.montant_dinheiro) || 0,
+        Number(sale.montant_express) || 0,
+        sale.facture_num || null,
+        sale.machine_id || peerMachineId || 'MOBILE',
+        uuid,
+        sale.statut || 'normal',
+        sale.date_vente || new Date().toISOString()
+      );
+
+      const venteId = venteRes.lastInsertRowid;
+      const items = Array.isArray(sale.items) ? sale.items : [];
+      for (const item of items) {
+        const productId = Number(item.product_id);
+        if (!productId) continue;
+        const typeVente = ['carton', 'demi', 'unite'].includes(item.type_vente) ? item.type_vente : 'unite';
+        const qty = Number(item.quantite) || 1;
+        const price = Number(item.prix_unitaire) || 0;
+        const subtotal = Number(item.sous_total) || qty * price;
+
+        db.prepare(`
+          INSERT INTO vente_items (vente_id, product_id, variant_id, type_vente, quantite, prix_unitaire, sous_total)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(venteId, productId, item.variant_id || null, typeVente, qty, price, subtotal);
+
+        const product = db.prepare('SELECT unites_par_carton, stock_cartons FROM products WHERE id=?').get(productId);
+        const unitsPerCarton = Number(product?.unites_par_carton) || 1;
+        const cartonsToRemove = typeVente === 'carton'
+          ? qty
+          : typeVente === 'demi'
+            ? (qty * Math.ceil(unitsPerCarton / 2)) / unitsPerCarton
+            : qty / unitsPerCarton;
+
+        if (item.variant_id) {
+          const variant = db.prepare('SELECT stock_cartons FROM product_variants WHERE id=?').get(item.variant_id);
+          const nextVariantStock = Math.max(0, (Number(variant?.stock_cartons) || 0) - cartonsToRemove);
+          db.prepare("UPDATE product_variants SET stock_cartons=? WHERE id=?").run(nextVariantStock, item.variant_id);
+          const totalVariantStock = db.prepare("SELECT COALESCE(SUM(stock_cartons),0) as t FROM product_variants WHERE product_id=? AND actif=1").get(productId)?.t || 0;
+          db.prepare("UPDATE products SET stock_cartons=?,updated_at=datetime('now','utc') WHERE id=?").run(totalVariantStock, productId);
+        } else if (product) {
+          const nextStock = Math.max(0, (Number(product.stock_cartons) || 0) - cartonsToRemove);
+          db.prepare("UPDATE products SET stock_cartons=?,updated_at=datetime('now','utc') WHERE id=?").run(nextStock, productId);
+        }
+      }
+
+      return { venteId, factureNum: sale.facture_num || null, duplicate: false };
+    })();
+
+    secureSend(ws, {
+      type: 'CKBPOS_SALE_SYNC_ACK',
+      payload: { uuid, success: true, vente_id: result.venteId, facture_num: result.factureNum, duplicate: result.duplicate },
+    });
+  } catch (e) {
+    console.error('[LAN] Sale sync mobile:', e.message);
+    secureSend(ws, { type: 'CKBPOS_SALE_SYNC_ACK', payload: { uuid, success: false, error: e.message } });
+  }
+}
 // ── Fin chiffrement LAN ──────────────────────────────────────
 
 // ── Serveur WebSocket — écoute les connexions entrantes ────
@@ -1670,26 +1667,38 @@ function startWsServer() {
     wssServer.on('connection', (ws, req) => {
       const peerIp = (req.socket.remoteAddress || '').replace('::ffff:', '');
       let peerMachineId = null;
+      console.log(`[LAN-DBG] ${new Date().toISOString()} DESKTOP connection from ${peerIp}`);
 
       // Envoyer immédiatement nos informations
-      try { secureSend(ws, getMachineInfo()); } catch(_e) {}
+      try {
+        const info = getMachineInfo();
+        console.log(`[LAN-DBG] ${new Date().toISOString()} DESKTOP sending CKBPOS_INFO to ${peerIp}:`, JSON.stringify(info));
+        secureSend(ws, info);
+      } catch(_e) { console.error(`[LAN-DBG] ${new Date().toISOString()} DESKTOP error sending CKBPOS_INFO:`, _e); }
 
       ws.on('message', (raw) => {
         try {
           const msg = decryptPayload(raw);
-          if (!msg) return;
+          if (!msg) { console.log(`[LAN-DBG] ${new Date().toISOString()} DESKTOP decryptPayload returned null from ${peerIp}, raw first 200: ${String(raw).substring(0, 200)}`); return; }
 
           if (msg.type === 'CKBPOS_INFO') {
-            if (msg.machine_id === MACHINE_ID) { ws.close(); return; }
+            const checkMachineId = msg.machine_id === MACHINE_ID;
+            const checkProduct = !(msg.product && msg.product !== PRODUCT_ID);
+            const checkNetworkKey = networkKeyMatches(msg.network_key) || !msg.network_key;
+            console.log(`[LAN-DBG] ${new Date().toISOString()} DESKTOP received CKBPOS_INFO from ${peerIp}: machine_id="${msg.machine_id}" product="${msg.product}" label="${msg.machine_label}" network_key="${msg.network_key || ''}"`);
+            console.log(`[LAN-DBG] ${new Date().toISOString()} DESKTOP checks: machine_id_self=${checkMachineId} product_ok=${checkProduct} network_key_ok=${checkNetworkKey}`);
+            if (msg.machine_id === MACHINE_ID) { console.log(`[LAN-DBG] ${new Date().toISOString()} DESKTOP REJECTED: same machine_id`); ws.close(); return; }
             // \u2705 Isolation produit — rejeter toute machine d'une autre app
             // (ex: CKBPOS standard) même sur le même réseau/port.
             if (msg.product && msg.product !== PRODUCT_ID) {
+              console.warn(`[LAN-DBG] ${new Date().toISOString()} DESKTOP REJECTED: product mismatch "${msg.product}" != "${PRODUCT_ID}"`);
               console.warn('[LAN] Refusé (produit différent: ' + msg.product + '): ' + (msg.machine_label || msg.machine_id) + ' @ ' + peerIp);
               ws.close(); return;
             }
             // ── v1.8.0 Clé réseau — isoler les entreprises sur le même LAN ──
             // Exception : accepter si la machine distante n'a pas encore de clé (setup en cours)
             if (!networkKeyMatches(msg.network_key) && msg.network_key) {
+              console.warn(`[LAN-DBG] ${new Date().toISOString()} DESKTOP REJECTED: network_key mismatch desktop="${getNetworkKey()}" mobile="${msg.network_key}"`);
               console.warn('[LAN] Refusé (clé réseau différente): ' + (msg.machine_label || msg.machine_id) + ' @ ' + peerIp);
               ws.close(); return;
             }
@@ -1698,12 +1707,14 @@ function startWsServer() {
             if (peersMap.has(peerMachineId)) {
               const existing = peersMap.get(peerMachineId);
               if (existing.ws?.readyState === WebSocket.OPEN) {
+                console.log(`[LAN-DBG] ${new Date().toISOString()} DESKTOP REJECTED: duplicate peer ${peerMachineId} (existing connection OPEN)`);
                 ws.close(); return; // garder la connexion existante
               }
             }
             upsertPeer(peerMachineId, msg.machine_label, peerIp, msg.port);
             peersMap.set(peerMachineId, { ws, machine_label: msg.machine_label, ip: peerIp, lastSeen: Date.now() });
             broadcastPeersUpdate();
+            console.log(`[LAN-DBG] ${new Date().toISOString()} DESKTOP ACCEPTED peer: ${msg.machine_label || peerMachineId} (${peerMachineId}) @ ${peerIp}`);
             console.log('[LAN] Pair connecte: ' + (msg.machine_label || peerMachineId) + ' @ ' + peerIp);
             // v1.5.0 — déclencher sync après connexion
             if (global._ckbSyncHandlers) global._ckbSyncHandlers.onPeerRegistered(peerMachineId);
@@ -1721,6 +1732,10 @@ function startWsServer() {
               const p = peersMap.get(peerMachineId);
               if (p) p.lastSeen = Date.now();
             }
+          } else if (msg.type === 'CKBPOS_PRODUCT_QUERY') {
+            handleMobileProductQuery(ws, msg);
+          } else if (msg.type === 'CKBPOS_SALE_SYNC') {
+            handleMobileSaleSync(ws, msg, peerMachineId);
           } else if (global._ckbSyncHandlers) {
             global._ckbSyncHandlers.handleSyncMessage(ws, msg, peerMachineId);
           }
@@ -1812,6 +1827,10 @@ function connectToPeer(ip, port) {
             const p = peersMap.get(peerMachineId);
             if (p) p.lastSeen = Date.now();
           }
+        } else if (msg.type === 'CKBPOS_PRODUCT_QUERY') {
+          handleMobileProductQuery(ws, msg);
+        } else if (msg.type === 'CKBPOS_SALE_SYNC') {
+          handleMobileSaleSync(ws, msg, peerMachineId);
         } else if (global._ckbSyncHandlers) {
           global._ckbSyncHandlers.handleSyncMessage(ws, msg, peerMachineId);
         }
@@ -2091,12 +2110,53 @@ function startNetworkServices() {
 
   // Re-broadcast UDP toutes les 20s pour découvrir les nouveaux arrivants
   rebroadcastInterval = setInterval(sendDiscoveryBroadcast, 20000);
+
+  // ADB auto-reverse USB (détection périodique de device + port forwarding)
+  startAdbAutoReverse();
 }
 
-// ── Nettoyage à la fermeture ────────────────────────────────
+// ── ADB auto-reverse USB ───────────────────────────────────
+let adbReverseInterval = null;
+
+function getAdbPath() {
+  // 1. Bundled (electron-builder extraResources)
+  try {
+    const bundled = path.join(process.resourcesPath || '', 'platform-tools', 'adb.exe');
+    const fs = require('fs');
+    if (fs.existsSync(bundled)) return bundled;
+  } catch(_e) {}
+  // 2. Dev mode (resources/platform-tools à la racine du projet)
+  try {
+    const devPath = path.join(__dirname, 'resources', 'platform-tools', 'adb.exe');
+    const fs = require('fs');
+    if (fs.existsSync(devPath)) return devPath;
+  } catch(_e) {}
+  // 3. System PATH (fallback)
+  return 'adb';
+}
+
+function adbReverse() {
+  const adb = getAdbPath();
+  execFile(adb, ['reverse', 'tcp:41234', 'tcp:41234'], { timeout: 8000 }, (err, stdout, stderr) => {
+    if (err) {
+      // Pas de device connecté = pas une erreur critique
+      if (err.killed || (stderr && stderr.includes('no devices'))) return;
+      console.warn('[ADB-DBG] reverse tcp:41234 failed:', err.message);
+    } else {
+      console.log('[ADB-DBG] reverse tcp:41234 -> OK');
+    }
+  });
+}
+
+function startAdbAutoReverse() {
+  console.log('[ADB-DBG] Starting auto-reverse (every 10s)');
+  adbReverse(); // premiers essai immédiat
+  adbReverseInterval = setInterval(adbReverse, 10000);
+}
 app.on('before-quit', () => {
   clearInterval(heartbeatInterval);
   clearInterval(rebroadcastInterval);
+  clearInterval(adbReverseInterval);
   for (const peer of peersMap.values()) {
     try { peer.ws?.close(); } catch(_e) {}
   }
@@ -2111,7 +2171,7 @@ app.on('before-quit', () => {
 // Résolution conflits : last-write-wins (INSERT OR REPLACE)
 // ============================================================
 
-const SYNC_TABLES = new Set(['ventes','vente_items','products','stock_mouvements','caderno_entries','caderno_motivos','caderno_trabalhadores','caderno_produtos','users','settings']);
+const SYNC_TABLES = new Set(['ventes','vente_items','products','stock_mouvements','caderno_entries','caderno_motivos','caderno_trabalhadores','caderno_produtos','users','settings','reservations','reservation_items','historique_modifications']);
 const SYNC_LIMIT  = 1000; // entrées max par delta incrémental
 
 // ── Diagnostic démarrage : vérifier que MACHINE_ID correspond aux entrées sync_log ──
@@ -2189,6 +2249,11 @@ function handleSyncRequest(ws, msg) {
 
     if (entries.length === 0) {
       secureSend(ws, { type: 'SYNC_DELTA', machine_id: MACHINE_ID, last_id: last_seq || 0, entries: [] });
+      // Memoiser le seq même si delta vide
+      try {
+        db.prepare("INSERT OR REPLACE INTO sync_state (machine_id,last_sync_at,last_seq) VALUES (?,datetime('now','utc'),?)")
+          .run(machine_id, last_seq || 0);
+      } catch(_e) {}
       // v1.9.1 — sync bidir : même si delta vide, contre-sync pour envoyer NOS données
       scheduleCounterSync(machine_id);
       return;
@@ -2221,6 +2286,11 @@ function handleSyncRequest(ws, msg) {
     const lastId = entries[entries.length - 1].id;
     secureSend(ws, { type: 'SYNC_DELTA', machine_id: MACHINE_ID, last_id: lastId, entries: enriched });
     console.log('[SYNC] SYNC_DELTA \u2192 ' + machine_id + ' : ' + enriched.length + ' entrees (seq ' + lastId + ')');
+    // Memoiser le dernier seq envoyé à ce pair (évite de re-sent le même delta)
+    try {
+      db.prepare("INSERT OR REPLACE INTO sync_state (machine_id,last_sync_at,last_seq) VALUES (?,datetime('now','utc'),?)")
+        .run(machine_id, lastId);
+    } catch(_e) {}
     // v1.9.1 — sync bidir : après avoir répondu à A, demander les données de A
     scheduleCounterSync(machine_id);
   } catch(e) { console.error('[SYNC] handleSyncRequest:', e.message); }
@@ -4183,6 +4253,30 @@ ipcMain.handle('chat-delete-message', (_, { client_id, scope }) => {
   } catch(e) { return { success: false, error: e.message }; }
 });
 
+ipcMain.handle('chat-edit-message', (_, { client_id, content }) => {
+  try {
+    if (!client_id) return { success: false, error: 'client_id manquant' };
+    const row = db.prepare('SELECT * FROM messages WHERE client_id=?').get(client_id);
+    if (!row) return { success: false, error: 'not_found' };
+    if (row.from_machine !== MACHINE_ID) return { success: false, error: 'not_owner' };
+    const ts = new Date().toISOString().replace('T',' ').slice(0,19);
+    db.prepare('UPDATE messages SET content=?, ts=? WHERE client_id=?').run(content || '', ts, client_id);
+    const wsMsg = encryptPayload({ type: 'CHAT_EDIT', clientId: client_id, content: content || '', ts, from: MACHINE_ID });
+    if (row.to_machine === 'all' || !row.to_machine) {
+      for (const peer of peersMap.values()) {
+        if (peer.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(wsMsg); } catch(_e) {}
+      }
+    } else {
+      const peer = peersMap.get(row.to_machine);
+      if (peer?.ws?.readyState === WebSocket.OPEN) try { peer.ws.send(wsMsg); } catch(_e) {}
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('chat-message', { from: MACHINE_ID, to: row.to_machine || 'all', content, clientId: client_id, ts }); } catch(_e) {}
+    }
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+});
+
 ipcMain.handle('chat-delete-conversation', (_, { peerId, scope }) => {
   try {
     if (!peerId) return { success: false, error: 'peerId manquant' };
@@ -4227,6 +4321,17 @@ function handleChatDelete(msg) {
   } catch(e) { console.error('[CHAT] delete:', e.message); }
 }
 
+function handleChatEdit(msg) {
+  try {
+    if (!msg.clientId || !msg.content) return;
+    db.prepare('UPDATE messages SET content=?, ts=? WHERE client_id=?')
+      .run(msg.content, msg.ts || new Date().toISOString().replace('T',' ').slice(0,19), msg.clientId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('chat-message', { from: msg.from, to: msg.to || 'all', content: msg.content, clientId: msg.clientId, ts: msg.ts }); } catch(_e) {}
+    }
+  } catch(e) { console.error('[CHAT] edit:', e.message); }
+}
+
 function handleChatDeleteConv(msg) {
   try {
     const from = msg.from;
@@ -4264,6 +4369,7 @@ global._ckbAuditLog = auditModule.insertAuditLog;
 const _v4HandlerBase = global._ckbSyncHandlers.handleSyncMessage;
 global._ckbSyncHandlers.handleSyncMessage = (ws, msg, peerMachineId) => {
   if (msg.type === 'CHAT_MESSAGE') handleChatMessage(msg);
+  else if (msg.type === 'CHAT_EDIT') handleChatEdit(msg);
   else if (msg.type === 'CHAT_DELETE') handleChatDelete(msg);
   else if (msg.type === 'CHAT_DELETE_CONV') handleChatDeleteConv(msg);
   else _v4HandlerBase(ws, msg, peerMachineId);

@@ -499,22 +499,13 @@ export default function Layout() {
           </div>
         </motion.aside>
 
-        {/* Main content with page transitions */}
+        {/* Main content — no page transition animation to avoid flash */}
         <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-primary)', position: 'relative', display: 'flex', flexDirection: 'column' }}>
           {/* v4.9.5 — Banner d'expiration licence (J-7/J-3/J-1) */}
           <ExpirationBanner />
-          <AnimatePresence mode="sync">
-            <motion.div
-              key={location.pathname}
-              variants={pageVariants}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-              style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
-            >
-              <Outlet />
-            </motion.div>
-          </AnimatePresence>
+          <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <Outlet />
+          </div>
         </main>
       </div>
 

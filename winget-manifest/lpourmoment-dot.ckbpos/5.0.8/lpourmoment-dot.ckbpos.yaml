@@ -1,6 +1,3 @@
-# Created using winget-create
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
-
 PackageIdentifier: lpourmoment-dot.ckbpos
 PackageVersion: 5.0.8
 DefaultLocale: pt-BR

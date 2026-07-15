@@ -215,6 +215,7 @@ contextBridge.exposeInMainWorld('electron', {
   chatMarkRead:   (data)     => ipcRenderer.invoke('chat-mark-read', data),
   chatUnreadCount:()         => ipcRenderer.invoke('chat-unread-count'),
   chatDeleteMessage:      (data) => ipcRenderer.invoke('chat-delete-message', data),
+  chatEditMessage:        (data) => ipcRenderer.invoke('chat-edit-message', data),
   chatDeleteConversation: (data) => ipcRenderer.invoke('chat-delete-conversation', data),
   onChatMessage: (cb) => {
     const handler = (_, data) => cb(data);
