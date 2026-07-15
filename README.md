@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/lpourmoment-dot/CKBPOS/releases/latest/download/CKBPOS-Setup-5.0.8.exe"><ins>Telecharger CKBPOS</ins></a>
+  <a href="https://github.com/lpourmoment-dot/CKBPOS/releases/latest/download/CKBPOS-Setup-5.0.9.exe"><ins>Telecharger CKBPOS</ins></a>
 </p>
 
 <p align="center">
@@ -220,6 +220,7 @@ CKBPOS/
 
 | Version | Ajouts |
 |---------|--------|
+| **5.0.9** | Fix stock precision, caderno redesign, README professionnel, winget manifest |
 | **5.0.8** | Fix stock flottant, caderno redesign, transfert features vers PRO |
 | **5.0.0** | Systeme de licence complet, auto-update |
 | **4.9.0** | Console SQL, theme light |
