@@ -245,9 +245,20 @@ const _migrations = [
 
 for (const m of _migrations) {
   if (m.v > _currentVersion) {
-    try { db.exec(m.sql); } catch(e) {}
+    try { db.exec(m.sql); } catch(e) {
+      // Si la colonne existe déjà, ignorer l'erreur
+      if (!e.message?.includes('duplicate column')) console.error('[CKBPOS] Migration v' + m.v + ':', e.message);
+    }
   }
 }
+// Backfill migration v34 si elle a échoué silencieusement
+try {
+  const cols = db.pragma('table_info(caderno_entries)').map(c => c.name);
+  if (!cols.includes('categorie_depense')) {
+    db.exec("ALTER TABLE caderno_entries ADD COLUMN categorie_depense TEXT DEFAULT NULL");
+    console.log('[CKBPOS] Colonne categorie_depense ajoutée (backfill)');
+  }
+} catch(e) { console.error('[CKBPOS] Backfill categorie_depense:', e.message); }
 db.prepare("UPDATE schema_version SET version = ? WHERE id = 1").run(_migrations[_migrations.length - 1].v);
 console.log('[CKBPOS] schema_version migré vers', _migrations[_migrations.length - 1].v);
 
@@ -316,6 +327,7 @@ db.exec(`
     user_id INTEGER NOT NULL,
     machine_id TEXT DEFAULT 'LOCAL',
     date_jour TEXT NOT NULL,
+    categorie_depense TEXT DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now','utc')),
     FOREIGN KEY(user_id) REFERENCES users(id)
   );

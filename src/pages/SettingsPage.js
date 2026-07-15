@@ -153,7 +153,7 @@ function DataSharingSection() {
             border:'1px solid #22c55e', background:'rgba(34,197,94,0.08)', color:'#22c55e',
             fontWeight:700, fontSize:12, cursor: syncing ? 'not-allowed' : 'pointer', fontFamily:'inherit', opacity: syncing ? 0.7 : 1 }}>
           <RefreshCw size={14} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }}/>
-          {syncing ? 'Synchronisation...' : '\u{1F504} Forcer Sync LAN'}
+          {syncing ? 'Synchronisation...' : '🔄 Forcer Sync LAN'}
         </button>
       </div>
 
@@ -407,7 +407,7 @@ export default function SettingsPage() {
   const handleAddMotivo = async () => {
     if (!newMLabel.trim()) return;
     const r = await window.electron.cadernoMotivosAdd({
-      icone: newMIcon.trim() || '\u{1F4CC}',
+      icone: newMIcon.trim() || '📌',
       label: newMLabel.trim(),
       direction: newMDir,
       est_dette: newMDette ? 1 : 0,
@@ -675,7 +675,7 @@ export default function SettingsPage() {
 
   const currencies = ['AOA','CDF','XAF','XOF','MZN','NGN','GHS','KES','ZAR','TZS','UGX','RWF','ETB','USD','EUR','GBP'];
   const languages  = ['pt-BR','fr','en'];
-  const langLabels = { 'pt-BR':'\u{1F1E7}\u{1F1F7} Português', 'fr':'\u{1F1EB}\u{1F1F7} Français', 'en':'\u{1F1EC}\u{1F1E7} English' };
+  const langLabels = { 'pt-BR':'🇧🇷 Português', 'fr':'🇫🇷 Français', 'en':'🇬🇧 English' };
   const predefinedQuestions = [
     'Qual é o nome do seu primeiro animal de estimação?',
     'Qual é o nome da cidade onde você nasceu?',
@@ -709,7 +709,7 @@ export default function SettingsPage() {
   );
 
   return (
-    <div style={{ padding:24, height:'100%', overflowY:'auto', maxWidth:700 }}>
+    <div style={{ padding:24, height:'100%', overflowY:'auto' }}>
       <style>{'@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}'}</style>
       <div style={{ marginBottom:20 }}>
         <h1 style={{ fontSize:22, fontWeight:700, display:'flex', alignItems:'center', gap:10 }}>
@@ -727,7 +727,7 @@ export default function SettingsPage() {
       )}
 
       {/* ===== APPARENCE ===== */}
-      <Accordion id="aparencia" icon={<span>{'\u{1F3A8}'}</span>} title={t('settings','accAppearance')} openSections={openSections} toggleSection={toggleSection}>
+      <Accordion id="aparencia" icon={<span>{'🎨'}</span>} title={t('settings','accAppearance')} openSections={openSections} toggleSection={toggleSection}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
           <div>
             <div style={{ fontWeight:600, fontSize:14 }}>{t('settings','themeLabel')}</div>
@@ -756,7 +756,7 @@ export default function SettingsPage() {
       </Accordion>
 
       {/* ===== LOJA ===== */}
-      <Accordion id="loja" icon={<span>{'\u{1F3EA}'}</span>} title={t('settings','accShop')} openSections={openSections} toggleSection={toggleSection}>
+      <Accordion id="loja" icon={<span>{'🏪'}</span>} title={t('settings','accShop')} openSections={openSections} toggleSection={toggleSection}>
         <p style={{ fontSize:12, color:'var(--text-muted)', marginBottom:14 }}>
           {t('settings','ticketSubtitle')}
         </p>
@@ -791,17 +791,17 @@ export default function SettingsPage() {
           Choisissez ce qui s'affiche sur chaque ticket imprimé.
         </p>
         <TicketToggle flag="showQr"           {...{label: t('settings','ticketQr')}}                     icon="QR"/>
-        <TicketToggle flag="showAddress"      {...{label: t('settings','ticketAddress')}}           icon="\u{1F50D}"/>
-        <TicketToggle flag="showPhone"        {...{label: t('settings','ticketPhone')}}         icon="\u{1F4DE}"/>
+        <TicketToggle flag="showAddress"      {...{label: t('settings','ticketAddress')}}           icon="📍"/>
+        <TicketToggle flag="showPhone"        {...{label: t('settings','ticketPhone')}}         icon="📞"/>
         <TicketToggle flag="showNif"          {...{label: t('settings','ticketNif')}}           icon="NIF"/>
-        <TicketToggle flag="showFactureNum"   {...{label: t('settings','ticketFacture')}}            icon="\u{1F4E2}"/>
-        <TicketToggle flag="showClientNom"    {...{label: t('settings','ticketClientNom')}}                icon="\u{1F464}"/>
+        <TicketToggle flag="showFactureNum"   {...{label: t('settings','ticketFacture')}}            icon="📢"/>
+        <TicketToggle flag="showClientNom"    {...{label: t('settings','ticketClientNom')}}                icon="👤"/>
         <TicketToggle flag="showClientNif"    {...{label: t('settings','ticketClientNif')}}                icon="ID"/>
-        <TicketToggle flag="showSeller"       {...{label: t('settings','ticketSeller')}}               icon="\u{1F464}"/>
-        <TicketToggle flag="showMentionLegal" {...{label: t('settings','ticketLegal')}} icon="\u{1F4CB}"/>
-        <TicketToggle flag="showObrigado"     label={t('settings','ticketObrigado')}   icon="\u{1F64C}"/>
+        <TicketToggle flag="showSeller"       {...{label: t('settings','ticketSeller')}}               icon="👤"/>
+        <TicketToggle flag="showMentionLegal" {...{label: t('settings','ticketLegal')}} icon="📋"/>
+        <TicketToggle flag="showObrigado"     label={t('settings','ticketObrigado')}   icon="🙏"/>
         <TicketToggle flag="showVersion"      {...{label: t('settings','ticketVersion')}}               icon="v"/>
-        <TicketToggle flag="showSecondaVia"   {...{label: t('settings','ticketSecondVia')}}      icon="\u{1F504}"/>
+        <TicketToggle flag="showSecondaVia"   {...{label: t('settings','ticketSecondVia')}}      icon="🔄"/>
         <div style={{ marginTop:16 }}>
           <button onClick={saveTicketFlags} className="btn btn-primary">
             <Save size={14}/> {ticketFlagsSaved ? '\u2705 ' + t('settings','saved2') : t('settings','saveConfig')}
@@ -1148,7 +1148,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
       </Accordion>
 
       {/* ===== MANUTENÇãO ===== */}
-      <Accordion id="manutencao" icon={<span>{'\u{1F527}'}</span>} title={t('settings','accMaint')} color="#60a5fa" openSections={openSections} toggleSection={toggleSection}>
+      <Accordion id="manutencao" icon={<span>{'🔧'}</span>} title={t('settings','accMaint')} color="#60a5fa" openSections={openSections} toggleSection={toggleSection}>
         <p style={{ fontSize:13, color:'var(--text-muted)', marginBottom:14 }}>
           Se o aplicativo apresentar erros como <strong>"no such table"</strong> ou <strong>"no column named"</strong>, clique aqui para aplicar todas as atualizações do banco de dados sem perder dados existentes.
         </p>
@@ -1267,7 +1267,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
                         {inviteCode}
                       </div>
                       <button onClick={() => { navigator.clipboard.writeText(inviteCode); }} style={{ padding:'10px 14px', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg-hover)', color:'var(--text-secondary)', cursor:'pointer', fontFamily:'inherit', fontSize:12 }}>
-                        {'\u{1F4CB}'} Copiar
+                        {'📋'} Copiar
                       </button>
                     </div>
                     <div style={{ fontSize:11, color:'var(--text-muted)', textAlign:'center' }}>
@@ -1298,7 +1298,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
       </Accordion>
 
       {/* ===== CADERNO DE CAIXA ===== */}
-      <Accordion id="caderno" icon={<span>{'\u{1F4D3}'}</span>} title={t('settings','accCaderno')} color="#e8c547" openSections={openSections} toggleSection={toggleSection}>
+      <Accordion id="caderno" icon={<span>{'📓'}</span>} title={t('settings','accCaderno')} color="#e8c547" openSections={openSections} toggleSection={toggleSection}>
 
         {/* -- Motivos -- */}
         <div style={{ marginBottom:20 }}>
@@ -1320,7 +1320,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
                 {m.est_dette ? <span style={{ fontSize:10, padding:'2px 7px', borderRadius:4, background:'rgba(224,82,82,0.1)', color:'var(--danger)', border:'1px solid rgba(224,82,82,0.2)' }}>{t('settings','debtBadge')}</span> : null}
                 <span style={{ fontSize:10, color:'var(--text-muted)', background:'var(--bg-hover)', border:'1px solid var(--border)', borderRadius:4, padding:'2px 7px' }}>{m.role}</span>
                 <button onClick={() => handleDeleteMotivo(m.id)}
-                  style={{ background:'rgba(224,82,82,0.08)', color:'var(--danger)', border:'1px solid transparent', padding:'4px 8px', borderRadius:6, cursor:'pointer', fontSize:12 }}>{'\u{1F5D1}'}{'\uFE0F'}</button>
+                  style={{ background:'rgba(224,82,82,0.08)', color:'var(--danger)', border:'1px solid transparent', padding:'4px 8px', borderRadius:6, cursor:'pointer', fontSize:12 }}>{'🗑'}{'️'}</button>
               </div>
             ))}
           </div>
@@ -1333,7 +1333,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
             <div style={{ marginBottom:12 }}>
               <div style={{ fontSize:10, color:'var(--text-muted)', marginBottom:6, textTransform:'uppercase', letterSpacing:1 }}>{t('settings','cadernoIcon')}</div>
               <div style={{ display:'flex', flexWrap:'wrap', gap:4, padding:'8px', background:'var(--bg)', border:'1px solid var(--border)', borderRadius:8, marginBottom:8 }}>
-                {['\u{1F4CC}','\u{1F4B8}','\u{1F37D}\uFE0F','\u{1F964}','\u{1F37A}','\u{1F381}','\u{1F4E6}','\u{1F53B}','\u26A0\uFE0F','\u{1F4B0}','\u{1F3E0}','\u{1F697}','\u{1F3AE}','\u{1F4F1}','\u{1F48A}','\u{1F6D1}','\u{1F3B5}','\u{1F9F4}','\u{1F9F9}','\u{1F527}','\u{1F511}','\u{1F514}','\u{1F4A1}','\u{1F3AF}','\u{1F680}','\u2B50','\u{1F3C6}','\u{1F3AA}','\u{1F3A8}','\u{1F31F}'].map(em => (
+                {['📌','💴','🍽️','🍹','🍺','🎁','📦','🔷','⚠️','💰','🏠','🚗','🎮','📱','💊','🛑','🎵','🧹','掃','🔧','🔑','🔔','💡','🎯','🚀','⭐','🏆','🎪','🎨','🌟'].map(em => (
                   <button key={em} type="button" onClick={() => setNewMIcon(em)}
                     style={{ fontSize:18, background:newMIcon===em?'var(--accent-dim)':'transparent', border:newMIcon===em?'1.5px solid var(--accent)':'1.5px solid transparent', borderRadius:6, width:34, height:34, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.1s' }}>
                     {em}
@@ -1342,7 +1342,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE cloud_sync_log;`}</pre>
               </div>
               <div style={{ display:'flex', gap:8, alignItems:'center' }}>
                 <div style={{ width:36, height:36, borderRadius:8, background:'var(--bg)', border:'1px solid var(--accent)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, flexShrink:0 }}>
-                  {newMIcon || '\u{1F4CC}'}
+                  {newMIcon || '📌'}
                 </div>
                 <input className="form-input" value={newMIcon} onChange={e=>setNewMIcon(e.target.value)}
                   placeholder="Ou digita emoji–…" style={{ fontSize:13, flex:1 }}/>
